@@ -73,13 +73,19 @@ Il contesto GLPI dipende dal profilo e dalle entità della sessione. Per complet
 
 4. Inserire User token e, quando richiesto, App token nei prompt locali.
 
-Il connettore è stato verificato in PowerShell con risposte API simulate: risultati singoli e multipli, colonne numeriche e UID, mappe indicizzate per ID, paginazione e interruzione su errore. La versione corretta deve essere riprovata sul GLPI aziendale. La prova non modifica gli asset.
+Il connettore è stato verificato in PowerShell con risposte API simulate: risultati singoli e multipli, colonne numeriche e UID, mappe indicizzate per ID, paginazione e interruzione su errore. La prova reale del 13 ottobre 2026 è riuscita: 528 record con ID validi, 527 nomi distinti e cinque stati. I risultati della prova appartengono all'entità 0. Un nome compare con due ID e due seriali distinti, da conservare nel dettaglio della futura vista aggregata. La prova non modifica gli asset.
 
 ## Rimozione nella futura console
 
 La ricerca parziale produce una lista di candidati. Il comando di rimozione opererà sul computer selezionato e sulle sue registrazioni esatte, dopo una nuova verifica degli ID e dei dati. Il riepilogo indicherà nome completo e oggetti per fonte prima della conferma.
 
 Ordine previsto: Intune, AD, Entra. GLPI contribuisce al controllo dello stato e rimane una fonte di consultazione. La gestione del ritiro o della dismissione nell'inventario GLPI sarà un eventuale progetto distinto, se richiesto.
+
+## Ricerca AD predisposta
+
+Test-AdLookup.ps1 esegue una ricerca letterale per frammento su nome, DNSHostName e sAMAccountName, sui DC indicati nel JSON locale. Restituisce gli esiti per DC e il riepilogo delle presenze e dei percorsi CanonicalName. Il parametro -PassThru permette di ricevere i dati strutturati per i test e la futura integrazione.
+
+Le prove simulate coprono anche un DC indisponibile: viene mostrato come non verificabile e non come assente. GUID e percorsi differenti vengono evidenziati. La prova reale sui cinque DC deve ancora essere eseguita.
 
 ## Passi successivi
 

@@ -90,9 +90,31 @@ Per usare una configurazione in un altro percorso, passare `-ConfigPath`. Per es
 .\tests\GLPI.Inventory.Tests.ps1
 ```
 
-Le prove simulate coprono risultati singoli e multipli, formati degli ID, paginazione e chiusura della sessione su errore. La prova sul GLPI aziendale deve ancora confermare il risultato reale.
+Le prove simulate coprono risultati singoli e multipli, formati degli ID, paginazione e chiusura della sessione su errore. La prova del 13 ottobre 2026 sul GLPI aziendale ha restituito 528 record con ID distinti e validi, 527 nomi distinti e cinque stati. Un nome ha due registrazioni con seriali diversi; questi record resteranno distinti nel dettaglio. Tutti i risultati della prova hanno EntityId 0.
 
 Il [progetto Computer Explorer](docs/Computer-Explorer.md) descrive la futura ricerca aggregata AD / Entra / Intune / GLPI e le colonne richieste.
+
+## Prova della ricerca AD parziale
+
+`Test-AdLookup.ps1` cerca il frammento in nome, nome DNS e sAMAccountName sui DC configurati. Mostra l'esito di ogni DC, le presenze rispetto al totale, i DC verificati e il percorso del contenitore/OU letto da `CanonicalName`.
+
+Usa lo stesso `computer-explorer.config.local.json` del test GLPI:
+
+```powershell
+.\Test-AdLookup.ps1 -NameFragment "PORT-" -Verbose
+```
+
+`Verde` indica presenza su tutti i DC configurati, `Giallo` una presenza parziale dopo aver verificato tutti i DC e `Grigio` un'interrogazione incompleta. I colori sono per ora esposti come testo nel test; verranno applicati alla griglia della console.
+
+GUID o percorsi diversi fra DC vengono segnalati. Un DC che restituisce un errore non viene contato come verificato. Il test effettua soltanto letture AD.
+
+Per i test con risposte AD simulate:
+
+```powershell
+.\tests\AD.Lookup.Tests.ps1
+```
+
+Questi test coprono presenza su tutti o alcuni DC, DC indisponibile, nessun risultato, nomi con maiuscole diverse, GUID e percorsi differenti, caratteri escaped e dati non validi. La prova sui DC aziendali è il prossimo passaggio.
 
 ## Sviluppi previsti
 
