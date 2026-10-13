@@ -63,6 +63,38 @@ Sostituire `ed33c0c` con l'identificatore del commit desiderato, ricavato da `gi
 
 I token si inseriscono nelle richieste di autenticazione o si conservano in file locali esclusi da Git. Il file `.gitignore` contiene le regole di esclusione.
 
+## Connettore GLPI nel branch di sviluppo
+
+`GLPI.Inventory.psm1` ricerca i Computer per frammento del nome e restituisce ID, stato, seriale e numero inventario. Gli stati vengono letti dal server GLPI.
+
+La configurazione usata automaticamente dal test è `computer-explorer.config.local.json`, esclusa da Git. Se esiste già un JSON funzionante, copiarlo qui con questo nome per mantenere l'URL corretto.
+
+In alternativa, creare la configurazione dal modello:
+
+```powershell
+Copy-Item .\computer-explorer.config.example.json .\computer-explorer.config.local.json
+notepad .\computer-explorer.config.local.json
+```
+
+Nel file locale impostare `Glpi.Enabled` su `true`, inserire in `Glpi.BaseUri` l'URL corretto di `apirest.php` e verificare `Glpi.UseAppToken`. I token vengono richiesti nei prompt.
+
+Per provare la ricerca:
+
+```powershell
+.\Test-GlpiLookup.ps1 -NameFragment "PORT-"
+```
+
+Per usare una configurazione in un altro percorso, passare `-ConfigPath`. Per eseguire i test con risposte API simulate:
+
+```powershell
+.\tests\GLPI.Inventory.Tests.ps1
+```
+
+Le prove simulate coprono risultati singoli e multipli, formati degli ID, paginazione e chiusura della sessione su errore. La prova sul GLPI aziendale deve ancora confermare il risultato reale.
+
+Il [progetto Computer Explorer](docs/Computer-Explorer.md) descrive la futura ricerca aggregata AD / Entra / Intune / GLPI e le colonne richieste.
+
 ## Sviluppi previsti
 
 Ricerca per frammento del nome, vista aggregata delle presenze AD/Entra/Intune e integrazione GLPI per presenza e stato inventariale.
+

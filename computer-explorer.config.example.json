@@ -1,0 +1,24 @@
+{
+  "DomainControllers": [
+    "srvDC1.opbg.dom",
+    "srvDC2.opbg.dom",
+    "srvDCBA1.opbg.dom",
+    "srvDCPA1.opbg.dom",
+    "srvDCSM1.opbg.dom"
+  ],
+  "Search": {
+    "Mode": "Contains",
+    "MinimumCharacters": 2,
+    "CloudCacheMinutes": 5,
+    "RefreshBeforeDelete": true
+  },
+  "Glpi": {
+    "Enabled": false,
+    "BaseUri": "",
+    "UseAppToken": true,
+    "PageSize": 100,
+    "TimeoutSeconds": 20,
+    "CredentialsProvider": "Prompt",
+    "StateColors": {}
+  }
+}
