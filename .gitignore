@@ -1,0 +1,18 @@
+# Configurazioni locali e credenziali
+*.local.*
+computer-explorer.config.json
+.env
+.env.*
+!.env.example
+*.clixml
+*.pfx
+*.p12
+*.pem
+*.key
+
+# Risultati e file temporanei
+logs/
+output/
+*.log
+*.tmp
+*.bak
