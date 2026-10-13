@@ -1,8 +1,61 @@
 # RC_OPBG_4
 
-Tool PowerShell con interfaccia grafica per cercare ed eliminare un computer da Active Directory, Microsoft Entra ID e Microsoft Intune.
+Script PowerShell per cercare computer in Active Directory, Microsoft Entra ID, Microsoft Intune e GLPI, e per gestire la rimozione con il tool esistente.
 
-## Funzionalità attuali
+## Computer Explorer: prima console di ricerca
+
+`Start-ComputerExplorer.ps1` apre una finestra con ricerca per frammento, griglia colorata e dettaglio degli oggetti. Usa i cinque DC configurati e riunisce tutti i nomi trovati in AD, Entra, Intune Windows e GLPI. Un nome presente in una sola fonte compare comunque nella lista.
+
+Le colonne mostrano presenza AD, DC verificati, conteggi Entra/Intune/GLPI, stato GLPI, percorso AD e segnalazioni su GUID, percorsi, seriali o DeviceId discordanti. Il dettaglio conserva le singole registrazioni e i relativi ID. Nomi GLPI con suffissi fra parentesi restano distinti.
+
+| Colore | AD | Entra / Intune / GLPI |
+|---|---|---|
+| Verde | Presente su tutti i DC configurati | Una registrazione |
+| Giallo | Presente su alcuni DC, tutti verificati | Più registrazioni dello stesso nome |
+| Rosso | Assente, tutti i DC verificati | Zero registrazioni, ricerca completata |
+| Grigio / ? | Verifica incompleta o fonte esclusa | Errore, fonte esclusa o lettura in attesa |
+
+La console svolge consultazione. Le azioni di rimozione rimangono nel file `Remove-Computer-FullTool.ps1`; il loro collegamento agli ID selezionati è la fase successiva.
+
+### Avvio sul PC Windows
+
+Dal repository, già sul branch `feature/computer-explorer`:
+
+```powershell
+git status
+git pull --ff-only
+powershell.exe -NoProfile -STA -File .\Start-ComputerExplorer.ps1
+```
+
+Riutilizza `computer-explorer.config.local.json`, già configurato per le prove AD e GLPI. Se manca, copiarlo dal modello e impostare URL GLPI, Enabled e UseAppToken come descritto sotto. Il modello viene lasciato disabilitato per GLPI e non contiene token.
+
+Scrivere ad esempio `PORT-` e premere **Cerca**. I token GLPI vengono richiesti nella finestra al primo utilizzo e mantenuti solo in memoria fino alla chiusura. **Token GLPI** permette di sostituirli. Graph riutilizza la sessione disponibile nello stesso processo; se manca o richiede ambiti aggiuntivi, apre il login interattivo. I token GLPI non vanno inseriti nel JSON o nel repository.
+
+Le interrogazioni lavorano in un runspace separato: la finestra resta disponibile e la griglia si aggiorna dopo ogni fonte. **Interrompi** annulla la lettura; le fonti ancora in attesa restano non verificate. Le caselle AD / Entra / Intune / GLPI scelgono le fonti da interrogare.
+
+La prima lettura cloud raccoglie tutte le pagine dei campi necessari, poi applica il confronto contiene senza distinzione fra maiuscole e minuscole. La cache completa dura `Search.CloudCacheMinutes` (predefinito 5; 0 la disabilita), resta in memoria e viene separata per tenant, client, account, autenticazione e ambiti. **Rileggi cloud** forza una nuova lettura. La scheda **Stato fonti e orari** indica esiti, errori, orari e utilizzo della cache. AD e GLPI vengono riletti a ogni ricerca; GLPI può richiedere più tempo con molti risultati perché legge le schede e gli stati.
+
+Requisiti della console: Windows PowerShell 5.1, RSAT `ActiveDirectory`, modulo `Microsoft.Graph.Authentication` e accessi aziendali alle fonti. Il modulo Graph può essere una dipendenza già presente del tool originale. Se manca, installarlo dalla stessa Windows PowerShell usata per avviare la console:
+
+```powershell
+Install-Module Microsoft.Graph.Authentication -Scope CurrentUser
+```
+
+La console accetta gli ambiti di lettura e quelli più ampi già utilizzati. Se serve autenticarsi, mantiene gli ambiti autorizzati del progetto: `Directory.AccessAsUser.All` per Entra e `DeviceManagementManagedDevices.ReadWrite.All` per Intune. Una sessione applicativa preconfigurata viene conservata; le risposte API ne verificano i diritti effettivi.
+
+### Verifiche eseguite
+
+Il parser PowerShell e 53 casi automatici sono passati in PowerShell 7.4.19: 24 per cloud, aggregazione e worker, 11 AD e 18 GLPI. I test usano dati sintetici e API simulate; includono paginazione, errori senza risultati parziali, cache, duplicati, conflitti e annullamento.
+
+```powershell
+.\tests\ComputerExplorer.Tests.ps1
+.\tests\AD.Lookup.Tests.ps1
+.\tests\GLPI.Inventory.Tests.ps1
+```
+
+AD e GLPI sono già stati provati separatamente nell'ambiente aziendale, come riportato sotto. Apertura della finestra su Windows PowerShell 5.1, login Graph e letture reali Entra/Intune devono essere verificati sul PC aziendale: non sono stati eseguiti dal nostro ambiente di sviluppo.
+
+## Tool di rimozione esistente
 
 - Ricerca per nome esatto sui cinque Domain Controller configurati.
 - Ricerca delle occorrenze in Entra ID.
@@ -92,7 +145,7 @@ Per usare una configurazione in un altro percorso, passare `-ConfigPath`. Per es
 
 Le prove simulate coprono risultati singoli e multipli, formati degli ID, paginazione e chiusura della sessione su errore. La prova del 13 ottobre 2026 sul GLPI aziendale ha restituito 528 record con ID distinti e validi, 527 nomi distinti e cinque stati. Un nome ha due registrazioni con seriali diversi; questi record resteranno distinti nel dettaglio. Tutti i risultati della prova hanno EntityId 0.
 
-Il [progetto Computer Explorer](docs/Computer-Explorer.md) descrive la futura ricerca aggregata AD / Entra / Intune / GLPI e le colonne richieste.
+Il [progetto Computer Explorer](docs/Computer-Explorer.md) descrive la console e i passi successivi.
 
 ## Prova della ricerca AD parziale
 
@@ -104,7 +157,7 @@ Usa lo stesso `computer-explorer.config.local.json` del test GLPI:
 .\Test-AdLookup.ps1 -NameFragment "PORT-" -Verbose
 ```
 
-`Verde` indica presenza su tutti i DC configurati, `Giallo` una presenza parziale dopo aver verificato tutti i DC e `Grigio` un'interrogazione incompleta. I colori sono per ora esposti come testo nel test; verranno applicati alla griglia della console.
+`Verde` indica presenza su tutti i DC configurati, `Giallo` una presenza parziale dopo aver verificato tutti i DC e `Grigio` un'interrogazione incompleta. Il test mostra i colori come testo; la console li applica alle celle della griglia.
 
 GUID o percorsi diversi fra DC vengono segnalati. Un DC che restituisce un errore non viene contato come verificato. Il test effettua soltanto letture AD.
 
@@ -114,9 +167,9 @@ Per i test con risposte AD simulate:
 .\tests\AD.Lookup.Tests.ps1
 ```
 
-Questi test coprono presenza su tutti o alcuni DC, DC indisponibile, nessun risultato, nomi con maiuscole diverse, GUID e percorsi differenti, caratteri escaped e dati non validi. La prova sui DC aziendali è il prossimo passaggio.
+Questi test coprono presenza su tutti o alcuni DC, DC indisponibile, nessun risultato, nomi con maiuscole diverse, GUID e percorsi differenti, caratteri escaped e dati non validi. Nell'estratto della prova reale del 13 ottobre 2026 tutte le 14 righe mostrate riportano 5/5 presenti, 5/5 verificati, percorsi valorizzati e nessun GUID discordante. Il campione non permette di descrivere le righe non condivise.
 
 ## Sviluppi previsti
 
-Ricerca per frammento del nome, vista aggregata delle presenze AD/Entra/Intune e integrazione GLPI per presenza e stato inventariale.
+Verificare la console sul PC aziendale, rifinire le associazioni fra sorgenti e collegare la rimozione agli ID selezionati dopo una nuova verifica. La scelta del contesto entità/profilo GLPI resta da progettare; oggi si usa quello predefinito dell'utente API.
 

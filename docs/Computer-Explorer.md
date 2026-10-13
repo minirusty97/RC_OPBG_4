@@ -1,102 +1,76 @@
-# Computer Explorer — proposta iniziale
+# Computer Explorer — console di ricerca
 
-Data: 13 ottobre 2026. Base: Remove-Computer-FullTool.ps1, versione con ricerca esatta AD / Entra / Intune.
+Data: 13 ottobre 2026. Branch: `feature/computer-explorer`.
 
-## Obiettivo e fase attuale
+## Fase attuale
 
-Evolvere il tool in una console Windows di ricerca e verifica dei computer. Il branch di sviluppo contiene il progetto della ricerca e la base del connettore GLPI. La proposta di interfaccia è stata mostrata nella conversazione. La nuova ricerca aggregata AD / Entra / Intune non è ancora implementata nel tool operativo.
+`Start-ComputerExplorer.ps1` è la prima interfaccia Windows Forms per la ricerca aggregata AD / Entra ID / Intune / GLPI. `ComputerExplorer.Core.psm1` gestisce raccolte cloud, cache, aggregazione e aggiornamenti del worker. Riutilizza `Test-AdLookup.ps1 -PassThru` per AD e `GLPI.Inventory.psm1` per GLPI.
 
-La prima fase riguarda ricerca e consultazione. La rimozione verrà collegata al dettaglio del computer selezionato, riutilizzando le funzioni del tool esistente.
+La console svolge consultazione. La rimozione resta nel tool esistente `Remove-Computer-FullTool.ps1`; sarà collegata al dettaglio selezionato dopo la verifica della nuova ricerca nell'ambiente aziendale.
 
-## Ricerca
+## Ricerca e associazioni
 
-- Una parte del nome trova tutti i nomi che la contengono, senza distinguere maiuscole e minuscole. Esempio illustrativo: SM-PC trova SM-PC-001, SM-PC-002; 003 trova SM-PC-003.
-- Ogni nome completo corrisponde a una riga. Nomi simili restano righe diverse; le duplicazioni dello stesso nome vengono contate nelle rispettive colonne.
-- I candidati provengono dall'unione delle quattro fonti: una macchina presente solo in GLPI o solo in Entra deve comparire comunque.
-- Il pannello di dettaglio conserva gli ID distinti: AD ObjectGUID, Entra ObjectId / DeviceId, Intune managedDeviceId e GLPI ID Computer.
-- La lista usa il nome come chiave di consultazione. Le associazioni operative vengono verificate anche con DeviceId Entra e, dove disponibile, seriale o numero inventario. Un conflitto di seriale viene esposto come associazione ambigua.
+- Il frammento viene cercato senza distinguere maiuscole e minuscole. Su AD si cercano Name, DNSHostName e sAMAccountName tramite filtro LDAP letterale; nel cloud e in GLPI si cerca il nome del dispositivo.
+- I candidati sono l'unione delle quattro fonti. Ogni nome completo ha una riga; nomi simili restano separati. Si ignorano soltanto maiuscole e spazi esterni.
+- Le registrazioni duplicate dello stesso nome vengono contate per ID distinti. Tutti gli oggetti restano disponibili nel dettaglio: AD ObjectGUID e DN, Entra ObjectId e DeviceId, Intune managedDeviceId e azureADDeviceId, GLPI ID Computer.
+- Suffissi GLPI fra parentesi non vengono rimossi: una corrispondenza ipotizzata non deve unire asset diversi.
+- La griglia segnala GUID o percorsi AD diversi, seriali diversi e DeviceId Intune che non compare tra le registrazioni Entra dello stesso nome. Queste segnalazioni richiedono verifica; non sono associazioni operative automatiche.
 
 ## Colonne e colori
 
 | Colonna | Verde | Giallo | Rosso | Grigio |
 |---|---|---|---|---|
-| AD | Presente su tutti i 5 DC: 5/5 | Presente su 1–4 DC, tutti interrogati correttamente | Assente su tutti i DC, tutti verificati | Uno o più DC non verificabili: mostra le presenze note e il numero di DC verificati |
-| Entra ID | Una registrazione | Più registrazioni dello stesso nome | Nessuna registrazione, ricerca completata | Ricerca fallita, esclusa o non ancora completata |
-| Intune | Una registrazione Windows | Più registrazioni Windows | Nessuna registrazione, ricerca completata | Ricerca fallita, esclusa o non ancora completata |
-| GLPI | Un Computer visibile | Più Computer dello stesso nome | Nessun Computer nel contesto GLPI consultato | GLPI non configurato, non raggiungibile o accesso negato |
+| AD | Presente su tutti i DC configurati, normalmente 5/5 | Presente su alcuni DC, tutti verificati | Assente, tutti verificati | DC non verificabile o fonte esclusa/in attesa |
+| Entra ID | Una registrazione | Più registrazioni dello stesso nome | Zero, lettura completata | Errore, esclusa o in attesa |
+| Intune | Una registrazione Windows | Più registrazioni Windows | Zero, lettura completata | Errore, esclusa o in attesa |
+| GLPI | Un Computer visibile | Più Computer dello stesso nome | Zero nel contesto consultato, lettura completata | Errore, esclusa o in attesa |
 
-Stato GLPI e percorso AD hanno colonne proprie. I colori non sostituiscono mai conteggi e testo. Il verde GLPI indica presenza, anche quando lo stato è Ritirato.
+Le altre colonne riportano DC verificati, stato GLPI, percorso AD e segnalazioni. Stato GLPI conserva le etichette reali: la presenza verde può coincidere con uno stato Dismesso. Conteggi e testo affiancano sempre il colore.
 
-Lo stato viene mostrato esattamente come letto da GLPI: Assegnato, Assegnato noleggio, Ritirato, Apparato elettromedicale o qualsiasi altro stato personalizzato. Un eventuale colore dello stato sarà configurabile, senza assumere significati dai suoi ID.
+Il percorso viene da CanonicalName; il DN originale rimane nel dettaglio. Un DC in errore non viene interpretato come assente. Le risposte valide degli altri DC vengono conservate con colore grigio per la verifica complessiva incompleta.
 
-## Dettaglio selezionato
+## Finestra e autenticazione
 
-- AD: tabella dei cinque DC con presente / assente / errore, ObjectGUID e percorso CanonicalName. Percorsi o GUID differenti fra DC vengono evidenziati.
-- Entra: tutte le registrazioni, tipo di join, ID e ultimo accesso.
-- Intune: registrazioni, ID, seriale, utente, ultimo contatto e compliance.
-- GLPI: ID asset, stato, seriale, numero inventario, entità e data modifica; apertura della scheda quando l'URL web sarà configurato.
+La griglia mostra i risultati; il pannello inferiore espone gli oggetti del nome selezionato e una scheda con esiti delle fonti, errori, orari e cache. Le caselle permettono di escludere una fonte e Interrompi annulla il worker. La finestra riceve gli aggiornamenti tramite una coda concorrente: i controlli WinForms restano sul thread della UI.
 
-Il percorso visualizzato usa CanonicalName di AD. Il DistinguishedName rimane disponibile nel dettaglio e per le operazioni, evitando di ricostruire l'albero dividendo il DN sulle virgole.
+I token GLPI si inseriscono nella finestra, vengono conservati come SecureString per la sessione della console e non sono scritti su file. Il JSON locale è escluso da Git e contiene l'URL effettivo già verificato dall'utente.
 
-## Prestazioni e interrogazioni
+Graph usa Microsoft.Graph.Authentication. Riutilizza la sessione e gli ambiti sufficienti già presenti; se mancano, avvia il login interattivo mantenendo tenant, client e ambiti correnti quando disponibili. Gli ambiti aggiunti sono quelli già autorizzati per il tool: Directory.AccessAsUser.All e DeviceManagementManagedDevices.ReadWrite.All. Una sessione applicativa preconfigurata non viene sostituita da una delegata. La prima implementazione supporta l'endpoint Global graph.microsoft.com.
 
-- UI Windows Forms, coerente con il tool attuale. Le interrogazioni verranno eseguite fuori dal thread della finestra, con aggiornamento dei risultati man mano che arrivano.
-- AD: filtro LDAP per nome parziale sui cinque DC e caratteri di input correttamente escaped. Presenza, errori e percorsi vengono conservati per ciascun DC.
-- Entra: la proprietà displayName supporta startsWith ma non documenta contains. Per una ricerca contiene uniforme si prevede una raccolta paginata dei soli campi necessari, mantenuta in memoria per un intervallo configurabile e filtrata localmente. Un aggiornamento incompleto non sostituisce la raccolta completa precedente.
-- Intune: raccolta paginata dei campi necessari e filtro locale per nome; associazione puntuale tramite azureADDeviceId quando disponibile.
-- GLPI: ricerca paginata Computer tramite API V1 e risoluzione degli stati reali. La base del connettore inclusa supporta la ricerca contiene.
-- Data e ora di aggiornamento visibili per ogni fonte. Valori letti dalla cache sono riconoscibili e vengono ricontrollati prima di operazioni di rimozione.
-- La soglia iniziale di due caratteri e la durata della cache sono proposte, da rifinire dopo le prove sul numero reale di macchine.
+## Raccolte e cache
 
-## Integrazione GLPI predisposta
+- AD: lettura dei DC configurati ad ogni ricerca, caratteri LDAP escaped e risultati validati separatamente per ciascun DC.
+- Entra: GET v1.0/devices con selezione dei campi necessari e raccolta di tutte le pagine. Filtro locale contains, per trovare anche frammenti in mezzo al nome.
+- Intune: GET v1.0/deviceManagement/managedDevices, raccolta paginata, record Windows e filtro locale contains. managedDeviceId e azureADDeviceId restano campi distinti.
+- GLPI: API V1, ricerca Computer paginata, ID ricavati dalle opzioni di ricerca e denominazioni reali degli stati. Si legge una scheda per risultato e si riusano gli stati nel corso della singola ricerca; grandi elenchi possono essere più lenti.
 
-File inclusi:
+La cache cloud completa è in memoria nel runspace persistente. CloudCacheMinutes vale 5 nel modello, accetta 0–60 e con 0 disabilita il riuso. La chiave include tenant, client, account, tipo di autenticazione, ambiente, ambiti e fonte. Rileggi cloud forza il refresh; orario originale e provenienza cache sono visibili. Una lettura fallita invalida la relativa voce e produce Non verificabile, senza inventario parziale o successo ripreso dalla cache.
 
-- GLPI.Inventory.psm1: esporta Find-GlpiComputer. Usa soltanto GET, apre e chiude una sessione API e restituisce Computer con stato, seriale e numero inventario.
-- computer-explorer.config.example.json: URL e opzioni del connettore; GLPI è inizialmente disabilitato perché l'URL effettivo non è stato fornito. Nessun token è memorizzato nel JSON.
-- Test-GlpiLookup.ps1: prova separata del connettore, con token inseriti in locale come SecureString; legge automaticamente computer-explorer.config.local.json oppure il percorso indicato con -ConfigPath.
-- tests/GLPI.Inventory.Tests.ps1: prove con risposte API simulate, senza collegarsi al server aziendale.
+I nextLink vengono verificati per host e risorsa. Pagine ripetute, ID non validi e nomi discordanti per lo stesso ID producono errore. I record cloud sono pubblicati soltanto al termine della raccolta. Gli aggiornamenti della griglia arrivano dopo ogni fonte, non dopo ogni singolo dispositivo.
 
-Il connettore individua dinamicamente le colonne Nome e ID di Computer tramite listSearchOptions e legge la denominazione dello stato tramite State. Le pagine vengono raccolte integralmente prima di restituire risultati. Un errore provoca un errore esplicito: la UI dovrà rappresentarlo come Non verificabile.
+GLPI usa il contesto predefinito dell'utente API. La selezione esplicita di profilo/entità e l'apertura della scheda web sono da progettare.
 
-Il contesto GLPI dipende dal profilo e dalle entità della sessione. Per completare l'integrazione bisogna definire URL di apirest.php, uso dell'App token e profilo / entità da consultare. Il primo connettore usa il contesto predefinito dell'utente API; la selezione delle entità verrà integrata dopo aver concordato il perimetro.
+## Prove effettuate e limiti
 
-### Prova del connettore
+- Parser PowerShell e 53 casi automatici in PowerShell 7.4.19: 24 cloud/aggregazione/worker, 11 AD, 18 GLPI. Dati sintetici, senza connessioni al tenant o ai DC aziendali. Inclusi runspace, coda concorrente, annullamento e riuso del worker.
+- GLPI aziendale, 13 ottobre 2026: 528 record con ID validi e distinti, 527 nomi distinti e cinque stati. Il nome duplicato ha due seriali differenti. I risultati della prova appartengono all'entità 0; non descrivono l'intero server.
+- AD aziendale, stessa data: nel campione di 14 righe inviato dall'utente, 5/5 presenti e verificati, percorsi valorizzati e nessun GUID discordante. Le righe non condivise non sono state esaminate.
+- La nuova finestra richiede la prova su Windows PowerShell 5.1. Login Graph e letture reali Entra/Intune devono essere verificati sul PC aziendale. Il parser e le simulazioni non sostituiscono queste prove.
 
-1. Aggiornare il branch con git pull --ff-only. Copiare il JSON già configurato nella cartella del repository con il nome computer-explorer.config.local.json. Se manca, copiarlo da computer-explorer.config.example.json.
-2. Nel JSON locale impostare Glpi.BaseUri con l'URL corretto di apirest.php e Glpi.Enabled su true. Impostare UseAppToken in base al client API GLPI.
-3. Da Windows PowerShell 5.1 eseguire:
-
-```powershell
-.\Test-GlpiLookup.ps1 -NameFragment "SM-PC"
-```
-
-4. Inserire User token e, quando richiesto, App token nei prompt locali.
-
-Il connettore è stato verificato in PowerShell con risposte API simulate: risultati singoli e multipli, colonne numeriche e UID, mappe indicizzate per ID, paginazione e interruzione su errore. La prova reale del 13 ottobre 2026 è riuscita: 528 record con ID validi, 527 nomi distinti e cinque stati. I risultati della prova appartengono all'entità 0. Un nome compare con due ID e due seriali distinti, da conservare nel dettaglio della futura vista aggregata. La prova non modifica gli asset.
-
-## Rimozione nella futura console
-
-La ricerca parziale produce una lista di candidati. Il comando di rimozione opererà sul computer selezionato e sulle sue registrazioni esatte, dopo una nuova verifica degli ID e dei dati. Il riepilogo indicherà nome completo e oggetti per fonte prima della conferma.
-
-Ordine previsto: Intune, AD, Entra. GLPI contribuisce al controllo dello stato e rimane una fonte di consultazione. La gestione del ritiro o della dismissione nell'inventario GLPI sarà un eventuale progetto distinto, se richiesto.
-
-## Ricerca AD predisposta
-
-Test-AdLookup.ps1 esegue una ricerca letterale per frammento su nome, DNSHostName e sAMAccountName, sui DC indicati nel JSON locale. Restituisce gli esiti per DC e il riepilogo delle presenze e dei percorsi CanonicalName. Il parametro -PassThru permette di ricevere i dati strutturati per i test e la futura integrazione.
-
-Le prove simulate coprono anche un DC indisponibile: viene mostrato come non verificabile e non come assente. GUID e percorsi differenti vengono evidenziati. La prova reale sui cinque DC deve ancora essere eseguita.
+Comandi di avvio e test: vedere [README](../README.md).
 
 ## Passi successivi
 
-1. Concordare lista, dettaglio e regole di associazione quando il nome o il seriale differiscono.
-2. Implementare e provare la ricerca AD sui cinque DC.
-3. Aggiungere aggregazione Entra / Intune, cache e aggiornamento asincrono.
-4. Verificare il connettore GLPI sul server aziendale e integrare le entità corrette.
-5. Collegare le azioni di rimozione al computer selezionato.
+1. Verificare apertura della finestra e login Graph sul PC aziendale; provare un frammento contenuto in AD, Entra, Intune e GLPI.
+2. Rifinire tempi, colonne e regole di associazione usando i casi reali e concordare profili/entità GLPI.
+3. Collegare le azioni di rimozione agli oggetti selezionati, rileggendo gli ID e mostrando un riepilogo prima della conferma.
+
+Ordine previsto per la rimozione: Intune, AD, Entra. GLPI rimane una fonte di consultazione. La cancellazione di una registrazione Windows da Intune avvia anche il ritiro dalla gestione, come già indicato nel tool esistente.
 
 ## Riferimenti tecnici
 
-- [GLPI REST API V1 ufficiale](https://help.glpi-project.org/documentation/modules/configuration/general/api/api)
-- [Microsoft Graph: device](https://learn.microsoft.com/en-us/graph/api/resources/device?view=graph-rest-1.0)
-- [Microsoft Graph: managedDevice](https://learn.microsoft.com/en-us/graph/api/resources/intune-devices-manageddevice?view=graph-rest-1.0)
+- [GLPI REST API V1](https://help.glpi-project.org/documentation/modules/configuration/general/api/api)
+- [Graph: list devices](https://learn.microsoft.com/en-us/graph/api/device-list?view=graph-rest-1.0)
+- [Graph: list managedDevices](https://learn.microsoft.com/en-us/graph/api/intune-devices-manageddevice-list?view=graph-rest-1.0)
+- [Autenticazione Graph PowerShell](https://learn.microsoft.com/en-us/powershell/microsoftgraph/authentication-commands?view=graph-powershell-1.0)
+- [AD: Get-ADComputer](https://learn.microsoft.com/en-us/powershell/module/activedirectory/get-adcomputer?view=windowsserver2025-ps)
