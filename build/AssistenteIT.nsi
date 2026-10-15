@@ -1,4 +1,4 @@
-Unicode true
+﻿Unicode true
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
 !include "WordFunc.nsh"
@@ -16,7 +16,6 @@ Unicode true
 !define PRODUCT "Assistente IT"
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\AssistenteIT"
 !define MARKER "AssistenteIT-56bc1182-02a3-4b1a-9d4a-99d44231c26b"
-!include "${__FILEDIR__}\Legacy-Migration.nsh"
 Name "${PRODUCT}"
 OutFile "${OUTPUT_FILE}"
 ; An explicit /D is populated before .onInit; otherwise choose the 64-bit registry/default path.
@@ -38,6 +37,7 @@ VIAddVersionKey /LANG=1040 "LegalCopyright" "Assistente IT contributors"
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "Italian"
+!include "${__FILEDIR__}\Legacy-Migration.nsh"
 
 !macro CHECK_RUNNING PREFIX
 Function ${PREFIX}CheckRunning

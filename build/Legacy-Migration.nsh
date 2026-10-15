@@ -1,4 +1,4 @@
-; Names of released installations: used only for discovery and cleanup.
+﻿; Names of released installations: used only for discovery and cleanup.
 !define LEGACY_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\OPBGITSuite"
 !define LEGACY_MARKER "OPBGITSuite-56bc1182-02a3-4b1a-9d4a-99d44231c26b"
 Var LegacyInstallDir
