@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <title>Assistente IT</title>
+  <desc>Monitor bianco su fondo blu con una spunta verde.</desc>
+  <rect x="8" y="8" width="240" height="240" rx="54" fill="#16386b"/>
+  <rect x="44" y="54" width="168" height="120" rx="16" fill="#f5faff"/>
+  <rect x="55" y="65" width="146" height="86" rx="7" fill="#16386b"/>
+  <path d="M77 90l17 16-17 16m34 0h25" fill="none" stroke="#f5faff" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M119 172h18v25h-18z" fill="#f5faff"/>
+  <path d="M97 199h62" fill="none" stroke="#f5faff" stroke-width="12" stroke-linecap="round"/>
+  <circle cx="187" cy="181" r="37" fill="#16386b"/>
+  <circle cx="187" cy="181" r="30" fill="#4ee1b0"/>
+  <path d="M173 181l10 10 18-21" fill="none" stroke="#12315d" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

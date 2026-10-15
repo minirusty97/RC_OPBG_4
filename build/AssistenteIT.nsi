@@ -27,6 +27,8 @@ VIAddVersionKey /LANG=1040 "ProductName" "${PRODUCT}"
 VIAddVersionKey /LANG=1040 "FileDescription" "Installazione Assistente IT"
 VIAddVersionKey /LANG=1040 "FileVersion" "${APP_VERSION}"
 VIAddVersionKey /LANG=1040 "LegalCopyright" "Assistente IT contributors"
+!define MUI_ICON "${PACKAGE_ROOT}\app\assets\AssistenteIT.ico"
+!define MUI_UNICON "${PACKAGE_ROOT}\app\assets\AssistenteIT.ico"
 !define MUI_ABORTWARNING
 !define MUI_FINISHPAGE_RUN "$INSTDIR\AssistenteIT.exe"
 !define MUI_FINISHPAGE_RUN_TEXT "Apri Assistente IT"
@@ -129,9 +131,9 @@ Section "Installa"
   FileClose $0
   WriteUninstaller "$INSTDIR\Uninstall.exe"
   CreateDirectory "$SMPROGRAMS\Assistente IT"
-  CreateShortcut "$SMPROGRAMS\Assistente IT\Assistente IT.lnk" "$INSTDIR\AssistenteIT.exe"
+  CreateShortcut "$SMPROGRAMS\Assistente IT\Assistente IT.lnk" "$INSTDIR\AssistenteIT.exe" "" "$INSTDIR\app\assets\AssistenteIT.ico" 0
   CreateShortcut "$SMPROGRAMS\Assistente IT\Disinstalla.lnk" "$INSTDIR\Uninstall.exe"
-  CreateShortcut "$DESKTOP\Assistente IT.lnk" "$INSTDIR\AssistenteIT.exe"
+  CreateShortcut "$DESKTOP\Assistente IT.lnk" "$INSTDIR\AssistenteIT.exe" "" "$INSTDIR\app\assets\AssistenteIT.ico" 0
   WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayName" "${PRODUCT}"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayVersion" "${APP_VERSION}"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "Publisher" "Assistente IT"
@@ -142,6 +144,8 @@ Section "Installa"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "URLInfoAbout" "https://github.com/minirusty97/RC_OPBG_4"
   WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoModify" 1
   WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoRepair" 1
+  ; Refresh Explorer after replacing icons and shortcuts during an upgrade.
+  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
   Goto install_done
   install_failed:
     SetErrorLevel 2
