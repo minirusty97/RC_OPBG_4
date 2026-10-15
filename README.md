@@ -99,6 +99,7 @@ Il workflow GitHub Actions verifica parser e suite su Windows PowerShell 5.1 a o
 .\tests\Glpi.Credentials.Tests.ps1
 .\tests\ComputerExplorer.Removal.Tests.ps1
 .\tests\ComputerExplorer.UI.Tests.ps1
+.\tests\ComputerExplorer.Completion.Tests.ps1
 .\tests\ComputerExplorer.Parallel.Tests.ps1
 .\tests\AD.Lookup.Tests.ps1
 .\tests\GLPI.Inventory.Tests.ps1

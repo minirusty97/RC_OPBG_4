@@ -54,9 +54,27 @@ try {
     $grid.ClearSelection(); Update-ExplorerCounters
     if ($counterLabel.Text -ne 'Risultati: 2 | Selezionati: 0') { throw 'Cleared selection counter incorrect.' }
     'PASS: busy/stale views cannot start another deletion.'
+
+    # The final result is returned by the real worker but absent from the
+    # progress queue, as when completion races with a partial redraw.
+    $grid.SelectAll()
+    $script:Queue = New-Object 'System.Collections.Concurrent.ConcurrentQueue[object]'
+    $script:Queue.Enqueue([pscustomobject]@{Rows=$rows;Message='In corso: GLPI';Complete=$false;Sources=$snapshot.Sources})
+    $snapshot.Message = 'Ricerca completata'
+    $script:Pipeline = [PowerShell]::Create(); $script:Pipeline.Runspace = $script:Worker
+    [void]$script:Pipeline.AddScript({param($FinalSnapshot) return $FinalSnapshot}.ToString()).AddArgument($snapshot)
+    Set-SearchBusy $true
+    $script:Invocation = $script:Pipeline.BeginInvoke()
+    if (-not $script:Invocation.AsyncWaitHandle.WaitOne(5000)) { throw 'Native UI completion worker did not finish.' }
+    $tickMethod = $timer.GetType().GetMethod('OnTick', [Reflection.BindingFlags]'Instance, NonPublic')
+    [void]$tickMethod.Invoke($timer, [object[]]@([EventArgs]::Empty))
+    if (-not $script:Latest.Complete -or $script:Busy -or $script:RemovalNeedsRefresh -or -not $deleteButton.Enabled) { throw 'Native timer left a finished search blocked.' }
+    if ($counterLabel.Text -ne 'Risultati: 2 | Selezionati: 2' -or $status.Text -notlike 'Ricerca completata*') { throw 'Native completion lost selection or final status.' }
+    'PASS: native timer applies the returned final snapshot and enables deletion of selected rows.'
 }
 finally {
     $timer.Dispose()
+    if ($null -ne $script:Pipeline) { $script:Pipeline.Stop(); $script:Pipeline.Dispose() }
     $script:Worker.Close(); $script:Worker.Dispose()
     $form.Dispose()
 }

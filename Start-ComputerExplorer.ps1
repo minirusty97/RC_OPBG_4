@@ -496,13 +496,21 @@ $timer.Add_Tick({
         try {
             $output = @($script:Pipeline.EndInvoke($script:Invocation))
             if ($script:Pipeline.Streams.Error.Count -gt 0) { throw $script:Pipeline.Streams.Error[0] }
+            if ($finishedOperation -eq 'Search') {
+                if ($output.Count -ne 1 -or -not $output[0].Complete) { throw 'La ricerca non ha restituito un risultato finale valido. Ripetere la ricerca.' }
+                # Il worker può finire durante il ridisegno di un aggiornamento
+                # parziale, dopo lo svuotamento della coda di questo tick.
+                # EndInvoke restituisce sempre il risultato finale autorevole.
+                Show-ExplorerSnapshot $output[0]
+                $script:RemovalNeedsRefresh = $false
+            }
             if ($script:Pipeline.Streams.Warning.Count -gt 0) { $status.Text += ' | Avviso: ' + $script:Pipeline.Streams.Warning[0].Message }
-            if ($finishedOperation -eq 'Search') { $script:RemovalNeedsRefresh = $false }
         }
         catch {
             $failed = $true; $message = $_.Exception.Message
             if ($script:Stopping) { $message = 'Operazione interrotta. Le verifiche ancora in attesa non sono complete.' }
             if ($null -ne $script:Latest -and $finishedOperation -eq 'Search') {
+                $script:Latest.Complete = $false
                 foreach ($source in $script:Latest.Sources) {
                     if ($source.State -eq 'In attesa') { $source.State = 'Interrotta'; $source.Error = $message }
                 }

@@ -109,6 +109,8 @@ Il pool ha al massimo otto runspace STA: con la configurazione attuale possono p
 
 I risultati vengono pubblicati progressivamente. Le fonti ancora in attesa restano grigie; un errore Graph non ferma AD o GLPI. La UI riunisce gli aggiornamenti ravvicinati e abilita la rimozione solo dopo la fine della ricerca. Le cancellazioni conservano il piano e l'ordine sequenziale già implementati.
 
+Alla chiusura del lavoro la finestra applica anche il risultato finale restituito dal coordinatore. Questo evita che una ricerca terminata durante il ridisegno della griglia rimanga visualizzata come «in corso» con Elimina disabilitato. Le prove di completamento usano pipeline asincrone reali e forzano questa sovrapposizione; ricerche ancora in esecuzione, fallite o interrotte mantengono la rimozione disabilitata.
+
 Ogni API mantiene la propria paginazione sequenziale. Il connettore GLPI mantiene una sola sessione e la lettura ordinata delle schede; il suo tempo può dominare ricerche con molti risultati. Il parallelismo riduce le attese fra sorgenti, senza promettere un rapporto fisso di accelerazione.
 
 L'annullamento invia lo stop a tutti i lavori, ne attende la chiusura e dispone il pool. Le cache parziali non vengono pubblicate; le cache complete restano condivise e il refresh forzato viene rispettato.
