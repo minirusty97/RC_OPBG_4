@@ -4,7 +4,7 @@ Aggiornamento: 15 ottobre 2026. Branch: `feature/computer-explorer`.
 
 ## Fase attuale
 
-`Start-ComputerExplorer.ps1` è la prima interfaccia Windows Forms per la ricerca aggregata AD / Entra ID / Intune / GLPI. `ComputerExplorer.Core.psm1` gestisce raccolte cloud, cache, aggregazione e aggiornamenti del worker. Riutilizza `Test-AdLookup.ps1 -PassThru` per AD e `GLPI.Inventory.psm1` per GLPI.
+`Start-ComputerExplorer.ps1` è la prima interfaccia Windows Forms per la ricerca aggregata AD / Entra ID / Intune / GLPI. `ComputerExplorer.Core.psm1` gestisce letture, raccolte cloud, cache e aggregazione. `ComputerExplorer.Parallel.psm1` coordina un pool di massimo otto lettori indipendenti. Riutilizza `Test-AdLookup.ps1 -PassThru` per AD e `GLPI.Inventory.psm1` per GLPI.
 
 La console permette la rimozione delle righe selezionate da AD, Entra e Intune tramite `ComputerExplorer.Removal.psm1`. GLPI resta in consultazione. Il tool precedente `Remove-Computer-FullTool.ps1` rimane disponibile.
 
@@ -33,7 +33,7 @@ Il percorso viene da CanonicalName; il DN originale rimane nel dettaglio. Un DC 
 
 ## Finestra e autenticazione
 
-La griglia mostra i risultati; il pannello inferiore espone gli oggetti del nome selezionato e una scheda con esiti delle fonti, errori, orari e cache. Le caselle permettono di escludere una fonte e Interrompi annulla il worker. La finestra riceve gli aggiornamenti tramite una coda concorrente: i controlli WinForms restano sul thread della UI.
+La griglia mostra i risultati; il pannello inferiore espone gli oggetti del nome selezionato e una scheda con esiti delle fonti, errori, orari e cache. Le caselle permettono di escludere una fonte e Interrompi annulla il coordinatore e tutti i lettori della ricerca. La finestra riceve gli aggiornamenti tramite una coda concorrente: i controlli WinForms restano sul thread della UI.
 
 I token GLPI vengono letti dal `.env` nella cartella degli script tramite `Read-ExplorerGlpiCredentials`, poi conservati come SecureString per la sessione della console. Lo stesso caricamento è usato da Test-GlpiLookup.ps1. Il `.env` contiene GLPI_USER_TOKEN e GLPI_APP_TOKEN in chiaro, è escluso da Git e non viene scritto dalla UI; il repository include solo il modello vuoto `.env.example`. Se manca o è incompleto resta disponibile il prompt. Il parser legge dati senza eseguire espressioni, rifiuta duplicati e righe malformate senza mostrare i valori. Per ricaricare modifiche al file si riapre la finestra. Il JSON locale è escluso da Git e contiene l'URL effettivo già verificato dall'utente.
 
@@ -46,7 +46,7 @@ Graph usa Microsoft.Graph.Authentication. Riutilizza la sessione e gli ambiti su
 - Intune: GET v1.0/deviceManagement/managedDevices, raccolta paginata, record Windows e filtro locale contains. managedDeviceId e azureADDeviceId restano campi distinti.
 - GLPI: API V1, ricerca Computer paginata, ID ricavati dalle opzioni di ricerca e denominazioni reali degli stati. Si legge una scheda per risultato e si riusano gli stati nel corso della singola ricerca; grandi elenchi possono essere più lenti.
 
-La cache cloud completa è in memoria nel runspace persistente. CloudCacheMinutes vale 5 nel modello, accetta 0–60 e con 0 disabilita il riuso. La chiave include tenant, client, account, tipo di autenticazione, ambiente, ambiti e fonte. Rileggi cloud forza il refresh; orario originale e provenienza cache sono visibili. Una lettura fallita invalida la relativa voce e produce Non verificabile, senza inventario parziale o successo ripreso dalla cache.
+La cache cloud completa è una hashtable sincronizzata condivisa dai lettori, conservata dal coordinatore nel runspace persistente e invalidata dalle rimozioni. CloudCacheMinutes vale 5 nel modello, accetta 0–60 e con 0 disabilita il riuso. La chiave include tenant, client, account, tipo di autenticazione, ambiente, ambiti e fonte. Rileggi cloud forza il refresh; orario originale e provenienza cache sono visibili. Una lettura fallita invalida la relativa voce e produce Non verificabile, senza inventario parziale o successo ripreso dalla cache.
 
 I nextLink vengono verificati per host e risorsa. Pagine ripetute, ID non validi e nomi discordanti per lo stesso ID producono errore. I record cloud sono pubblicati soltanto al termine della raccolta. Gli aggiornamenti della griglia arrivano dopo ogni fonte, non dopo ogni singolo dispositivo.
 
@@ -100,3 +100,17 @@ Il modulo `ComputerExplorer.Removal.psm1` espone preparazione e applicazione del
 
 
 Il workflow `.github/workflows/powershell-checks.yml` esegue parser e test su Windows. Le nuove prove coprono ordine di rimozione, ID separati, preflight completo, nuove identità, cambi di nome/seriale, 404, replica AD, errori isolati per computer, origini escluse, WhatIf, piani scaduti o riusati, annullamento e integrità del piano. Lo smoke test costruisce i controlli WinForms, senza collegarsi alle fonti aziendali.
+
+## Esecuzione parallela delle ricerche
+
+La finestra richiama Invoke-ComputerExplorerParallelSearch. GLPI e i lettori dei singoli DC partono indipendentemente. Un solo lavoro esegue Connect-ExplorerGraph per le fonti cloud selezionate; al termine partono Entra e Intune contemporaneamente, riutilizzando la sessione statica del Graph SDK nello stesso processo. Nessun lettore cloud esegue un proprio login.
+
+Il pool ha al massimo otto runspace STA: con la configurazione attuale possono procedere i cinque DC, Entra, Intune e GLPI. Ogni lettore AD usa il parametro DomainController di Test-AdLookup.ps1, limitato ai DC configurati. Gli esiti AD vengono riuniti per DC; la presenza rimane grigia finché tutti i DC non hanno terminato o se una verifica fallisce.
+
+I risultati vengono pubblicati progressivamente. Le fonti ancora in attesa restano grigie; un errore Graph non ferma AD o GLPI. La UI riunisce gli aggiornamenti ravvicinati e abilita la rimozione solo dopo la fine della ricerca. Le cancellazioni conservano il piano e l'ordine sequenziale già implementati.
+
+Ogni API mantiene la propria paginazione sequenziale. Il connettore GLPI mantiene una sola sessione e la lettura ordinata delle schede; il suo tempo può dominare ricerche con molti risultati. Il parallelismo riduce le attese fra sorgenti, senza promettere un rapporto fisso di accelerazione.
+
+L'annullamento invia lo stop a tutti i lavori, ne attende la chiusura e dispone il pool. Le cache parziali non vengono pubblicate; le cache complete restano condivise e il refresh forzato viene rispettato.
+
+Riferimenti: [runspace pool PowerShell](https://learn.microsoft.com/en-us/powershell/scripting/developer/hosting/creating-multiple-runspaces) e [GraphSession thread-safe del Graph SDK](https://github.com/microsoftgraph/msgraph-sdk-powershell/blob/main/src/Authentication/Authentication.Core/Common/GraphSession.cs).

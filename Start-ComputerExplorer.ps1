@@ -438,9 +438,9 @@ $searchButton.Add_Click({
             Import-Module $ModulePath -ErrorAction Stop
             $arguments = @{ NameFragment = $Fragment; ConfigPath = $ConfigFile; EnabledSources = $Sources; ForceCloudRefresh = $Refresh; ProgressQueue = $Queue }
             if ($null -ne $Credentials) { $arguments.GlpiUserToken = $Credentials.User; $arguments.GlpiAppToken = $Credentials.App }
-            Invoke-ComputerExplorerSearch @arguments
+            Invoke-ComputerExplorerParallelSearch @arguments
         }
-        [void]$script:Pipeline.AddScript($workerScript.ToString()).AddArgument((Join-Path $PSScriptRoot 'ComputerExplorer.Core.psm1')).AddArgument($nameBox.Text.Trim()).AddArgument($ConfigPath).AddArgument($enabled).AddArgument($script:GlpiCredentials).AddArgument($forceRefresh.Checked).AddArgument($script:Queue)
+        [void]$script:Pipeline.AddScript($workerScript.ToString()).AddArgument((Join-Path $PSScriptRoot 'ComputerExplorer.Parallel.psm1')).AddArgument($nameBox.Text.Trim()).AddArgument($ConfigPath).AddArgument($enabled).AddArgument($script:GlpiCredentials).AddArgument($forceRefresh.Checked).AddArgument($script:Queue)
         $script:Stopping = $false; $script:StartedAt = [datetime]::Now; $script:StageMessage = 'Avvio della ricerca...'
         Set-SearchBusy $true
         $script:Invocation = $script:Pipeline.BeginInvoke(); $timer.Start()
@@ -478,14 +478,15 @@ $cancelButton.Add_Click({ Stop-ExplorerSearch })
 $grid.Add_SelectionChanged({ if (-not $script:RenderingGrid) { Update-ExplorerCounters; if ($null -ne $script:Latest) { Show-SelectedComputer } } })
 $timer.Add_Tick({
     try {
-        $update = $null
+        $update = $null; $latestSearchUpdate = $null
         while ($script:Queue.TryDequeue([ref]$update)) {
-            if ($script:Operation -eq 'Search') { Show-ExplorerSnapshot $update }
+            if ($script:Operation -eq 'Search') { $latestSearchUpdate = $update }
             else {
                 $script:StageMessage = $update.Message
                 if ($null -ne $update.Result) { Add-RemovalReportRow $update.Result }
             }
         }
+        if ($null -ne $latestSearchUpdate) { Show-ExplorerSnapshot $latestSearchUpdate }
         if (-not $script:Invocation.IsCompleted) {
             $status.Text = '{0} | {1}s' -f $script:StageMessage, ([int]([datetime]::Now - $script:StartedAt).TotalSeconds)
             return

@@ -42,9 +42,9 @@ Riutilizza `computer-explorer.config.local.json`, già configurato per le prove 
 
 Scrivere ad esempio `PORT-` e premere **Cerca**. I token GLPI vengono letti automaticamente dal `.env` nella cartella degli script. Se il file manca o i token richiesti sono vuoti, si apre il prompt della finestra. **Token GLPI** permette una sostituzione temporanea per la finestra corrente. Graph riutilizza la sessione disponibile nello stesso processo; se manca o richiede ambiti aggiuntivi, apre il login interattivo. I token GLPI non vanno inseriti nel JSON o nel repository.
 
-Le interrogazioni lavorano in un runspace separato: la finestra resta disponibile e la griglia si aggiorna dopo ogni fonte. **Interrompi** annulla la lettura; le fonti ancora in attesa restano non verificate. Le caselle AD / Entra / Intune / GLPI scelgono le fonti da interrogare.
+Le interrogazioni lavorano in parallelo in un pool con massimo otto lettori: cinque DC indipendenti, GLPI, Entra e Intune. Un solo lavoro prepara la sessione Graph, poi Entra e Intune partono insieme; AD e GLPI possono già procedere durante il login. La finestra riceve i risultati man mano, senza aspettare le fonti più lente. Gli aggiornamenti arrivati nello stesso intervallo vengono riuniti prima di ridisegnare la griglia. **Interrompi** annulla tutti i lettori della ricerca; le fonti ancora in attesa restano non verificate. I lettori vengono arrestati e disposti prima di consentire una nuova operazione. Le caselle AD / Entra / Intune / GLPI scelgono le fonti da interrogare.
 
-La prima lettura cloud raccoglie tutte le pagine dei campi necessari, poi applica il confronto contiene senza distinzione fra maiuscole e minuscole. La cache completa dura `Search.CloudCacheMinutes` (predefinito 5; 0 la disabilita), resta in memoria e viene separata per tenant, client, account, autenticazione e ambiti. **Rileggi cloud** forza una nuova lettura. La scheda **Stato fonti e orari** indica esiti, errori, orari e utilizzo della cache. AD e GLPI vengono riletti a ogni ricerca; GLPI può richiedere più tempo con molti risultati perché legge le schede e gli stati.
+La prima lettura cloud raccoglie tutte le pagine dei campi necessari, poi applica il confronto contiene senza distinzione fra maiuscole e minuscole. La cache completa dura `Search.CloudCacheMinutes` (predefinito 5; 0 la disabilita), resta in memoria e viene separata per tenant, client, account, autenticazione e ambiti. **Rileggi cloud** forza una nuova lettura. La scheda **Stato fonti e orari** indica esiti, errori, orari e utilizzo della cache. La cache cloud completa è condivisa fra i lettori e sopravvive alle ricerche nella stessa finestra. AD e GLPI vengono riletti a ogni ricerca; GLPI può richiedere più tempo con molti risultati perché legge le schede e gli stati. Le pagine di ogni API e le richieste della sessione GLPI restano ordinate; il parallelismo riguarda le fonti e i DC. Il tempo finale dipende dalla fonte più lenta e dai tempi di autenticazione, quindi non viene garantito un fattore di accelerazione.
 
 Requisiti della console: Windows PowerShell 5.1, RSAT `ActiveDirectory`, modulo `Microsoft.Graph.Authentication` e accessi aziendali alle fonti. Il modulo Graph può essere una dipendenza già presente del tool originale. Se manca, installarlo dalla stessa Windows PowerShell usata per avviare la console:
 
@@ -92,13 +92,14 @@ Il modulo `ComputerExplorer.Removal.psm1` espone preparazione e applicazione del
 
 ### Verifiche eseguite
 
-Il workflow GitHub Actions verifica parser e suite su Windows PowerShell 5.1 a ogni push. I test usano dati sintetici e API simulate: cloud, AD, GLPI, date, file `.env`, rimozioni ed errori. Lo smoke test WinForms costruisce la finestra e verifica selezione, contatori e dimensioni delle colonne senza effettuare ricerche o eliminazioni aziendali. Le verifiche precedenti sono passate anche in PowerShell 7.4.19; la suite cloud/date è stata provata con fuso Europe/Rome.
+Il workflow GitHub Actions verifica parser e suite su Windows PowerShell 5.1 a ogni push. I test usano dati sintetici e API simulate: cloud, AD, GLPI, date, file `.env`, rimozioni ed errori. Le prove di concorrenza usano barriere per verificare otto lettori contemporanei, risultati progressivi, login unico, cache condivisa e annullamento senza lettori residui. Lo smoke test WinForms costruisce la finestra e verifica selezione, contatori e dimensioni delle colonne senza effettuare ricerche o eliminazioni aziendali. Le verifiche precedenti sono passate anche in PowerShell 7.4.19; la suite cloud/date è stata provata con fuso Europe/Rome.
 
 ```powershell
 .\tests\ComputerExplorer.Tests.ps1
 .\tests\Glpi.Credentials.Tests.ps1
 .\tests\ComputerExplorer.Removal.Tests.ps1
 .\tests\ComputerExplorer.UI.Tests.ps1
+.\tests\ComputerExplorer.Parallel.Tests.ps1
 .\tests\AD.Lookup.Tests.ps1
 .\tests\GLPI.Inventory.Tests.ps1
 ```

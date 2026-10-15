@@ -3,7 +3,8 @@
 param(
     [Parameter(Mandatory = $true)][ValidateNotNullOrEmpty()][string]$NameFragment,
     [string]$ConfigPath,
-    [switch]$PassThru
+    [switch]$PassThru,
+    [string]$DomainController
 )
 
 $ErrorActionPreference = 'Stop'
@@ -38,6 +39,10 @@ $controllers = @($dcProperty.Value | ForEach-Object {
     $dc
 } | Sort-Object -Unique)
 if ($controllers.Count -eq 0) { throw 'Configurare almeno un Domain Controller.' }
+if (-not [string]::IsNullOrWhiteSpace($DomainController)) {
+    if ($controllers -notcontains $DomainController) { throw 'Il DC richiesto non è presente nella configurazione.' }
+    $controllers = @($DomainController)
+}
 
 $minimumCharacters = 2
 $searchProperty = $config.PSObject.Properties['Search']

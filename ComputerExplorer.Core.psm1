@@ -1,6 +1,6 @@
 ﻿#requires -version 5.1
 Set-StrictMode -Version 2.0
-$script:CloudCache = @{}
+$script:CloudCache = [hashtable]::Synchronized(@{})
 
 function Get-ExplorerValue {
     param($Object, [string]$Name, $Default = $null)
@@ -154,7 +154,8 @@ function Get-ExplorerCloudInventory {
     param(
         [ValidateSet('Entra', 'Intune')][string]$Source,
         [ValidateRange(0, 60)][int]$CacheMinutes = 5,
-        [switch]$ForceRefresh
+        [switch]$ForceRefresh,
+        [System.Collections.IDictionary]$Cache = $script:CloudCache
     )
     $context = Get-MgContext -ErrorAction Stop
     if ($null -eq $context) { throw 'Sessione Graph assente.' }
@@ -162,8 +163,8 @@ function Get-ExplorerCloudInventory {
     $contextScopes = Get-ExplorerValue $context 'Scopes' @()
     $key = (@($parts) + @(($contextScopes | Sort-Object) -join ',') + @($Source)) -join '|'
     $now = [datetimeoffset]::UtcNow
-    if (-not $ForceRefresh -and $CacheMinutes -gt 0 -and $script:CloudCache.ContainsKey($key)) {
-        $cached = $script:CloudCache[$key]
+    if (-not $ForceRefresh -and $CacheMinutes -gt 0 -and $Cache.Contains($key)) {
+        $cached = $Cache[$key]
         if (($now - $cached.CheckedAtUtc).TotalMinutes -lt $CacheMinutes) {
             return [pscustomobject]@{ Records = $cached.Records; CheckedAtUtc = $cached.CheckedAtUtc; FromCache = $true }
         }
@@ -202,11 +203,11 @@ function Get-ExplorerCloudInventory {
             }
         }
         $complete = [pscustomobject]@{ Records = $items.ToArray(); CheckedAtUtc = [datetimeoffset]::UtcNow; FromCache = $false }
-        $script:CloudCache[$key] = $complete
+        $Cache[$key] = $complete
         return $complete
     }
     catch {
-        $script:CloudCache.Remove($key)
+        $Cache.Remove($key)
         throw
     }
 }
@@ -296,7 +297,7 @@ function Merge-ExplorerResults {
             elseif ($present -gt 0) { $adColor = 'Giallo' }
         }
         $adText = '{0}/{1}' -f $present, $DomainControllers.Count
-        if ($Sources.AD.State -in @('Esclusa', 'In attesa')) { $adText = '?' }
+        if ($Sources.AD.State -eq 'Esclusa' -or ($Sources.AD.State -eq 'In attesa' -and $Sources.AD.DcSources.Count -eq 0)) { $adText = '?' }
         $paths = @($group.AD | ForEach-Object { $_.ParentPath } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
         $guids = @($group.AD | ForEach-Object { $_.ObjectGUID } | Sort-Object -Unique)
         $entra = @( $group.Entra | Sort-Object ObjectId -Unique )
@@ -348,6 +349,62 @@ function Send-ExplorerUpdate {
     if ($Complete) { return $snapshot }
 }
 
+function Read-ExplorerSource {
+    [CmdletBinding()]
+    param(
+        [ValidateSet('AD', 'Entra', 'Intune', 'GLPI')][string]$Source,
+        [string]$NameFragment, [string]$ConfigPath, $Configuration,
+        [string]$DomainController,
+        [System.Collections.IDictionary]$CloudCache = $script:CloudCache,
+        [Security.SecureString]$GlpiUserToken, [Security.SecureString]$GlpiAppToken,
+        [switch]$ForceCloudRefresh
+    )
+    $result = New-ExplorerSource $Source
+    try {
+        if ($null -eq $Configuration) { $Configuration = Read-ExplorerConfiguration $ConfigPath }
+        if ($Source -eq 'AD') {
+            $query = @{ NameFragment = $NameFragment; ConfigPath = $ConfigPath; PassThru = $true; ErrorAction = 'Stop' }
+            if (-not [string]::IsNullOrWhiteSpace($DomainController)) { $query.DomainController = $DomainController }
+            $ad = & (Join-Path $PSScriptRoot 'Test-AdLookup.ps1') @query
+            $result.Records = @($ad.Computers); $result.DcSources = @($ad.Sources); $result.CheckedAtUtc = $ad.CheckedAtUtc
+            $errors = @($ad.Sources | Where-Object { -not $_.Verificato } | ForEach-Object { "$($_.DomainController): $($_.Errore)" })
+            $result.State = 'OK'
+            if ($errors.Count -gt 0) { $result.State = 'Errore'; $result.Error = $errors -join ' | ' }
+        }
+        elseif ($Source -in @('Entra', 'Intune')) {
+            # Il coordinatore autentica una sola volta prima di avviare i lettori.
+            Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
+            $inventory = Get-ExplorerCloudInventory -Source $Source -CacheMinutes $Configuration.CloudCacheMinutes -ForceRefresh:$ForceCloudRefresh -Cache $CloudCache
+            $result.Records = @($inventory.Records | Where-Object { $_.Name.IndexOf($NameFragment, [StringComparison]::OrdinalIgnoreCase) -ge 0 })
+            $result.CheckedAtUtc = $inventory.CheckedAtUtc; $result.FromCache = $inventory.FromCache; $result.State = 'OK'
+        }
+        else {
+            $glpi = Get-ExplorerValue $Configuration.Settings 'Glpi'
+            if (-not [bool](Get-ExplorerValue $glpi 'Enabled' $false)) {
+                $result.State = 'Esclusa'; $result.Error = 'GLPI disabilitato nella configurazione locale.'
+            }
+            else {
+                Import-Module (Join-Path $PSScriptRoot 'GLPI.Inventory.psm1') -ErrorAction Stop
+                $query = @{ BaseUri = [string](Get-ExplorerValue $glpi 'BaseUri'); NameFragment = $NameFragment; UserToken = $GlpiUserToken
+                    PageSize = [int](Get-ExplorerValue $glpi 'PageSize' 100); TimeoutSeconds = [int](Get-ExplorerValue $glpi 'TimeoutSeconds' 20); ErrorAction = 'Stop' }
+                if ([bool](Get-ExplorerValue $glpi 'UseAppToken' $true)) {
+                    if ($null -eq $GlpiAppToken -or $GlpiAppToken.Length -eq 0) { throw 'App token GLPI mancante.' }
+                    $query.AppToken = $GlpiAppToken
+                }
+                $result.Records = @(Find-GlpiComputer @query)
+                $result.CheckedAtUtc = [datetimeoffset]::UtcNow; $result.State = 'OK'
+            }
+        }
+    }
+    catch {
+        $result.State = 'Errore'; $result.Error = $_.Exception.Message
+        if ($Source -eq 'AD' -and -not [string]::IsNullOrWhiteSpace($DomainController)) {
+            $result.DcSources = @([pscustomobject]@{ DomainController = $DomainController; Stato = 'Errore'; Verificato = $false; Trovati = $null; Errore = $result.Error })
+        }
+    }
+    return $result
+}
+
 function Invoke-ComputerExplorerSearch {
     [CmdletBinding()]
     param(
@@ -370,56 +427,29 @@ function Invoke-ComputerExplorerSearch {
     }
     Send-ExplorerUpdate $sources $controllers 'Ricerca AD sui DC configurati...' $ProgressQueue
     if ($EnabledSources -contains 'AD') {
-        try {
-            $ad = & (Join-Path $PSScriptRoot 'Test-AdLookup.ps1') -NameFragment $fragment -ConfigPath $ConfigPath -PassThru -ErrorAction Stop
-            $sources.AD.Records = @($ad.Computers); $sources.AD.DcSources = @($ad.Sources); $sources.AD.CheckedAtUtc = $ad.CheckedAtUtc
-            $errors = @($ad.Sources | Where-Object { -not $_.Verificato } | ForEach-Object { "$($_.DomainController): $($_.Errore)" })
-            $sources.AD.State = 'OK'
-            if ($errors.Count -gt 0) { $sources.AD.State = 'Errore'; $sources.AD.Error = $errors -join ' | ' }
-        }
-        catch { $sources.AD.State = 'Errore'; $sources.AD.Error = $_.Exception.Message }
+        $sources.AD = Read-ExplorerSource -Source AD -NameFragment $fragment -ConfigPath $ConfigPath -Configuration $config
     }
     $cloudSources = @($EnabledSources | Where-Object { $_ -in @('Entra', 'Intune') })
-    Send-ExplorerUpdate $sources $controllers 'Graph: verifica sessione e accesso. Se richiesto, completare il login nel browser.' $ProgressQueue
+    Send-ExplorerUpdate $sources $controllers 'Graph: verifica sessione e accesso.' $ProgressQueue
     $graphError = $null
     if ($cloudSources.Count -gt 0) {
         try { Connect-ExplorerGraph -Sources $cloudSources }
         catch { $graphError = $_.Exception.Message }
     }
-    foreach ($name in $cloudSources) {
-        Send-ExplorerUpdate $sources $controllers "Ricerca ${name}: lettura delle pagine o della cache..." $ProgressQueue
-        try {
-            if ($null -ne $graphError) { throw $graphError }
-            $inventory = Get-ExplorerCloudInventory -Source $name -CacheMinutes $config.CloudCacheMinutes -ForceRefresh:$ForceCloudRefresh
-            $sources[$name].Records = @($inventory.Records | Where-Object { $_.Name.IndexOf($fragment, [StringComparison]::OrdinalIgnoreCase) -ge 0 })
-            $sources[$name].CheckedAtUtc = $inventory.CheckedAtUtc; $sources[$name].FromCache = $inventory.FromCache; $sources[$name].State = 'OK'
+    foreach ($name in @('Entra', 'Intune', 'GLPI') | Where-Object { $EnabledSources -contains $_ }) {
+        Send-ExplorerUpdate $sources $controllers ("Ricerca " + $name + '...') $ProgressQueue
+        if ($name -in @('Entra', 'Intune') -and $null -ne $graphError) {
+            $sources[$name].State = 'Errore'; $sources[$name].Error = $graphError
         }
-        catch { $sources[$name].State = 'Errore'; $sources[$name].Error = $_.Exception.Message }
-    }
-    Send-ExplorerUpdate $sources $controllers 'Ricerca GLPI: computer, stati e inventario...' $ProgressQueue
-    if ($EnabledSources -contains 'GLPI') {
-        try {
-            $glpi = Get-ExplorerValue $config.Settings 'Glpi'
-            if (-not [bool](Get-ExplorerValue $glpi 'Enabled' $false)) {
-                $sources.GLPI.State = 'Esclusa'; $sources.GLPI.Error = 'GLPI disabilitato nella configurazione locale.'
-            }
-            else {
-                Import-Module (Join-Path $PSScriptRoot 'GLPI.Inventory.psm1') -ErrorAction Stop
-                $query = @{ BaseUri = [string](Get-ExplorerValue $glpi 'BaseUri'); NameFragment = $fragment; UserToken = $GlpiUserToken
-                    PageSize = [int](Get-ExplorerValue $glpi 'PageSize' 100); TimeoutSeconds = [int](Get-ExplorerValue $glpi 'TimeoutSeconds' 20); ErrorAction = 'Stop' }
-                if ([bool](Get-ExplorerValue $glpi 'UseAppToken' $true)) {
-                    if ($null -eq $GlpiAppToken -or $GlpiAppToken.Length -eq 0) { throw 'App token GLPI mancante.' }
-                    $query.AppToken = $GlpiAppToken
-                }
-                $sources.GLPI.Records = @(Find-GlpiComputer @query)
-                $sources.GLPI.CheckedAtUtc = [datetimeoffset]::UtcNow; $sources.GLPI.State = 'OK'
-            }
+        else {
+            $sources[$name] = Read-ExplorerSource -Source $name -NameFragment $fragment -ConfigPath $ConfigPath -Configuration $config -GlpiUserToken $GlpiUserToken -GlpiAppToken $GlpiAppToken -ForceCloudRefresh:$ForceCloudRefresh
         }
-        catch { $sources.GLPI.State = 'Errore'; $sources.GLPI.Error = $_.Exception.Message }
     }
     Send-ExplorerUpdate $sources $controllers 'Ricerca completata.' $ProgressQueue -Complete
 }
 
+function Get-ExplorerCloudCache { return $script:CloudCache }
+
 function Clear-ExplorerCloudCache { $script:CloudCache.Clear() }
 
-Export-ModuleMember -Function Connect-ExplorerGraph, Get-ExplorerGraphCollection, Clear-ExplorerCloudCache, Read-ExplorerConfiguration, Invoke-ComputerExplorerSearch, Merge-ExplorerResults, Format-ExplorerDate, Read-ExplorerGlpiCredentials
+Export-ModuleMember -Function Read-ExplorerSource, Get-ExplorerCloudCache, Connect-ExplorerGraph, Get-ExplorerGraphCollection, Clear-ExplorerCloudCache, Read-ExplorerConfiguration, Invoke-ComputerExplorerSearch, Merge-ExplorerResults, Format-ExplorerDate, Read-ExplorerGlpiCredentials

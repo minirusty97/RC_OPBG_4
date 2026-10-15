@@ -79,6 +79,14 @@ try {
     if (@($fixture.Requests | Where-Object { $_.Filter -ne $expected }).Count -ne 0) { throw 'LDAP input escaping failed.' }
     'PASS: literal input escaped in every LDAP field.'
     $fixture.Requests.Clear()
+    $single = & $ToolPath -NameFragment 'PC-' -ConfigPath $configPath -PassThru -DomainController 'dc3.example.invalid'
+    if ($fixture.Requests.Count -ne 1 -or $fixture.Requests[0].Server -ne 'dc3.example.invalid' -or $single.Sources.Count -ne 1) { throw 'Single-DC reader queried more than its configured server.' }
+    $rejected = $false
+    try { & $ToolPath -NameFragment 'PC-' -ConfigPath $configPath -PassThru -DomainController 'unconfigured.example.invalid' | Out-Null }
+    catch { $rejected = $true }
+    if (-not $rejected -or $fixture.Requests.Count -ne 1) { throw 'Unconfigured DC was queried.' }
+    'PASS: parallel AD reader targets one configured DC and rejects unknown servers.'
+    $fixture.Requests.Clear()
     $rejected = $false
     try { & $ToolPath -NameFragment 'P' -ConfigPath $configPath -PassThru | Out-Null }
     catch { $rejected = $_.Exception.Message -like '*almeno 2*' }
