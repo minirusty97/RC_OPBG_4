@@ -1,11 +1,12 @@
 ﻿#requires -version 5.1
 Set-StrictMode -Version 2.0
+. (Join-Path $PSScriptRoot 'LegacyMigration.ps1')
 
-function Read-ITSuiteManifest {
+function Read-AssistenteITManifest {
     [CmdletBinding()]
     param([Parameter(Mandatory=$true)][string]$InstallRoot)
     $root = [IO.Path]::GetFullPath($InstallRoot).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
-    $manifest = Get-Content -LiteralPath (Join-Path $root 'suite.json') -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json
+    $manifest = Get-Content -LiteralPath (Join-Path $root 'assistente-it.json') -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json
     if ($manifest.SchemaVersion -ne 1 -or $manifest.Version -notmatch '^\d+\.\d+\.\d+$' -or [string]::IsNullOrWhiteSpace($manifest.Product)) { throw 'Manifest della suite non valido.' }
     if (@($manifest.Modules).Count -eq 0) { throw 'Nessun modulo configurato nella suite.' }
     $ids = @{}
@@ -20,24 +21,25 @@ function Read-ITSuiteManifest {
     return $manifest
 }
 
-function Get-ITSuitePaths {
+function Get-AssistenteITPaths {
     [CmdletBinding()]
     param([string]$DataRoot)
     if ([string]::IsNullOrWhiteSpace($DataRoot)) {
         $local = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
         if ([string]::IsNullOrWhiteSpace($local)) { throw 'Cartella dati utente non disponibile.' }
-        $DataRoot = Join-Path (Join-Path $local 'OPBG') 'ITSuite'
+        $DataRoot = Join-Path $local 'AssistenteIT'
     }
     $data = [IO.Path]::GetFullPath($DataRoot)
     $config = Join-Path $data 'Config'
     return [pscustomobject]@{DataRoot=$data; ConfigDirectory=$config; ConfigPath=(Join-Path $config 'computer-explorer.config.local.json'); EnvPath=(Join-Path $config '.env')}
 }
 
-function Initialize-ITSuite {
+function Initialize-AssistenteIT {
     [CmdletBinding()]
     param([Parameter(Mandatory=$true)][string]$InstallRoot, [string]$DataRoot)
-    $null = Read-ITSuiteManifest $InstallRoot
-    $paths = Get-ITSuitePaths $DataRoot
+    $null = Read-AssistenteITManifest $InstallRoot
+    $paths = Get-AssistenteITPaths $DataRoot
+    if ([string]::IsNullOrWhiteSpace($DataRoot)) { Move-AssistenteITUserData -DataRoot $paths.DataRoot }
     [void][IO.Directory]::CreateDirectory($paths.ConfigDirectory)
     foreach ($item in @(
         @{Source='computer-explorer.config.example.json'; Target=$paths.ConfigPath},
@@ -50,7 +52,7 @@ function Initialize-ITSuite {
     return $paths
 }
 
-function Write-ITSuiteAtomicFile {
+function Write-AssistenteITAtomicFile {
     param([string]$Path, [string]$Text)
     $temporary = $Path + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
     try {
@@ -61,7 +63,7 @@ function Write-ITSuiteAtomicFile {
     finally { if ([IO.File]::Exists($temporary)) { [IO.File]::Delete($temporary) } }
 }
 
-function ConvertTo-ITSuiteEnvValue {
+function ConvertTo-AssistenteITEnvValue {
     param([string]$Value)
     if ($Value.IndexOfAny([char[]]@([char]0, [char]10, [char]13)) -ge 0) { throw 'Il token deve occupare una sola riga.' }
     if (-not $Value.Contains("'")) { return "'" + $Value + "'" }
@@ -69,7 +71,7 @@ function ConvertTo-ITSuiteEnvValue {
     throw 'Il formato del token non è supportato.'
 }
 
-function Save-ITSuiteSettings {
+function Save-AssistenteITSettings {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory=$true)]$Paths,
@@ -86,8 +88,8 @@ function Save-ITSuiteSettings {
         if (-not [Uri]::TryCreate($uriText, [UriKind]::Absolute, [ref]$uri) -or $uri.Scheme -notin @('http','https') -or $uri.UserInfo -or $uri.Query -or $uri.Fragment) { throw 'URL API GLPI non valido. Esempio: https://server/glpi/apirest.php' }
     }
     $tokens = @{}
-    if (-not [string]::IsNullOrWhiteSpace($UserToken)) { $tokens.GLPI_USER_TOKEN = ConvertTo-ITSuiteEnvValue $UserToken.Trim() }
-    if (-not [string]::IsNullOrWhiteSpace($AppToken)) { $tokens.GLPI_APP_TOKEN = ConvertTo-ITSuiteEnvValue $AppToken.Trim() }
+    if (-not [string]::IsNullOrWhiteSpace($UserToken)) { $tokens.GLPI_USER_TOKEN = ConvertTo-AssistenteITEnvValue $UserToken.Trim() }
+    if (-not [string]::IsNullOrWhiteSpace($AppToken)) { $tokens.GLPI_APP_TOKEN = ConvertTo-AssistenteITEnvValue $AppToken.Trim() }
     $configuration = Get-Content -LiteralPath $Paths.ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
     $configuration.DomainControllers = $controllers
     $configuration.Glpi.Enabled = $GlpiEnabled; $configuration.Glpi.BaseUri = $uriText; $configuration.Glpi.UseAppToken = $UseAppToken
@@ -109,11 +111,11 @@ function Save-ITSuiteSettings {
         $envText = ($lines -join [Environment]::NewLine) + [Environment]::NewLine
     }
     # Validate everything before replacing either user-owned file.
-    if ($null -ne $envText) { Write-ITSuiteAtomicFile $Paths.EnvPath $envText }
-    Write-ITSuiteAtomicFile $Paths.ConfigPath (($configuration | ConvertTo-Json -Depth 20) + [Environment]::NewLine)
+    if ($null -ne $envText) { Write-AssistenteITAtomicFile $Paths.EnvPath $envText }
+    Write-AssistenteITAtomicFile $Paths.ConfigPath (($configuration | ConvertTo-Json -Depth 20) + [Environment]::NewLine)
 }
 
-function Enable-ITSuiteDependencies {
+function Enable-AssistenteITDependencies {
     param([Parameter(Mandatory=$true)][string]$InstallRoot)
     $dependencies = Join-Path $InstallRoot 'Dependencies'
     if (Test-Path -LiteralPath $dependencies -PathType Container) {
@@ -122,7 +124,7 @@ function Enable-ITSuiteDependencies {
     }
 }
 
-function Get-ITSuitePrerequisites {
+function Get-AssistenteITPrerequisites {
     [CmdletBinding()]
     param()
     [pscustomobject]@{
@@ -131,18 +133,18 @@ function Get-ITSuitePrerequisites {
     }
 }
 
-function Open-ITSuiteActivity {
+function Open-AssistenteITActivity {
     # All suite processes keep a handle open. Setup/uninstall refuses to run
     # while any handle exists; no running search or removal is killed.
-    return New-Object Threading.EventWaitHandle($false, [Threading.EventResetMode]::ManualReset, 'Local\OPBGITSuite.Running')
+    return New-Object Threading.EventWaitHandle($false, [Threading.EventResetMode]::ManualReset, 'Local\AssistenteIT.Running')
 }
 
-function Get-ITSuiteModuleStartInfo {
+function Get-AssistenteITModuleStartInfo {
     [CmdletBinding()]
     param([Parameter(Mandatory=$true)][string]$InstallRoot, [Parameter(Mandatory=$true)][string]$ModuleId, [Parameter(Mandatory=$true)]$Paths)
-    $manifest = Read-ITSuiteManifest $InstallRoot
+    $manifest = Read-AssistenteITManifest $InstallRoot
     if (@($manifest.Modules | Where-Object { $_.Id -eq $ModuleId }).Count -ne 1) { throw 'Modulo non disponibile.' }
-    $runner = Join-Path $InstallRoot 'Suite/Invoke-SuiteModule.ps1'
+    $runner = Join-Path $InstallRoot 'AssistenteIT/Invoke-Module.ps1'
     $info = New-Object Diagnostics.ProcessStartInfo
     $info.FileName = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'WindowsPowerShell/v1.0/powershell.exe'
     $info.Arguments = '-NoLogo -NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}" -ModuleId "{1}" -ConfigPath "{2}" -EnvPath "{3}"' -f $runner, $ModuleId, $Paths.ConfigPath, $Paths.EnvPath
@@ -151,4 +153,4 @@ function Get-ITSuiteModuleStartInfo {
     return $info
 }
 
-Export-ModuleMember -Function Read-ITSuiteManifest, Get-ITSuitePaths, Initialize-ITSuite, Save-ITSuiteSettings, Enable-ITSuiteDependencies, Get-ITSuitePrerequisites, Open-ITSuiteActivity, Get-ITSuiteModuleStartInfo
+Export-ModuleMember -Function Read-AssistenteITManifest, Get-AssistenteITPaths, Initialize-AssistenteIT, Save-AssistenteITSettings, Enable-AssistenteITDependencies, Get-AssistenteITPrerequisites, Open-AssistenteITActivity, Get-AssistenteITModuleStartInfo, Move-AssistenteITUserData

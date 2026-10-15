@@ -1,7 +1,7 @@
 ﻿#requires -version 5.1
 [CmdletBinding()]
 param(
-    [string]$OutputDirectory = (Join-Path (Split-Path $PSScriptRoot -Parent) 'output/suite'),
+    [string]$OutputDirectory = (Join-Path (Split-Path $PSScriptRoot -Parent) 'output/assistente-it'),
     [string]$Version,
     [string]$MakeNsisPath = (Join-Path ${env:ProgramFiles(x86)} 'NSIS/makensis.exe')
 )
@@ -9,8 +9,8 @@ $ErrorActionPreference='Stop'
 Set-StrictMode -Version 2.0
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -or -not [Environment]::Is64BitProcess) { throw 'La build richiede Windows PowerShell a 64 bit.' }
 $root = Split-Path $PSScriptRoot -Parent
-Import-Module (Join-Path $root 'Suite/Suite.Core.psm1') -ErrorAction Stop
-$manifest = Read-ITSuiteManifest $root
+Import-Module (Join-Path $root 'AssistenteIT/AssistenteIT.Core.psm1') -ErrorAction Stop
+$manifest = Read-AssistenteITManifest $root
 if (-not $Version) { $Version=$manifest.Version }
 if ($Version -notmatch '^\d+\.\d+\.\d+$' -or @($Version.Split('.') | Where-Object { [int]$_ -gt 65535 }).Count -gt 0) { throw 'Versione non valida. Usare major.minor.patch.' }
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
@@ -36,10 +36,11 @@ try {
     [void][IO.Directory]::CreateDirectory($app)
     # Explicit runtime allowlist: never copy the checkout recursively.
     $files = @(
-        'Start-ITSuite.ps1', 'suite.json', 'Suite/Suite.Core.psm1', 'Suite/Invoke-SuiteModule.ps1',
+        'Start-AssistenteIT.ps1', 'assistente-it.json', 'AssistenteIT/AssistenteIT.Core.psm1', 'AssistenteIT/Invoke-Module.ps1',
+        'AssistenteIT/LegacyMigration.ps1', 'AssistenteIT/Import-UserData.ps1',
         'Start-ComputerExplorer.ps1', 'ComputerExplorer.Core.psm1', 'ComputerExplorer.Parallel.psm1', 'ComputerExplorer.Removal.psm1',
         'GLPI.Inventory.psm1', 'Test-AdLookup.ps1', 'computer-explorer.config.example.json', '.env.example',
-        'docs/Installazione-Suite.md', 'docs/Third-Party-Notices.txt'
+        'docs/Installazione-AssistenteIT.md', 'docs/Third-Party-Notices.txt'
     )
     foreach ($file in $files) {
         $target = Join-Path $app $file
@@ -47,11 +48,11 @@ try {
         Copy-Item -LiteralPath (Join-Path $root $file) -Destination $target -ErrorAction Stop
     }
     $manifest.Version=$Version
-    [IO.File]::WriteAllText((Join-Path $app 'suite.json'), ($manifest | ConvertTo-Json -Depth 10), (New-Object Text.UTF8Encoding($false)))
+    [IO.File]::WriteAllText((Join-Path $app 'assistente-it.json'), ($manifest | ConvertTo-Json -Depth 10), (New-Object Text.UTF8Encoding($false)))
     $targetGraph = Join-Path (Join-Path (Join-Path $app 'Dependencies') 'Microsoft.Graph.Authentication') $manifest.GraphVersion
     [void][IO.Directory]::CreateDirectory((Split-Path $targetGraph -Parent))
     Copy-Item -LiteralPath $graph -Destination $targetGraph -Recurse -ErrorAction Stop
-    $null = Read-ITSuiteManifest $app
+    $null = Read-AssistenteITManifest $app
     if (Test-Path -LiteralPath (Join-Path $app '.env')) { throw 'Credenziali presenti nel pacchetto.' }
     if (Test-Path -LiteralPath (Join-Path $app 'computer-explorer.config.local.json')) { throw 'Configurazione personale presente nel pacchetto.' }
     $commit = $env:GITHUB_SHA
