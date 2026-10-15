@@ -30,6 +30,7 @@ function Get-UiSetting {
 function Read-GlpiCredentials {
     param([bool]$UseAppToken)
     $dialog = New-Object Windows.Forms.Form
+    $dialog.Icon = $form.Icon
     $dialog.Text = 'Accesso GLPI'; $dialog.Size = New-Object Drawing.Size(490, 240)
     $dialog.StartPosition = 'CenterParent'; $dialog.FormBorderStyle = 'FixedDialog'
     $dialog.MaximizeBox = $false; $dialog.MinimizeBox = $false
@@ -86,6 +87,7 @@ function Update-ExplorerCounters {
 function Show-RemovalSources {
     param([string[]]$Names)
     $dialog = New-Object Windows.Forms.Form
+    $dialog.Icon = $form.Icon
     $dialog.Text = 'Elimina computer - origini'; $dialog.Size = New-Object Drawing.Size(640, 430)
     $dialog.MinimumSize = New-Object Drawing.Size(520, 350); $dialog.StartPosition = 'CenterParent'
     $panel = New-Object Windows.Forms.TableLayoutPanel
@@ -128,6 +130,7 @@ function Show-RemovalSources {
 function Show-RemovalPreview {
     param($Plan)
     $dialog = New-Object Windows.Forms.Form
+    $dialog.Icon = $form.Icon
     $dialog.Text = 'Conferma eliminazione - oggetti verificati'; $dialog.Size = New-Object Drawing.Size(1000, 680)
     $dialog.MinimumSize = New-Object Drawing.Size(750, 450); $dialog.StartPosition = 'CenterParent'
     $panel = New-Object Windows.Forms.TableLayoutPanel
@@ -296,6 +299,8 @@ function Show-ExplorerSnapshot {
 }
 
 $form = New-Object Windows.Forms.Form
+$applicationIcon = New-Object Drawing.Icon((Join-Path $PSScriptRoot 'assets/AssistenteIT.ico'))
+$form.Icon = $applicationIcon
 $form.Text = 'Computer Explorer - AD / Entra ID / Intune / GLPI'
 $form.Size = New-Object Drawing.Size(1440, 850)
 $form.MinimumSize = New-Object Drawing.Size(1000, 640)
@@ -563,4 +568,5 @@ finally {
         if ($null -ne $script:GlpiCredentials.App) { $script:GlpiCredentials.App.Dispose() }
     }
     $form.Dispose()
+    $applicationIcon.Dispose()
 }

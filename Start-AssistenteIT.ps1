@@ -17,6 +17,7 @@ $prerequisites = Get-AssistenteITPrerequisites
 function Show-AssistenteITSettings {
     $settings = Get-Content -LiteralPath $paths.ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
     $dialog = New-Object Windows.Forms.Form
+    $dialog.Icon = $form.Icon
     $dialog.Text = 'Impostazioni - ' + $manifest.Product; $dialog.ClientSize = New-Object Drawing.Size(630, 520)
     $dialog.StartPosition = 'CenterParent'; $dialog.FormBorderStyle='FixedDialog'; $dialog.MaximizeBox=$false; $dialog.MinimizeBox=$false
     $dialog.Font = $form.Font
@@ -50,6 +51,8 @@ function Show-AssistenteITSettings {
 }
 
 $form = New-Object Windows.Forms.Form
+$applicationIcon = New-Object Drawing.Icon((Join-Path $PSScriptRoot 'assets/AssistenteIT.ico'))
+$form.Icon = $applicationIcon
 $form.Text = '{0} - {1}' -f $manifest.Product, $manifest.Version
 $form.Size = New-Object Drawing.Size(790, 550); $form.MinimumSize=New-Object Drawing.Size(660, 440)
 $form.StartPosition='CenterScreen'; $form.Font=New-Object Drawing.Font('Segoe UI', 10)
@@ -98,4 +101,4 @@ try {
     }
     else { [void]$form.ShowDialog() }
 }
-finally { $form.Dispose(); $activity.Dispose() }
+finally { $form.Dispose(); $applicationIcon.Dispose(); $activity.Dispose() }

@@ -40,7 +40,7 @@ try {
         'AssistenteIT/LegacyMigration.ps1', 'AssistenteIT/Import-UserData.ps1',
         'Start-ComputerExplorer.ps1', 'ComputerExplorer.Core.psm1', 'ComputerExplorer.Parallel.psm1', 'ComputerExplorer.Removal.psm1',
         'GLPI.Inventory.psm1', 'Test-AdLookup.ps1', 'computer-explorer.config.example.json', '.env.example',
-        'docs/Installazione-AssistenteIT.md', 'docs/Third-Party-Notices.txt'
+        'docs/Installazione-AssistenteIT.md', 'docs/Third-Party-Notices.txt', 'assets/AssistenteIT.ico'
     )
     foreach ($file in $files) {
         $target = Join-Path $app $file
@@ -61,7 +61,7 @@ try {
     $launcherSource = Join-Path $stage 'Launcher.cs'
     [IO.File]::WriteAllText($launcherSource, ([IO.File]::ReadAllText((Join-Path $PSScriptRoot 'Launcher.cs')).Replace('__VERSION__',$Version)), (New-Object Text.UTF8Encoding($true)))
     $compiler = Join-Path ([Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()) 'csc.exe'
-    & $compiler /nologo /target:winexe /platform:x64 /reference:System.Windows.Forms.dll (('/out:' + (Join-Path $stage 'AssistenteIT.exe'))) $launcherSource | ForEach-Object { Write-Host $_ }
+    & $compiler /nologo /target:winexe /platform:x64 /reference:System.Windows.Forms.dll (('/win32icon:' + (Join-Path $root 'assets/AssistenteIT.ico'))) (('/out:' + (Join-Path $stage 'AssistenteIT.exe'))) $launcherSource | ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -ne 0) { throw 'Compilazione del launcher non riuscita.' }
     Remove-Item -LiteralPath $launcherSource -Force
     $setup = Join-Path $OutputDirectory ('Assistente-IT-Setup-' + $Version + '.exe')

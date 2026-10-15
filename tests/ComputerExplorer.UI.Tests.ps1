@@ -77,6 +77,7 @@ finally {
     if ($null -ne $script:Pipeline) { $script:Pipeline.Stop(); $script:Pipeline.Dispose() }
     $script:Worker.Close(); $script:Worker.Dispose()
     $form.Dispose()
+    $applicationIcon.Dispose()
 }
 '@
 try {
