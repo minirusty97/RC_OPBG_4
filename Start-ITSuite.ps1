@@ -17,7 +17,7 @@ $activity = Open-ITSuiteActivity
 function Show-ITSuiteSettings {
     $settings = Get-Content -LiteralPath $paths.ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
     $dialog = New-Object Windows.Forms.Form
-    $dialog.Text = 'Impostazioni - OPBG IT Suite'; $dialog.ClientSize = New-Object Drawing.Size(630, 520)
+    $dialog.Text = 'Impostazioni - ' + $manifest.Product; $dialog.ClientSize = New-Object Drawing.Size(630, 520)
     $dialog.StartPosition = 'CenterParent'; $dialog.FormBorderStyle='FixedDialog'; $dialog.MaximizeBox=$false; $dialog.MinimizeBox=$false
     $dialog.Font = $form.Font
     $dcLabel = New-Object Windows.Forms.Label; $dcLabel.Text='Domain Controller, uno per riga'; $dcLabel.SetBounds(18, 16, 580, 24)
@@ -60,7 +60,7 @@ $layout.Dock='Fill'; $layout.Padding=New-Object Windows.Forms.Padding(20); $layo
 [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 48)))
 [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 58)))
 $heading = New-Object Windows.Forms.Label; $heading.Dock='Fill'
-$heading.Text = "OPBG IT Suite`r`nScegli il modulo da aprire. Configura GLPI e i DC da Impostazioni."
+$heading.Text = $manifest.Product + "`r`nScegli il modulo da aprire. Configura GLPI e i DC da Impostazioni."
 $heading.Font = New-Object Drawing.Font('Segoe UI', 12)
 $modulePanel = New-Object Windows.Forms.FlowLayoutPanel; $modulePanel.Dock='Fill'; $modulePanel.AutoScroll=$true; $modulePanel.FlowDirection='TopDown'; $modulePanel.WrapContents=$false
 foreach ($module in $manifest.Modules) {
@@ -94,7 +94,7 @@ $form.Controls.Add($layout)
 try {
     if ($SmokeTestOutput) {
         $form.CreateControl(); $form.PerformLayout()
-        [pscustomobject]@{Product=$manifest.Product;Version=$manifest.Version;ModuleCount=$modulePanel.Controls.Count;GraphAvailable=$prerequisites.GraphAvailable;DataRoot=$paths.DataRoot;ConfigPath=$paths.ConfigPath;EnvPath=$paths.EnvPath} | ConvertTo-Json | Set-Content -LiteralPath $SmokeTestOutput -Encoding UTF8
+        [pscustomobject]@{Product=$manifest.Product;Version=$manifest.Version;WindowTitle=$form.Text;ModuleCount=$modulePanel.Controls.Count;GraphAvailable=$prerequisites.GraphAvailable;DataRoot=$paths.DataRoot;ConfigPath=$paths.ConfigPath;EnvPath=$paths.EnvPath} | ConvertTo-Json | Set-Content -LiteralPath $SmokeTestOutput -Encoding UTF8
     }
     else { [void]$form.ShowDialog() }
 }

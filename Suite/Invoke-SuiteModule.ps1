@@ -17,7 +17,7 @@ try {
     & (Join-Path $root $module[0].EntryPoint) @arguments
 }
 catch {
-    [void][Windows.Forms.MessageBox]::Show($_.Exception.Message, 'OPBG IT Suite', 'OK', 'Error')
+    [void][Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Assistente IT', 'OK', 'Error')
     exit 1
 }
 finally { if ($null -ne $activity) { $activity.Dispose() } }
