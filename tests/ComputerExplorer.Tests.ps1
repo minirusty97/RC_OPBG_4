@@ -26,11 +26,11 @@ try {
             $id3 = '33333333-3333-4333-8333-333333333333'
             if ($Uri -like '*managedDevices*') {
                 return [pscustomobject]@{value=@(
-                    [pscustomobject]@{id=$id1;deviceName='PA-PORT-001';operatingSystem='Windows';azureADDeviceId=$id3;serialNumber='SERIAL-1'},
+                    [pscustomobject]@{id=$id1;deviceName='PA-PORT-001';operatingSystem='Windows';azureADDeviceId=$id3;serialNumber='SERIAL-1';lastSyncDateTime='2026-10-15T07:30:00Z'},
                     [pscustomobject]@{id=$id2;deviceName='PORT-ANDROID';operatingSystem='Android'}
                 )}
             }
-            $record = [pscustomobject]@{id=$id1;displayName='PA-PORT-001';deviceId=$id3;operatingSystem='Windows'}
+            $record = [pscustomobject]@{id=$id1;displayName='PA-PORT-001';deviceId=$id3;operatingSystem='Windows';approximateLastSignInDateTime='2026-10-14T12:00:00Z'}
             if ($script:Fixture.Mode -eq 'Empty') { return [pscustomobject]@{value=@()} }
             if ($script:Fixture.Mode -eq 'Malformed') { return [pscustomobject]@{value=$record} }
             if ($script:Fixture.Mode -eq 'InvalidId') { $record.id='invalid'; return [pscustomobject]@{value=@($record)} }
@@ -80,6 +80,9 @@ try {
         if ($windows.Records.Count -ne 1 -or $windows.Records[0].ManagedDeviceId -ne '11111111-1111-4111-8111-111111111111' -or
             $windows.Records[0].AzureADDeviceId -ne '33333333-3333-4333-8333-333333333333') { throw 'Intune platform or ID mapping incorrect.' }
         'PASS: Intune Windows filter and distinct managedDeviceId / DeviceId.'
+        if (@($first.Records | Where-Object { $_.Name -eq 'PA-PORT-001' })[0].LastSignIn -ne '2026-10-14T12:00:00Z' -or
+            $windows.Records[0].LastSync -ne '2026-10-15T07:30:00Z') { throw 'Cloud activity / check-in timestamps lost.' }
+        'PASS: Entra activity and Intune check-in fields retained.'
 
         foreach ($mode in @('Failure','ForeignHost','ForeignResource','Loop','Malformed','InvalidId','Conflict')) {
             $script:Fixture.Mode=$mode
@@ -127,6 +130,31 @@ try {
             throw 'Unified presence, duplicate records, aliases or ambiguity incorrect.'
         }
         'PASS: four-source union, exact case-insensitive names, duplicates, raw states and serial conflict.'
+        foreach ($record in $sources.AD.Records) { $record | Add-Member NoteProperty LastModified ([datetime]'2026-10-13T18:00:00') }
+        $sources.AD.Records[4].LastModified=[datetime]'2026-10-15T09:00:00'
+        $sources.Entra.Records[0] | Add-Member NoteProperty LastSignIn '2026-10-14T23:30:00+02:00'
+        $sources.Entra.Records[1] | Add-Member NoteProperty LastSignIn '2026-10-14T22:00:00Z'
+        $sources.Intune.Records[0] | Add-Member NoteProperty LastSync '2026-10-15T07:30:00Z'
+        $sources.GLPI.Records[0] | Add-Member NoteProperty LastInventory '2026-09-30 08:00:00'
+        $sources.GLPI.Records[1] | Add-Member NoteProperty LastInventory '2026-10-01 09:10:00'
+        $dated=@(Merge-ExplorerResults $sources $controllers | Where-Object { $_.Name -eq 'PORT-001' })[0]
+        if ($dated.ADLastModified -ne [datetime]'2026-10-15T09:00:00' -or
+            $dated.EntraLastActivity -ne ([datetimeoffset]'2026-10-14T22:00:00Z').LocalDateTime -or
+            $dated.IntuneLastCheckIn -ne ([datetimeoffset]'2026-10-15T07:30:00Z').LocalDateTime -or
+            $dated.GlpiLastInventory -ne [datetime]'2026-10-01T09:10:00' -or $dated.EntraLastActivity -isnot [datetime]) { throw 'Latest per-source dates or timezone conversion incorrect.' }
+        if ($dated.ADRecords[0].LastModified -eq $dated.ADRecords[4].LastModified -or $dated.GlpiRecords[0].LastInventory -eq $dated.GlpiRecords[1].LastInventory) { throw 'Individual record dates replaced by aggregated dates.' }
+        'PASS: latest date per source compares timestamps and preserves individual dates.'
+        $unavailable=@(Merge-ExplorerResults $sources $controllers | Where-Object { $_.Name -eq 'CLOUD-ONLY' })[0]
+        if ($null -ne $unavailable.ADLastModified -or $null -ne $unavailable.EntraLastActivity -or $null -ne $unavailable.IntuneLastCheckIn -or $null -ne $unavailable.GlpiLastInventory) { throw 'Date fabricated for an empty or undated source.' }
+        foreach ($value in @($null, '', 'invalid', '0000-00-00 00:00:00', '0001-01-01T00:00:00Z', [datetime]::MinValue)) {
+            if ($null -ne (ConvertTo-ExplorerDate $value) -or (Format-ExplorerDate $value) -ne '—') { throw 'Missing or sentinel date rendered as a real date.' }
+        }
+        'PASS: missing, invalid and sentinel dates remain unavailable.'
+        if ((Format-ExplorerDate '2026-10-15 09:05:00') -ne '15/10/2026 09:05') { throw 'GLPI wall time or Italian display format incorrect.' }
+        $typed=[datetimeoffset]'2026-10-14T22:00:00Z'
+        if ((ConvertTo-ExplorerDate $typed) -ne $typed.LocalDateTime -or
+            (ConvertTo-ExplorerDate $typed.UtcDateTime) -ne $typed.LocalDateTime) { throw 'Typed API dates not converted consistently.' }
+        'PASS: Italian date format, GLPI server time and typed UTC/offset dates.'
         $sources.AD.Records=@($sources.AD.Records | Select-Object -First 2)
         $partial=@(Merge-ExplorerResults $sources $controllers | Where-Object { $_.Name -eq 'PORT-001' })[0]
         if ($partial.AD -ne '2/5' -or $partial.ADColor -ne 'Giallo') { throw 'Partial AD presence incorrect.' }

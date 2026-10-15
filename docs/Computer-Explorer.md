@@ -1,6 +1,6 @@
 # Computer Explorer — console di ricerca
 
-Data: 13 ottobre 2026. Branch: `feature/computer-explorer`.
+Aggiornamento: 15 ottobre 2026. Branch: `feature/computer-explorer`.
 
 ## Fase attuale
 
@@ -25,7 +25,9 @@ La console svolge consultazione. La rimozione resta nel tool esistente `Remove-C
 | Intune | Una registrazione Windows | Più registrazioni Windows | Zero, lettura completata | Errore, esclusa o in attesa |
 | GLPI | Un Computer visibile | Più Computer dello stesso nome | Zero nel contesto consultato, lettura completata | Errore, esclusa o in attesa |
 
-Le altre colonne riportano DC verificati, stato GLPI, percorso AD e segnalazioni. Stato GLPI conserva le etichette reali: la presenza verde può coincidere con uno stato Dismesso. Conteggi e testo affiancano sempre il colore.
+Accanto a ciascuna fonte compare la sua data: ultima modifica AD (`Modified`), attività Entra (`approximateLastSignInDateTime`), check-in Intune (`lastSyncDateTime`) e ultimo inventario GLPI (`last_inventory_update`). La modifica della scheda GLPI (`date_mod`) resta un campo separato nel dettaglio. Le date sono valori DateTime ordinabili, formattati `dd/MM/yyyy HH:mm`; per più oggetti/DC si usa il massimo delle date valide mantenendo tutti i valori individuali nel dettaglio. Date mancanti, non valide e segnaposto compaiono come —. Graph viene convertito nell’ora locale del PC; GLPI senza offset conserva l’orario del server. `whenChanged` non è replicato: il massimo AD rappresenta la modifica più recente osservata sui DC letti.
+
+Il numero dei DC verificati è nel dettaglio e nel tooltip della cella AD, senza una colonna dedicata. Le altre colonne riportano stato GLPI, percorso AD e segnalazioni. Stato GLPI conserva le etichette reali: la presenza verde può coincidere con uno stato Dismesso. Conteggi e testo affiancano sempre il colore.
 
 Il percorso viene da CanonicalName; il DN originale rimane nel dettaglio. Un DC in errore non viene interpretato come assente. Le risposte valide degli altri DC vengono conservate con colore grigio per la verifica complessiva incompleta.
 
@@ -52,16 +54,16 @@ GLPI usa il contesto predefinito dell'utente API. La selezione esplicita di prof
 
 ## Prove effettuate e limiti
 
-- Parser PowerShell e 53 casi automatici in PowerShell 7.4.19: 24 cloud/aggregazione/worker, 11 AD, 18 GLPI. Dati sintetici, senza connessioni al tenant o ai DC aziendali. Inclusi runspace, coda concorrente, annullamento e riuso del worker.
+- Parser PowerShell e 58 casi automatici in PowerShell 7.4.19: 28 cloud/aggregazione/date/worker, 12 AD, 18 GLPI. La suite cloud/date passa anche con fuso Europe/Rome. Dati sintetici, senza connessioni al tenant o ai DC aziendali. Inclusi runspace, coda concorrente, annullamento e riuso del worker.
 - GLPI aziendale, 13 ottobre 2026: 528 record con ID validi e distinti, 527 nomi distinti e cinque stati. Il nome duplicato ha due seriali differenti. I risultati della prova appartengono all'entità 0; non descrivono l'intero server.
 - AD aziendale, stessa data: nel campione di 14 righe inviato dall'utente, 5/5 presenti e verificati, percorsi valorizzati e nessun GUID discordante. Le righe non condivise non sono state esaminate.
-- La nuova finestra richiede la prova su Windows PowerShell 5.1. Login Graph e letture reali Entra/Intune devono essere verificati sul PC aziendale. Il parser e le simulazioni non sostituiscono queste prove.
+- Il 15 ottobre 2026 l’utente ha confermato il funzionamento della prima finestra. Le nuove colonne sono verificate con risposte simulate; i nuovi valori reali e la loro visualizzazione vanno verificati sul PC aziendale.
 
 Comandi di avvio e test: vedere [README](../README.md).
 
 ## Passi successivi
 
-1. Verificare apertura della finestra e login Graph sul PC aziendale; provare un frammento contenuto in AD, Entra, Intune e GLPI.
+1. Verificare sul PC aziendale le quattro date aggiunte accanto alle presenze.
 2. Rifinire tempi, colonne e regole di associazione usando i casi reali e concordare profili/entità GLPI.
 3. Collegare le azioni di rimozione agli oggetti selezionati, rileggendo gli ID e mostrando un riepilogo prima della conferma.
 
@@ -74,3 +76,8 @@ Ordine previsto per la rimozione: Intune, AD, Entra. GLPI rimane una fonte di co
 - [Graph: list managedDevices](https://learn.microsoft.com/en-us/graph/api/intune-devices-manageddevice-list?view=graph-rest-1.0)
 - [Autenticazione Graph PowerShell](https://learn.microsoft.com/en-us/powershell/microsoftgraph/authentication-commands?view=graph-powershell-1.0)
 - [AD: Get-ADComputer](https://learn.microsoft.com/en-us/powershell/module/activedirectory/get-adcomputer?view=windowsserver2025-ps)
+
+Campi data verificati sulle fonti ufficiali:
+
+- [GLPI 10.0.11 Computer: last_inventory_update](https://github.com/glpi-project/glpi/blob/10.0.11/src/Computer.php)
+- [AD whenChanged](https://learn.microsoft.com/en-us/windows/win32/adschema/a-whenchanged)

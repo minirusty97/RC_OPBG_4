@@ -66,7 +66,7 @@ foreach ($dc in $controllers) {
         $query = @{
             Server = $dc
             LDAPFilter = $ldapFilter
-            Properties = @('CanonicalName', 'DNSHostName', 'SamAccountName', 'DistinguishedName', 'ObjectGUID', 'Enabled')
+            Properties = @('CanonicalName', 'DNSHostName', 'SamAccountName', 'DistinguishedName', 'ObjectGUID', 'Enabled', 'Modified')
             ErrorAction = 'Stop'
         }
         $found = @(Get-ADComputer @query)
@@ -90,6 +90,7 @@ foreach ($dc in $controllers) {
                 DNSHostName = [string]$computer.DNSHostName
                 SamAccountName = [string]$computer.SamAccountName
                 Enabled = $computer.Enabled
+                LastModified = $computer.Modified
             })
         }
         foreach ($computer in $dcComputers) { [void]$computers.Add($computer) }

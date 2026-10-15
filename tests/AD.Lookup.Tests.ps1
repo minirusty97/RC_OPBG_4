@@ -26,7 +26,7 @@ function Get-ADComputer {
     if ($fixture.Mode -eq 'Path' -and $Server -eq 'dc5.example.invalid') { $canonical = 'example.invalid/Other/PC-TEST' }
     if ($fixture.Mode -eq 'EscapedPath') { $name = 'PC/A'; $canonical = 'example.invalid/Lab/PC\/A' }
     [pscustomobject]@{
-        Name=$name;CanonicalName=$canonical;ObjectGUID=[guid]$guid;Enabled=$true
+        Name=$name;CanonicalName=$canonical;ObjectGUID=[guid]$guid;Enabled=$true;Modified=[datetime]'2026-10-15T09:30:00'
         DistinguishedName='CN=PC-TEST,OU=Lab\, A,DC=example,DC=invalid'
         DNSHostName='PC-TEST.example.invalid';SamAccountName='PC-TEST$'
     }
@@ -69,6 +69,9 @@ try {
         }
         "PASS: AD simulated / $mode."
     }
+    if (@($result.Computers | Where-Object { $_.LastModified -ne [datetime]'2026-10-15T09:30:00' }).Count -gt 0 -or
+        @($fixture.Requests | Where-Object { $_.Properties -notcontains 'Modified' }).Count -gt 0) { throw 'AD modification date not requested or retained.' }
+    'PASS: AD Modified requested and retained for each DC.'
     $fixture.Mode = 'Full'
     $fixture.Requests.Clear()
     $null = & $ToolPath -NameFragment 'PC*(X)\Z' -ConfigPath $configPath -PassThru

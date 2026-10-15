@@ -181,6 +181,52 @@ function Get-ExplorerPresence {
     [pscustomobject]@{ Text = [string]$Count; Color = $color }
 }
 
+function ConvertTo-ExplorerDate {
+    param($Value)
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [datetimeoffset]) {
+        if ($Value.Year -le 1601) { return $null }
+        return $Value.LocalDateTime
+    }
+    if ($Value -is [datetime]) {
+        if ($Value.Year -le 1601) { return $null }
+        if ($Value.Kind -eq [DateTimeKind]::Utc) { return $Value.ToLocalTime() }
+        return $Value
+    }
+    $text = ([string]$Value).Trim()
+    if ($text.Length -eq 0) { return $null }
+    $culture = [Globalization.CultureInfo]::InvariantCulture
+    $styles = [Globalization.DateTimeStyles]::None
+    if ($text -match '(?i)(Z|[+-][0-9]{2}:[0-9]{2})$') {
+        $date = [datetimeoffset]::MinValue
+        if ([datetimeoffset]::TryParse($text, $culture, $styles, [ref]$date) -and $date.Year -gt 1601) { return $date.LocalDateTime }
+    }
+    else {
+        # GLPI restituisce normalmente l'ora del server senza offset: conservarla.
+        $date = [datetime]::MinValue
+        $formats = [string[]]@('yyyy-MM-dd HH:mm:ss', 'yyyy-MM-dd HH:mm:ss.FFFFFFF', 'yyyy-MM-dd', 'yyyy-MM-ddTHH:mm:ss', 'yyyy-MM-ddTHH:mm:ss.FFFFFFF')
+        if ([datetime]::TryParseExact($text, $formats, $culture, $styles, [ref]$date) -and $date.Year -gt 1601) { return $date }
+    }
+    return $null
+}
+
+function Get-ExplorerLatestDate {
+    param([object[]]$Records, [string]$Property)
+    $latest = $null
+    foreach ($record in $Records) {
+        $date = ConvertTo-ExplorerDate (Get-ExplorerValue $record $Property)
+        if ($null -ne $date -and ($null -eq $latest -or $date -gt $latest)) { $latest = $date }
+    }
+    return $latest
+}
+
+function Format-ExplorerDate {
+    param($Value)
+    $date = ConvertTo-ExplorerDate $Value
+    if ($null -eq $date) { return '—' }
+    return $date.ToString('dd/MM/yyyy HH:mm')
+}
+
 function Merge-ExplorerResults {
     [CmdletBinding()]
     param([System.Collections.IDictionary]$Sources, [string[]]$DomainControllers)
@@ -234,6 +280,10 @@ function Merge-ExplorerResults {
             Name = $group.Name; AD = $adText; ADColor = $adColor; Verificati = ('{0}/{1}' -f $verified, $DomainControllers.Count)
             Entra = $entraPresence.Text; EntraColor = $entraPresence.Color; Intune = $intunePresence.Text; IntuneColor = $intunePresence.Color
             GLPI = $glpiPresence.Text; GLPIColor = $glpiPresence.Color
+            ADLastModified = Get-ExplorerLatestDate -Records @($group.AD) -Property 'LastModified'
+            EntraLastActivity = Get-ExplorerLatestDate -Records $entra -Property 'LastSignIn'
+            IntuneLastCheckIn = Get-ExplorerLatestDate -Records $intune -Property 'LastSync'
+            GlpiLastInventory = Get-ExplorerLatestDate -Records $glpi -Property 'LastInventory'
             StatoGLPI = (@($glpi | ForEach-Object { $_.State } | Sort-Object -Unique) -join ' | ')
             PercorsoAD = ($paths -join ' | '); Note = ($notes -join '; ')
             ADRecords = @($group.AD); EntraRecords = $entra; IntuneRecords = $intune; GlpiRecords = $glpi
@@ -326,4 +376,4 @@ function Invoke-ComputerExplorerSearch {
     Send-ExplorerUpdate $sources $controllers 'Ricerca completata.' $ProgressQueue -Complete
 }
 
-Export-ModuleMember -Function Read-ExplorerConfiguration, Invoke-ComputerExplorerSearch, Merge-ExplorerResults
+Export-ModuleMember -Function Read-ExplorerConfiguration, Invoke-ComputerExplorerSearch, Merge-ExplorerResults, Format-ExplorerDate

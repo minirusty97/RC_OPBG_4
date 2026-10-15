@@ -239,6 +239,7 @@ function Find-GlpiComputer {
                     EntityId = Get-GlpiValue $computer 'entities_id'
                     IsDeleted = Get-GlpiValue $computer 'is_deleted'
                     LastModified = Get-GlpiValue $computer 'date_mod'
+                    LastInventory = Get-GlpiValue $computer 'last_inventory_update'
                     Error = $null
                 }
             }

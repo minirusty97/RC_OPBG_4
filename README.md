@@ -6,7 +6,7 @@ Script PowerShell per cercare computer in Active Directory, Microsoft Entra ID, 
 
 `Start-ComputerExplorer.ps1` apre una finestra con ricerca per frammento, griglia colorata e dettaglio degli oggetti. Usa i cinque DC configurati e riunisce tutti i nomi trovati in AD, Entra, Intune Windows e GLPI. Un nome presente in una sola fonte compare comunque nella lista.
 
-Le colonne mostrano presenza AD, DC verificati, conteggi Entra/Intune/GLPI, stato GLPI, percorso AD e segnalazioni su GUID, percorsi, seriali o DeviceId discordanti. Il dettaglio conserva le singole registrazioni e i relativi ID. Nomi GLPI con suffissi fra parentesi restano distinti.
+Le colonne mostrano presenza AD, conteggi Entra/Intune/GLPI, stato GLPI, percorso AD e segnalazioni su GUID, percorsi, seriali o DeviceId discordanti. Accanto a ogni fonte compare la relativa data: modifica AD, attività Entra, check-in Intune e inventario GLPI. Il numero di DC verificati rimane nel dettaglio e nel suggerimento della cella AD. Il dettaglio conserva le singole registrazioni e i relativi ID. Nomi GLPI con suffissi fra parentesi restano distinti.
 
 | Colore | AD | Entra / Intune / GLPI |
 |---|---|---|
@@ -14,6 +14,17 @@ Le colonne mostrano presenza AD, DC verificati, conteggi Entra/Intune/GLPI, stat
 | Giallo | Presente su alcuni DC, tutti verificati | Più registrazioni dello stesso nome |
 | Rosso | Assente, tutti i DC verificati | Zero registrazioni, ricerca completata |
 | Grigio / ? | Verifica incompleta o fonte esclusa | Errore, fonte esclusa o lettura in attesa |
+
+Le date usano il formato `dd/MM/yyyy HH:mm` e si ordinano cronologicamente. Con più registrazioni viene mostrata la data valida più recente; il dettaglio conserva i dati di ogni oggetto e di ogni DC. Una data assente o non valida appare come **—**.
+
+| Colonna data | Campo letto |
+|---|---|
+| Modifica AD | `Modified` (alias di `whenChanged`), massimo fra i DC letti |
+| Attività Entra | `approximateLastSignInDateTime`, attività approssimativa |
+| Check-in Intune | `lastSyncDateTime`, ultima sincronizzazione riuscita |
+| Inventario GLPI | `last_inventory_update`, distinta dalla modifica della scheda `date_mod` |
+
+Le date Graph con offset vengono convertite nell'ora locale del PC. GLPI restituisce normalmente una data senza offset: viene conservato l'orario del server. La data AD è propria di ciascun DC e può differire fra le repliche. Queste colonne riportano gli eventi del dispositivo; la scheda **Stato fonti e orari** continua a riportare l'orario della lettura eseguita dalla console.
 
 La console svolge consultazione. Le azioni di rimozione rimangono nel file `Remove-Computer-FullTool.ps1`; il loro collegamento agli ID selezionati è la fase successiva.
 
@@ -45,7 +56,7 @@ La console accetta gli ambiti di lettura e quelli più ampi già utilizzati. Se 
 
 ### Verifiche eseguite
 
-Il parser PowerShell e 53 casi automatici sono passati in PowerShell 7.4.19: 24 per cloud, aggregazione e worker, 11 AD e 18 GLPI. I test usano dati sintetici e API simulate; includono paginazione, errori senza risultati parziali, cache, duplicati, conflitti e annullamento.
+Il parser PowerShell e 58 casi automatici sono passati in PowerShell 7.4.19: 28 per cloud, aggregazione, date e worker, 12 AD e 18 GLPI. La suite cloud/date è passata anche con fuso Europe/Rome. I test usano dati sintetici e API simulate; includono paginazione, errori senza risultati parziali, cache, duplicati, conflitti e annullamento.
 
 ```powershell
 .\tests\ComputerExplorer.Tests.ps1
@@ -53,7 +64,7 @@ Il parser PowerShell e 53 casi automatici sono passati in PowerShell 7.4.19: 24 
 .\tests\GLPI.Inventory.Tests.ps1
 ```
 
-AD e GLPI sono già stati provati separatamente nell'ambiente aziendale, come riportato sotto. Apertura della finestra su Windows PowerShell 5.1, login Graph e letture reali Entra/Intune devono essere verificati sul PC aziendale: non sono stati eseguiti dal nostro ambiente di sviluppo.
+AD e GLPI sono già stati provati separatamente nell'ambiente aziendale, come riportato sotto. Il 15 ottobre 2026 l'utente ha confermato il funzionamento della prima finestra. Le nuove colonne data sono state verificate con risposte simulate; la visualizzazione dei nuovi valori reali va verificata sul PC aziendale.
 
 ## Tool di rimozione esistente
 

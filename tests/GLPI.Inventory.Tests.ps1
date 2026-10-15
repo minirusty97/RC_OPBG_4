@@ -80,7 +80,7 @@ try {
                 }
                 '/Computer/([0-9]+)$' {
                     $id = [int]$Matches[1]
-                    return [pscustomobject]@{id=$id;name="PORT-$id";states_id=9;serial="TEST-$id";otherserial="INV-$id";entities_id=0;is_deleted=0;date_mod='2026-10-13'}
+                    return [pscustomobject]@{id=$id;name="PORT-$id";states_id=9;serial="TEST-$id";otherserial="INV-$id";entities_id=0;is_deleted=0;date_mod='2026-10-15 10:00:00';last_inventory_update='2026-10-14 08:20:00'}
                 }
                 '/State/9$' { return [pscustomobject]@{ id=9; name='Assegnato noleggio' } }
                 default { throw 'Unexpected mocked endpoint.' }
@@ -99,6 +99,7 @@ try {
             if ($rows.Count -ne $expected) { throw "Result count incorrect: $mode" }
             foreach ($row in $rows) {
                 if ($row.State -ne 'Assegnato noleggio' -or $row.GlpiId -le 0) { throw 'Invalid parsed inventory.' }
+                if ($row.LastInventory -ne '2026-10-14 08:20:00' -or $row.LastModified -ne '2026-10-15 10:00:00') { throw 'GLPI inventory date confused with asset modification date.' }
             }
             if (@($script:RequestPaths | Where-Object { $_ -like '*/killSession' }).Count -ne 1) { throw 'Session not closed.' }
             if ($expected -gt 0 -and @($script:RequestPaths | Where-Object { $_ -like '*/State/9' }).Count -ne 1) { throw 'State lookup not cached.' }

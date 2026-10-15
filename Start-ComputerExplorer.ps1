@@ -82,6 +82,7 @@ function Show-SelectedComputer {
     if ($computer.Note.Length -gt 0) { [void]$lines.Add('ATTENZIONE: ' + $computer.Note) }
     [void]$lines.Add(''); [void]$lines.Add('ACTIVE DIRECTORY')
     $adSource = @($script:Latest.Sources | Where-Object { $_.Name -eq 'AD' })[0]
+    [void]$lines.Add('DC verificati: ' + $computer.Verificati)
     if ($adSource.DcSources.Count -eq 0) { [void]$lines.Add($adSource.State + ' ' + $adSource.Error) }
     foreach ($dc in $adSource.DcSources) {
         $found = @($computer.ADRecords | Where-Object { $_.DomainController -eq $dc.DomainController })
@@ -92,6 +93,7 @@ function Show-SelectedComputer {
             [void]$lines.Add('  Percorso: ' + $record.ParentPath)
             [void]$lines.Add('  DN: ' + $record.DistinguishedName)
             [void]$lines.Add('  DNS: ' + $record.DNSHostName + ' | sAMAccountName: ' + $record.SamAccountName)
+            [void]$lines.Add('  Ultima modifica: ' + (Format-ExplorerDate $record.LastModified))
         }
     }
     foreach ($section in @(
@@ -104,6 +106,11 @@ function Show-SelectedComputer {
         if ($source.State -ne 'OK') { [void]$lines.Add($source.State + ' ' + $source.Error) }
         elseif ($section.Records.Count -eq 0) { [void]$lines.Add('Nessuna registrazione dello stesso nome nei risultati della ricerca.') }
         foreach ($record in $section.Records) {
+            switch ($section.Name) {
+                'Entra' { [void]$lines.Add('Ultima attività (approssimativa): ' + (Format-ExplorerDate $record.LastSignIn)) }
+                'Intune' { [void]$lines.Add('Ultimo check-in: ' + (Format-ExplorerDate $record.LastSync)) }
+                'GLPI' { [void]$lines.Add('Ultimo inventario: ' + (Format-ExplorerDate $record.LastInventory)) }
+            }
             [void]$lines.Add(($record | Format-List | Out-String -Width 240).Trim())
             [void]$lines.Add('')
         }
@@ -120,14 +127,16 @@ function Show-ExplorerSnapshot {
     try {
         $grid.Rows.Clear()
         foreach ($computer in $Snapshot.Rows) {
-            $index = $grid.Rows.Add([object[]]@($computer.Name, $computer.AD, $computer.Verificati, $computer.Entra, $computer.Intune,
-                $computer.GLPI, $computer.StatoGLPI, $computer.PercorsoAD, $computer.Note))
+            $index = $grid.Rows.Add([object[]]@($computer.Name, $computer.AD, $computer.ADLastModified,
+                $computer.Entra, $computer.EntraLastActivity, $computer.Intune, $computer.IntuneLastCheckIn,
+                $computer.GLPI, $computer.GlpiLastInventory, $computer.StatoGLPI, $computer.PercorsoAD, $computer.Note))
             $row = $grid.Rows[$index]; $row.Tag = $computer
             foreach ($name in @('AD', 'Entra', 'Intune', 'GLPI')) {
                 $color = $computer.PSObject.Properties[$name + 'Color'].Value
                 Set-CellPresence $row.Cells[$name] $color
                 $source = @($Snapshot.Sources | Where-Object { $_.Name -eq $name })[0]
                 $row.Cells[$name].ToolTipText = $source.State + ' ' + $source.Error
+                if ($name -eq 'AD') { $row.Cells[$name].ToolTipText += ' | DC verificati: ' + $computer.Verificati }
             }
         }
         $grid.ClearSelection()
@@ -191,14 +200,26 @@ $grid.Dock = 'Fill'; $grid.ReadOnly = $true; $grid.AllowUserToAddRows = $false; 
 $grid.SelectionMode = 'FullRowSelect'; $grid.MultiSelect = $false; $grid.RowHeadersVisible = $false
 $grid.AutoSizeRowsMode = 'None'; $grid.BackgroundColor = [Drawing.Color]::White
 foreach ($column in @(
-    @('Name', 'Nome computer', 190), @('AD', 'AD', 60), @('Verificati', 'DC verificati', 90), @('Entra', 'Entra ID', 70),
-    @('Intune', 'Intune', 65), @('GLPI', 'GLPI', 60), @('StatoGLPI', 'Stato GLPI', 195),
-    @('PercorsoAD', 'Percorso AD', 310), @('Note', 'Segnalazioni', 290)
+    @('Name', 'Nome computer', 180), @('AD', 'AD', 50), @('ADLastModified', 'Modifica AD', 135),
+    @('Entra', 'Entra ID', 60), @('EntraLastActivity', 'Attività Entra', 135),
+    @('Intune', 'Intune', 55), @('IntuneLastCheckIn', 'Check-in Intune', 135),
+    @('GLPI', 'GLPI', 50), @('GlpiLastInventory', 'Inventario GLPI', 135), @('StatoGLPI', 'Stato GLPI', 185),
+    @('PercorsoAD', 'Percorso AD', 290), @('Note', 'Segnalazioni', 290)
 )) {
     $control = New-Object Windows.Forms.DataGridViewTextBoxColumn
     $control.Name = $column[0]; $control.HeaderText = $column[1]; $control.Width = [int]$column[2]
-    $control.SortMode = 'Automatic'; [void]$grid.Columns.Add($control)
+    $control.SortMode = 'Automatic'
+    if ($column[0] -in @('ADLastModified', 'EntraLastActivity', 'IntuneLastCheckIn', 'GlpiLastInventory')) {
+        $control.ValueType = [datetime]
+        $control.DefaultCellStyle.Format = 'dd/MM/yyyy HH:mm'
+        $control.DefaultCellStyle.NullValue = '—'
+        $control.ToolTipText = 'Data più recente tra le registrazioni di questo nome. Le singole date sono nel dettaglio.'
+    }
+    [void]$grid.Columns.Add($control)
 }
+$grid.Columns['ADLastModified'].ToolTipText += ' Modifica oggetto AD sui DC letti.'
+$grid.Columns['EntraLastActivity'].ToolTipText += ' Attività approssimativa comunicata da Entra.'
+$grid.Columns['GlpiLastInventory'].ToolTipText += ' Data inventario GLPI; non è la modifica della scheda. Orario del server GLPI.'
 $tabs = New-Object Windows.Forms.TabControl; $tabs.Dock = 'Fill'
 $detailTab = New-Object Windows.Forms.TabPage; $detailTab.Text = 'Dettaglio del computer'
 $sourceTab = New-Object Windows.Forms.TabPage; $sourceTab.Text = 'Stato fonti e orari'
