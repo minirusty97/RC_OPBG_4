@@ -1,4 +1,4 @@
-OPBG IT Suite - componenti di terze parti
+Assistente IT - componenti di terze parti
 
 Microsoft.Graph.Authentication, versione indicata in suite.json
 Copyright (c) Microsoft Corporation. All rights reserved.

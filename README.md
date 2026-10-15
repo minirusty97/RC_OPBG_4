@@ -1,12 +1,12 @@
-# RC_OPBG_4
+# Assistente IT
 
 Script PowerShell per cercare computer in Active Directory, Microsoft Entra ID, Microsoft Intune e GLPI, e per gestire la rimozione con il tool esistente.
 
-## OPBG IT Suite: installazione e distribuzione
+## Assistente IT: installazione e distribuzione
 
 La versione funzionante di Computer Explorer è integrata in `main`. La suite aggiunge un punto di avvio comune e un installer per utente, predisposto per ospitare altri moduli di gestione Intune.
 
-I colleghi autorizzati al repository privato scaricano il file **OPBG-IT-Suite-Setup-VERSIONE.exe** da [Releases](https://github.com/minirusty97/RC_OPBG_4/releases/latest), installano e aprono **OPBG IT Suite**. Da **Impostazioni** configurano GLPI e i DC; Graph è incluso nel setup. Per AD serve RSAT/ActiveDirectory sul PC.
+I colleghi autorizzati al repository privato scaricano il file **Assistente-IT-Setup-VERSIONE.exe** da [Releases](https://github.com/minirusty97/RC_OPBG_4/releases/latest), installano e aprono **Assistente IT**. Da **Impostazioni** configurano GLPI e i DC; Graph è incluso nel setup. Per AD serve RSAT/ActiveDirectory sul PC.
 
 Configurazione e `.env` personali restano in `%LOCALAPPDATA%\OPBG\ITSuite\Config`, separati dal programma e conservati durante gli aggiornamenti. I colleghi non devono installare Git. Il workflow costruisce e prova il setup, quindi pubblica una nuova release dopo il merge in `main` quando aumenta `Version` in `suite.json`.
 

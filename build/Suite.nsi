@@ -12,7 +12,7 @@ Unicode true
 !ifndef OUTPUT_FILE
   !error "OUTPUT_FILE is required"
 !endif
-!define PRODUCT "OPBG IT Suite"
+!define PRODUCT "Assistente IT"
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\OPBGITSuite"
 !define MARKER "OPBGITSuite-56bc1182-02a3-4b1a-9d4a-99d44231c26b"
 Name "${PRODUCT}"
@@ -23,12 +23,12 @@ RequestExecutionLevel user
 SetCompressor /SOLID lzma
 VIProductVersion "${APP_VERSION}.0"
 VIAddVersionKey /LANG=1040 "ProductName" "${PRODUCT}"
-VIAddVersionKey /LANG=1040 "FileDescription" "Installazione OPBG IT Suite"
+VIAddVersionKey /LANG=1040 "FileDescription" "Installazione Assistente IT"
 VIAddVersionKey /LANG=1040 "FileVersion" "${APP_VERSION}"
-VIAddVersionKey /LANG=1040 "LegalCopyright" "OPBG IT Suite contributors"
+VIAddVersionKey /LANG=1040 "LegalCopyright" "Assistente IT contributors"
 !define MUI_ABORTWARNING
-!define MUI_FINISHPAGE_RUN "$INSTDIR\OPBGITSuite.exe"
-!define MUI_FINISHPAGE_RUN_TEXT "Apri OPBG IT Suite"
+!define MUI_FINISHPAGE_RUN "$INSTDIR\AssistenteIT.exe"
+!define MUI_FINISHPAGE_RUN_TEXT "Apri Assistente IT"
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
@@ -43,7 +43,7 @@ Function ${PREFIX}CheckRunning
   ${If} $0 != 0
     System::Call 'kernel32::CloseHandle(p r0)'
     IfSilent +2
-    MessageBox MB_OK|MB_ICONEXCLAMATION "Chiudere OPBG IT Suite e tutti i suoi moduli prima di continuare."
+    MessageBox MB_OK|MB_ICONEXCLAMATION "Chiudere Assistente IT e tutti i suoi moduli prima di continuare."
     SetErrorLevel 2
     Abort
   ${EndIf}
@@ -57,7 +57,7 @@ Function .onInit
   SetRegView 64
   ${IfNot} ${RunningX64}
     IfSilent +2
-    MessageBox MB_OK|MB_ICONSTOP "OPBG IT Suite richiede Windows a 64 bit."
+    MessageBox MB_OK|MB_ICONSTOP "Assistente IT richiede Windows a 64 bit."
     SetErrorLevel 2
     Abort
   ${EndIf}
@@ -67,7 +67,7 @@ Function .onInit
     ${VersionCompare} $0 "${APP_VERSION}" $1
     ${If} $1 == 1
       IfSilent +2
-      MessageBox MB_OK|MB_ICONEXCLAMATION "È già installata una versione più recente di OPBG IT Suite."
+      MessageBox MB_OK|MB_ICONEXCLAMATION "È già installata una versione più recente di Assistente IT."
       SetErrorLevel 2
       Abort
     ${EndIf}
@@ -92,15 +92,21 @@ Section "Installa"
   FileWrite $0 "${MARKER}"
   FileClose $0
   WriteUninstaller "$INSTDIR\Uninstall.exe"
-  CreateDirectory "$SMPROGRAMS\OPBG IT Suite"
-  CreateShortcut "$SMPROGRAMS\OPBG IT Suite\OPBG IT Suite.lnk" "$INSTDIR\OPBGITSuite.exe"
-  CreateShortcut "$SMPROGRAMS\OPBG IT Suite\Disinstalla.lnk" "$INSTDIR\Uninstall.exe"
-  CreateShortcut "$DESKTOP\OPBG IT Suite.lnk" "$INSTDIR\OPBGITSuite.exe"
+  ; Upgrade from 1.0.0: keep install identity and user data, replace visible names.
+  Delete "$INSTDIR\OPBGITSuite.exe"
+  Delete "$SMPROGRAMS\OPBG IT Suite\OPBG IT Suite.lnk"
+  Delete "$SMPROGRAMS\OPBG IT Suite\Disinstalla.lnk"
+  RMDir "$SMPROGRAMS\OPBG IT Suite"
+  Delete "$DESKTOP\OPBG IT Suite.lnk"
+  CreateDirectory "$SMPROGRAMS\Assistente IT"
+  CreateShortcut "$SMPROGRAMS\Assistente IT\Assistente IT.lnk" "$INSTDIR\AssistenteIT.exe"
+  CreateShortcut "$SMPROGRAMS\Assistente IT\Disinstalla.lnk" "$INSTDIR\Uninstall.exe"
+  CreateShortcut "$DESKTOP\Assistente IT.lnk" "$INSTDIR\AssistenteIT.exe"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayName" "${PRODUCT}"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayVersion" "${APP_VERSION}"
-  WriteRegStr HKCU "${UNINSTALL_KEY}" "Publisher" "OPBG IT Suite"
+  WriteRegStr HKCU "${UNINSTALL_KEY}" "Publisher" "Assistente IT"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "InstallLocation" "$INSTDIR"
-  WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayIcon" "$INSTDIR\OPBGITSuite.exe"
+  WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayIcon" "$INSTDIR\AssistenteIT.exe"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "UninstallString" '$\"$INSTDIR\Uninstall.exe$\"'
   WriteRegStr HKCU "${UNINSTALL_KEY}" "QuietUninstallString" '$\"$INSTDIR\Uninstall.exe$\" /S'
   WriteRegStr HKCU "${UNINSTALL_KEY}" "URLInfoAbout" "https://github.com/minirusty97/RC_OPBG_4"
@@ -129,10 +135,15 @@ FunctionEnd
 Section "Uninstall"
   Call un.CheckRunning
   RMDir /r "$INSTDIR\app"
+  Delete "$INSTDIR\AssistenteIT.exe"
   Delete "$INSTDIR\OPBGITSuite.exe"
   Delete "$INSTDIR\suite-install.marker"
   Delete "$INSTDIR\Uninstall.exe"
   RMDir "$INSTDIR"
+  Delete "$SMPROGRAMS\Assistente IT\Assistente IT.lnk"
+  Delete "$SMPROGRAMS\Assistente IT\Disinstalla.lnk"
+  RMDir "$SMPROGRAMS\Assistente IT"
+  Delete "$DESKTOP\Assistente IT.lnk"
   Delete "$SMPROGRAMS\OPBG IT Suite\OPBG IT Suite.lnk"
   Delete "$SMPROGRAMS\OPBG IT Suite\Disinstalla.lnk"
   RMDir "$SMPROGRAMS\OPBG IT Suite"

@@ -30,18 +30,22 @@ function Invoke-TestUninstall {
         while ((Test-Path $uninstallKey) -and [datetime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
     }
 }
-try {
-    Invoke-TestSetup $BaselineSetupPath
-    if ((Get-ItemProperty $uninstallKey).DisplayVersion -ne '0.9.0') { throw 'Baseline installer did not register its version.' }
-    $launcher=Join-Path $install 'OPBGITSuite.exe'
+function Invoke-TestSuiteWindow {
+    param([string]$Launcher)
     $probe=Join-Path $temporary 'launch.json'
-    $process=Start-Process -FilePath $launcher -ArgumentList ('--smoke-test "' + $probe + '"') -PassThru
+    $process=Start-Process -FilePath $Launcher -ArgumentList ('--smoke-test "' + $probe + '"') -PassThru
     try {
         if (-not $process.WaitForExit(30000)) { $process.Kill(); throw 'Installed GUI did not complete its smoke test.' }
         if ($process.ExitCode -ne 0) { throw 'Installed GUI failed to start.' }
     }
     finally { $process.Dispose() }
-    $result=Get-Content -LiteralPath $probe -Raw | ConvertFrom-Json
+    return Get-Content -LiteralPath $probe -Raw | ConvertFrom-Json
+}
+try {
+    Invoke-TestSetup $BaselineSetupPath
+    if ((Get-ItemProperty $uninstallKey).DisplayVersion -ne '1.0.0') { throw 'Baseline installer did not register its version.' }
+    $launcher=Join-Path $install 'OPBGITSuite.exe'
+    $result=Invoke-TestSuiteWindow $launcher
     if (-not $result.GraphAvailable -or $result.ModuleCount -ne 1 -or $result.DataRoot -ne $dataRoot) { throw 'Installed suite did not find its module, bundled Graph or user data root.' }
     if (-not (Test-Path -LiteralPath (Join-Path ([Environment]::GetFolderPath('Programs')) 'OPBG IT Suite/OPBG IT Suite.lnk'))) { throw 'Start menu shortcut missing.' }
     'PASS: clean per-user setup registers the suite, creates its shortcut and starts the installed WinForms hub with bundled Graph.'
@@ -54,9 +58,24 @@ try {
     $configBefore=[IO.File]::ReadAllText($configPath); $envBefore=[IO.File]::ReadAllText($envPath)
     Invoke-TestSetup $SetupPath
     $installed=Get-Content -LiteralPath (Join-Path $install 'app/suite.json') -Raw | ConvertFrom-Json
-    if ($installed.Version -eq '0.9.0' -or (Get-ItemProperty $uninstallKey).DisplayVersion -ne $installed.Version) { throw 'Upgrade failed to replace the application version.' }
+    if ([version]$installed.Version -le [version]'1.0.0' -or (Get-ItemProperty $uninstallKey).DisplayVersion -ne $installed.Version) { throw 'Upgrade failed to replace the application version.' }
     if ([IO.File]::ReadAllText($configPath) -ne $configBefore -or [IO.File]::ReadAllText($envPath) -ne $envBefore) { throw 'Upgrade overwrote personal configuration or credentials.' }
-    'PASS: upgrade from 0.9.0 replaces program files while preserving personal configuration and tokens byte for byte.'
+    'PASS: upgrade from the published 1.0.0 preserves personal configuration and tokens byte for byte.'
+
+    if (Test-Path -LiteralPath $launcher) { throw 'Legacy launcher remained after rename.' }
+    $launcher=Join-Path $install 'AssistenteIT.exe'
+    if ($installed.Product -ne 'Assistente IT' -or (Get-ItemProperty $uninstallKey).DisplayName -ne 'Assistente IT' -or [Diagnostics.FileVersionInfo]::GetVersionInfo($launcher).ProductName -ne 'Assistente IT') { throw 'Application metadata did not adopt the new product name.' }
+    $programs=[Environment]::GetFolderPath('Programs'); $desktop=[Environment]::GetFolderPath('DesktopDirectory')
+    $shortcutPath=Join-Path $programs 'Assistente IT/Assistente IT.lnk'
+    if (-not (Test-Path -LiteralPath $shortcutPath) -or -not (Test-Path -LiteralPath (Join-Path $desktop 'Assistente IT.lnk')) -or
+        (Test-Path -LiteralPath (Join-Path $programs 'OPBG IT Suite/OPBG IT Suite.lnk')) -or (Test-Path -LiteralPath (Join-Path $desktop 'OPBG IT Suite.lnk'))) { throw 'Renamed shortcuts are missing or legacy shortcuts remain.' }
+    $shell=New-Object -ComObject WScript.Shell
+    $shortcut=$null
+    try { $shortcut=$shell.CreateShortcut($shortcutPath); if ($shortcut.TargetPath -ne $launcher) { throw 'New shortcut points to the old launcher.' } }
+    finally { if ($null -ne $shortcut) { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($shortcut) }; [void][Runtime.InteropServices.Marshal]::ReleaseComObject($shell) }
+    $renamed=Invoke-TestSuiteWindow $launcher
+    if ($renamed.Product -ne 'Assistente IT' -or $renamed.WindowTitle -ne ('Assistente IT - ' + $installed.Version)) { throw 'Installed window did not adopt the new name.' }
+    'PASS: update renames the window, EXE, Apps entry and working shortcuts, removing the legacy launcher and shortcuts.'
 
     $activity=New-Object Threading.EventWaitHandle($false,[Threading.EventResetMode]::ManualReset,'Local\OPBGITSuite.Running')
     try { Invoke-TestSetup $SetupPath -ExpectedExit 2 }

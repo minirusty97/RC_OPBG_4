@@ -60,13 +60,13 @@ try {
     $launcherSource = Join-Path $stage 'Launcher.cs'
     [IO.File]::WriteAllText($launcherSource, ([IO.File]::ReadAllText((Join-Path $PSScriptRoot 'Launcher.cs')).Replace('__VERSION__',$Version)), (New-Object Text.UTF8Encoding($true)))
     $compiler = Join-Path ([Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()) 'csc.exe'
-    & $compiler /nologo /target:winexe /platform:x64 /reference:System.Windows.Forms.dll (('/out:' + (Join-Path $stage 'OPBGITSuite.exe'))) $launcherSource | ForEach-Object { Write-Host $_ }
+    & $compiler /nologo /target:winexe /platform:x64 /reference:System.Windows.Forms.dll (('/out:' + (Join-Path $stage 'AssistenteIT.exe'))) $launcherSource | ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -ne 0) { throw 'Compilazione del launcher non riuscita.' }
     Remove-Item -LiteralPath $launcherSource -Force
-    $setup = Join-Path $OutputDirectory ('OPBG-IT-Suite-Setup-' + $Version + '.exe')
+    $setup = Join-Path $OutputDirectory ('Assistente-IT-Setup-' + $Version + '.exe')
     & $MakeNsisPath /V3 /NOCD (('/DAPP_VERSION=' + $Version)) (('/DPACKAGE_ROOT=' + $stage)) (('/DOUTPUT_FILE=' + $setup)) (Join-Path $PSScriptRoot 'Suite.nsi') | ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $setup)) { throw 'Creazione dell''installer non riuscita.' }
-    $checksum = Join-Path $OutputDirectory ('OPBG-IT-Suite-' + $Version + '-SHA256.txt')
+    $checksum = Join-Path $OutputDirectory ('Assistente-IT-' + $Version + '-SHA256.txt')
     [IO.File]::WriteAllText($checksum, ((Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash + ' *' + [IO.Path]::GetFileName($setup) + "`r`n"), (New-Object Text.UTF8Encoding($false)))
     [pscustomobject]@{Version=$Version; SetupPath=$setup; ChecksumPath=$checksum; GraphVersion=$manifest.GraphVersion}
 }

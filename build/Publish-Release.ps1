@@ -10,8 +10,8 @@ $version=[string]$manifest.Version
 if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Versione di rilascio non valida.' }
 $tag='v'+$version
 $notes=Join-Path $root ('docs/releases/'+$version+'.md')
-$setup=Join-Path $AssetDirectory ('OPBG-IT-Suite-Setup-'+$version+'.exe')
-$checksum=Join-Path $AssetDirectory ('OPBG-IT-Suite-'+$version+'-SHA256.txt')
+$setup=Join-Path $AssetDirectory ('Assistente-IT-Setup-'+$version+'.exe')
+$checksum=Join-Path $AssetDirectory ('Assistente-IT-'+$version+'-SHA256.txt')
 foreach($path in @($notes,$setup,$checksum)){if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw ('File di rilascio assente: '+[IO.Path]::GetFileName($path))}}
 $expected=(([IO.File]::ReadAllText((Resolve-Path $checksum).ProviderPath)).Trim() -split '\s+')[0]
 if((Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash -ne $expected){throw 'Checksum del setup non valido.'}
@@ -32,7 +32,7 @@ if($null -ne $reference){
 }
 if($null -ne $existing -and $existing.target_commitish -ne $env:GITHUB_SHA){throw 'La bozza esistente appartiene a un altro commit.'}
 if($null -eq $existing){
-    & gh release create $tag $setup $checksum --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --draft --title ('OPBG IT Suite '+$version) --notes-file $notes
+    & gh release create $tag $setup $checksum --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --draft --title ($manifest.Product+' '+$version) --notes-file $notes
     if($LASTEXITCODE -ne 0){throw 'Creazione della release non riuscita.'}
 }
 else {

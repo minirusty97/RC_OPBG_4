@@ -1,4 +1,4 @@
-# OPBG IT Suite
+# Assistente IT
 
 La suite raccoglie gli strumenti IT in un unico punto di avvio. Il primo modulo è **Computer Explorer**, per AD, Entra ID, Intune e GLPI. I moduli vengono registrati in `suite.json` e avviati in processi Windows PowerShell separati.
 
@@ -6,8 +6,8 @@ La suite raccoglie gli strumenti IT in un unico punto di avvio. Il primo modulo 
 
 1. Accedere a GitHub con un account autorizzato al repository privato [RC_OPBG_4](https://github.com/minirusty97/RC_OPBG_4).
 2. Aprire [Releases](https://github.com/minirusty97/RC_OPBG_4/releases/latest).
-3. Scaricare **OPBG-IT-Suite-Setup-VERSIONE.exe** negli asset della release. Gli archivi automatici Source code contengono i sorgenti.
-4. Eseguire il setup con il proprio utente e avviare **OPBG IT Suite** dal menu Start o dal desktop.
+3. Scaricare **Assistente-IT-Setup-VERSIONE.exe** negli asset della release. Gli archivi automatici Source code contengono i sorgenti.
+4. Eseguire il setup con il proprio utente e avviare **Assistente IT** dal menu Start o dal desktop.
 5. Aprire **Impostazioni**, verificare i DC, inserire l'URL API GLPI corretto e, se si usa GLPI, il proprio User token e l'App token.
 6. Aprire Computer Explorer. Il login Graph usa l'account del collega e i suoi permessi effettivi.
 
@@ -32,6 +32,8 @@ Per aggiornare, chiudere la suite e i moduli aperti, scaricare il nuovo setup da
 
 Il pulsante **Release su GitHub** apre il browser, che gestisce l'accesso al repository privato. La suite non memorizza token GitHub e non installa aggiornamenti in background.
 
+Il nome visibile dalla versione 1.0.1 è **Assistente IT**. I percorsi interni e l’identificativo di installazione della 1.0.0 vengono conservati per riconoscere gli aggiornamenti e ritrovare i file personali. Il setup sostituisce i vecchi collegamenti con quelli di Assistente IT.
+
 ## Riutilizzare i file della versione da sorgenti
 
 Aprire e chiudere una volta la suite per creare la cartella personale. Chiudere i moduli, poi copiare il proprio `computer-explorer.config.local.json` e il proprio `.env` dalla cartella Git alla cartella `Config` indicata sopra, sostituendo soltanto i modelli appena creati. È anche possibile impostare tutto dalla finestra Impostazioni.
@@ -44,15 +46,15 @@ Il workflow **PowerShell checks and installer** esegue:
 
 1. Parser e suite di test su Windows PowerShell 5.1, con dati sintetici e API simulate.
 2. Compilazione di un piccolo launcher C# e creazione del setup con NSIS 3.13.0.
-3. Installazione pulita di una build di prova 0.9.0, avvio del launcher e della finestra installata, aggiornamento alla versione corrente, conservazione byte per byte dei file personali, blocco con suite aperta, blocco downgrade e disinstallazione.
+3. Installazione della release precedente 1.0.0, scaricata da GitHub e verificata tramite SHA256, avvio del launcher e della finestra installata, aggiornamento alla versione corrente, conservazione byte per byte dei file personali, blocco con suite aperta, blocco downgrade e disinstallazione.
 4. Pubblicazione dell'installer e del checksum come artifact del workflow.
 5. Su push a `main`, pubblicazione della release `vVERSIONE`, se non esiste già. La bozza viene pubblicata solo dopo il caricamento degli asset.
 
 Per rilasciare un aggiornamento:
 
 1. Creare un branch `feature/...` a partire da `main`.
-2. Modificare i sorgenti e incrementare **Version** in `suite.json`, per esempio da `1.0.0` a `1.0.1`.
-3. Aggiungere le note in `docs/releases/1.0.1.md`.
+2. Modificare i sorgenti e incrementare **Version** in `suite.json`, per esempio da `1.0.1` a `1.0.2`.
+3. Aggiungere le note in `docs/releases/1.0.2.md`.
 4. Aprire una pull request verso `main` e attendere i controlli verdi.
 5. Unire la pull request. La build su `main` genera e pubblica automaticamente la nuova release.
 
@@ -71,7 +73,7 @@ choco install nsis --version=3.13.0 --yes
 
 Il setup e il checksum vengono scritti in `output\suite`. La prima build scarica da PowerShell Gallery la versione Graph fissata; le successive riusano la cache locale. `-MakeNsisPath` permette di indicare un compilatore NSIS in un altro percorso.
 
-`build/Test-Installer.ps1` è riservato a un runner Windows isolato: rifiuta di operare se esistono già un'installazione o dati personali della suite. La versione 0.9.0 usata nei test è una fixture di packaging, non una release destinata ai colleghi.
+`build/Test-Installer.ps1` è riservato a un runner Windows isolato: rifiuta di operare se esistono già un'installazione o dati personali della suite. Il test riceve come baseline il setup originale 1.0.0 per verificare il cambio di nome durante un aggiornamento reale.
 
 ## Aggiungere moduli
 
