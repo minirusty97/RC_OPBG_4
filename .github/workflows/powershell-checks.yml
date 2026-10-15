@@ -1,0 +1,30 @@
+name: PowerShell checks
+on:
+  push:
+    branches: [main, feature/computer-explorer]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  windows-powershell:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Parse PowerShell and run isolated tests
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Get-ChildItem -Recurse -File | Where-Object { $_.Extension -in '.ps1', '.psm1' } | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors)
+            if ($errors.Count) { throw ($errors | Out-String) }
+          }
+          Get-ChildItem ./tests/*.Tests.ps1 | Sort-Object Name | ForEach-Object {
+            Write-Host ('TEST: ' + $_.Name)
+            & $_.FullName
+            if (-not $?) { throw ('Failed: ' + $_.Name) }
+          }
