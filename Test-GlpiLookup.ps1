@@ -17,11 +17,22 @@ if (-not $config.Glpi.Enabled -or [string]::IsNullOrWhiteSpace($config.Glpi.Base
     throw "Configurare Glpi.BaseUri con l'URL di apirest.php e impostare Glpi.Enabled su true."
 }
 Import-Module (Join-Path $PSScriptRoot 'GLPI.Inventory.psm1') -Force -ErrorAction Stop
-$userToken = Read-Host 'User token GLPI' -AsSecureString
+Import-Module (Join-Path $PSScriptRoot 'ComputerExplorer.Core.psm1') -ErrorAction Stop
+$credentials = Read-ExplorerGlpiCredentials -Path (Join-Path $PSScriptRoot '.env') -UseAppToken ([bool]$config.Glpi.UseAppToken)
+$userToken = $null
 $appToken = $null
-if ($config.Glpi.UseAppToken) { $appToken = Read-Host 'App token GLPI' -AsSecureString }
-
-Find-GlpiComputer -BaseUri $config.Glpi.BaseUri -NameFragment $NameFragment `
-    -UserToken $userToken -AppToken $appToken -PageSize $config.Glpi.PageSize `
-    -TimeoutSeconds $config.Glpi.TimeoutSeconds |
-    Format-Table -Property @('Name', 'GlpiId', 'State', 'SerialNumber', 'InventoryNumber', 'EntityId') -AutoSize
+try {
+    if ($null -ne $credentials) { $userToken = $credentials.User; $appToken = $credentials.App }
+    else {
+        $userToken = Read-Host 'User token GLPI' -AsSecureString
+        if ($config.Glpi.UseAppToken) { $appToken = Read-Host 'App token GLPI' -AsSecureString }
+    }
+    Find-GlpiComputer -BaseUri $config.Glpi.BaseUri -NameFragment $NameFragment `
+        -UserToken $userToken -AppToken $appToken -PageSize $config.Glpi.PageSize `
+        -TimeoutSeconds $config.Glpi.TimeoutSeconds |
+        Format-Table -Property @('Name', 'GlpiId', 'State', 'SerialNumber', 'InventoryNumber', 'EntityId') -AutoSize
+}
+finally {
+    if ($null -ne $userToken) { $userToken.Dispose() }
+    if ($null -ne $appToken) { $appToken.Dispose() }
+}

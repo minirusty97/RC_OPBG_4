@@ -16,6 +16,47 @@ function Get-ExplorerValue {
     return ,$Default
 }
 
+function Read-ExplorerGlpiCredentials {
+    [CmdletBinding()]
+    param(
+        [string]$Path = (Join-Path $PSScriptRoot '.env'),
+        [bool]$UseAppToken = $true
+    )
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+    $values = @{}
+    $lineNumber = 0
+    # Il file viene letto come dati: nessuna espansione e nessuna esecuzione.
+    foreach ($line in [IO.File]::ReadAllLines((Resolve-Path -LiteralPath $Path).ProviderPath, [Text.Encoding]::UTF8)) {
+        $lineNumber++
+        $text = $line.Trim()
+        if ($text.Length -eq 0 -or $text.StartsWith('#')) { continue }
+        if ($text -notmatch '^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$') {
+            throw "Formato .env non valido alla riga $lineNumber. Usare NOME=valore."
+        }
+        $key = $Matches[1]
+        $value = $Matches[2].Trim()
+        if ($key -cnotin @('GLPI_USER_TOKEN', 'GLPI_APP_TOKEN')) { continue }
+        if ($values.ContainsKey($key)) { throw "Chiave $key duplicata nel .env alla riga $lineNumber." }
+        if ($value.StartsWith('"') -or $value.StartsWith("'")) {
+            $quote = [regex]::Escape($value.Substring(0, 1))
+            if ($value -notmatch ('^{0}(.*?){0}\s*(?:#.*)?$' -f $quote)) {
+                throw "Virgolette .env non valide alla riga $lineNumber."
+            }
+            $value = $Matches[1]
+        }
+        else { $value = ($value -replace '\s+#.*$', '').TrimEnd() }
+        $values[$key] = $value
+    }
+    # Un file incompleto lascia disponibile il prompt esistente.
+    if (-not $values.ContainsKey('GLPI_USER_TOKEN') -or [string]::IsNullOrWhiteSpace($values['GLPI_USER_TOKEN']) -or
+        ($UseAppToken -and (-not $values.ContainsKey('GLPI_APP_TOKEN') -or [string]::IsNullOrWhiteSpace($values['GLPI_APP_TOKEN'])))) { return $null }
+    $app = $null
+    if ($UseAppToken) { $app = ConvertTo-SecureString -String $values['GLPI_APP_TOKEN'] -AsPlainText -Force }
+    $user = ConvertTo-SecureString -String $values['GLPI_USER_TOKEN'] -AsPlainText -Force
+    $values.Clear()
+    return [pscustomobject]@{ User = $user; App = $app }
+}
+
 function Read-ExplorerConfiguration {
     param([Parameter(Mandatory = $true)][string]$ConfigPath)
     if (-not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) {
@@ -376,4 +417,4 @@ function Invoke-ComputerExplorerSearch {
     Send-ExplorerUpdate $sources $controllers 'Ricerca completata.' $ProgressQueue -Complete
 }
 
-Export-ModuleMember -Function Read-ExplorerConfiguration, Invoke-ComputerExplorerSearch, Merge-ExplorerResults, Format-ExplorerDate
+Export-ModuleMember -Function Read-ExplorerConfiguration, Invoke-ComputerExplorerSearch, Merge-ExplorerResults, Format-ExplorerDate, Read-ExplorerGlpiCredentials

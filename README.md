@@ -40,7 +40,7 @@ powershell.exe -NoProfile -STA -File .\Start-ComputerExplorer.ps1
 
 Riutilizza `computer-explorer.config.local.json`, già configurato per le prove AD e GLPI. Se manca, copiarlo dal modello e impostare URL GLPI, Enabled e UseAppToken come descritto sotto. Il modello viene lasciato disabilitato per GLPI e non contiene token.
 
-Scrivere ad esempio `PORT-` e premere **Cerca**. I token GLPI vengono richiesti nella finestra al primo utilizzo e mantenuti solo in memoria fino alla chiusura. **Token GLPI** permette di sostituirli. Graph riutilizza la sessione disponibile nello stesso processo; se manca o richiede ambiti aggiuntivi, apre il login interattivo. I token GLPI non vanno inseriti nel JSON o nel repository.
+Scrivere ad esempio `PORT-` e premere **Cerca**. I token GLPI vengono letti automaticamente dal `.env` nella cartella degli script. Se il file manca o i token richiesti sono vuoti, si apre il prompt della finestra. **Token GLPI** permette una sostituzione temporanea per la finestra corrente. Graph riutilizza la sessione disponibile nello stesso processo; se manca o richiede ambiti aggiuntivi, apre il login interattivo. I token GLPI non vanno inseriti nel JSON o nel repository.
 
 Le interrogazioni lavorano in un runspace separato: la finestra resta disponibile e la griglia si aggiorna dopo ogni fonte. **Interrompi** annulla la lettura; le fonti ancora in attesa restano non verificate. Le caselle AD / Entra / Intune / GLPI scelgono le fonti da interrogare.
 
@@ -54,12 +54,33 @@ Install-Module Microsoft.Graph.Authentication -Scope CurrentUser
 
 La console accetta gli ambiti di lettura e quelli più ampi già utilizzati. Se serve autenticarsi, mantiene gli ambiti autorizzati del progetto: `Directory.AccessAsUser.All` per Entra e `DeviceManagementManagedDevices.ReadWrite.All` per Intune. Una sessione applicativa preconfigurata viene conservata; le risposte API ne verificano i diritti effettivi.
 
+### Token GLPI nel file .env
+
+Creare una sola volta il file locale dal modello, senza sovrascrivere un `.env` già compilato:
+
+```powershell
+if (-not (Test-Path -LiteralPath .\.env)) { Copy-Item .\.env.example .\.env }
+notepad .\.env
+```
+
+Inserire i token dopo il segno `=`:
+
+```dotenv
+GLPI_USER_TOKEN=il_tuo_user_token
+GLPI_APP_TOKEN=il_tuo_app_token
+```
+
+L'App token può restare vuoto quando `Glpi.UseAppToken` è `false`. Il file `.env` contiene i token in chiaro e rimane locale, escluso da Git insieme a `.env.*`; soltanto `.env.example` è versionato. Non inserire i token reali nel modello. Sono supportati commenti, spazi e valori tra virgolette; variabili ed espressioni restano testo letterale. Un file malformato produce un errore con il numero di riga, senza mostrare il valore.
+
+Il caricamento automatico è disponibile nella finestra e in `Test-GlpiLookup.ps1`. Una volta letti, i token vengono conservati come SecureString in memoria. Dopo aver modificato il `.env`, chiudere e riaprire la finestra. Gli inserimenti manuali non modificano il file.
+
 ### Verifiche eseguite
 
-Il parser PowerShell e 58 casi automatici sono passati in PowerShell 7.4.19: 28 per cloud, aggregazione, date e worker, 12 AD e 18 GLPI. La suite cloud/date è passata anche con fuso Europe/Rome. I test usano dati sintetici e API simulate; includono paginazione, errori senza risultati parziali, cache, duplicati, conflitti e annullamento.
+Il parser PowerShell e 65 casi automatici sono passati in PowerShell 7.4.19: 28 per cloud, aggregazione, date e worker, 12 AD, 18 GLPI e 7 per il caricamento delle credenziali dal `.env`. La suite cloud/date è passata anche con fuso Europe/Rome. I test usano dati sintetici e API simulate; includono paginazione, errori senza risultati parziali, cache, duplicati, conflitti e annullamento.
 
 ```powershell
 .\tests\ComputerExplorer.Tests.ps1
+.\tests\Glpi.Credentials.Tests.ps1
 .\tests\AD.Lookup.Tests.ps1
 .\tests\GLPI.Inventory.Tests.ps1
 ```
@@ -140,7 +161,7 @@ Copy-Item .\computer-explorer.config.example.json .\computer-explorer.config.loc
 notepad .\computer-explorer.config.local.json
 ```
 
-Nel file locale impostare `Glpi.Enabled` su `true`, inserire in `Glpi.BaseUri` l'URL corretto di `apirest.php` e verificare `Glpi.UseAppToken`. I token vengono richiesti nei prompt.
+Nel file locale impostare `Glpi.Enabled` su `true`, inserire in `Glpi.BaseUri` l'URL corretto di `apirest.php` e verificare `Glpi.UseAppToken`. I token vengono letti dal `.env`; se manca o è incompleto, vengono richiesti nei prompt.
 
 Per provare la ricerca:
 

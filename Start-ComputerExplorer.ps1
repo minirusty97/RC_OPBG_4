@@ -271,7 +271,9 @@ $searchButton.Add_Click({
         if ($enabled.Count -eq 0) { throw 'Selezionare almeno una fonte.' }
         $glpiSettings = Get-UiSetting $config.Settings 'Glpi' $null
         if ($enabled -contains 'GLPI' -and [bool](Get-UiSetting $glpiSettings 'Enabled' $false) -and $null -eq $script:GlpiCredentials) {
-            $script:GlpiCredentials = Read-GlpiCredentials ([bool](Get-UiSetting $glpiSettings 'UseAppToken' $true))
+            $useAppToken = [bool](Get-UiSetting $glpiSettings 'UseAppToken' $true)
+            $script:GlpiCredentials = Read-ExplorerGlpiCredentials -Path (Join-Path $PSScriptRoot '.env') -UseAppToken $useAppToken
+            if ($null -eq $script:GlpiCredentials) { $script:GlpiCredentials = Read-GlpiCredentials $useAppToken }
             if ($null -eq $script:GlpiCredentials) { return }
         }
         $grid.Rows.Clear(); $sourceGrid.Rows.Clear(); $details.Clear(); $script:Latest = $null

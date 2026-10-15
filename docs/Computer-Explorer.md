@@ -35,7 +35,7 @@ Il percorso viene da CanonicalName; il DN originale rimane nel dettaglio. Un DC 
 
 La griglia mostra i risultati; il pannello inferiore espone gli oggetti del nome selezionato e una scheda con esiti delle fonti, errori, orari e cache. Le caselle permettono di escludere una fonte e Interrompi annulla il worker. La finestra riceve gli aggiornamenti tramite una coda concorrente: i controlli WinForms restano sul thread della UI.
 
-I token GLPI si inseriscono nella finestra, vengono conservati come SecureString per la sessione della console e non sono scritti su file. Il JSON locale è escluso da Git e contiene l'URL effettivo già verificato dall'utente.
+I token GLPI vengono letti dal `.env` nella cartella degli script tramite `Read-ExplorerGlpiCredentials`, poi conservati come SecureString per la sessione della console. Lo stesso caricamento è usato da Test-GlpiLookup.ps1. Il `.env` contiene GLPI_USER_TOKEN e GLPI_APP_TOKEN in chiaro, è escluso da Git e non viene scritto dalla UI; il repository include solo il modello vuoto `.env.example`. Se manca o è incompleto resta disponibile il prompt. Il parser legge dati senza eseguire espressioni, rifiuta duplicati e righe malformate senza mostrare i valori. Per ricaricare modifiche al file si riapre la finestra. Il JSON locale è escluso da Git e contiene l'URL effettivo già verificato dall'utente.
 
 Graph usa Microsoft.Graph.Authentication. Riutilizza la sessione e gli ambiti sufficienti già presenti; se mancano, avvia il login interattivo mantenendo tenant, client e ambiti correnti quando disponibili. Gli ambiti aggiunti sono quelli già autorizzati per il tool: Directory.AccessAsUser.All e DeviceManagementManagedDevices.ReadWrite.All. Una sessione applicativa preconfigurata non viene sostituita da una delegata. La prima implementazione supporta l'endpoint Global graph.microsoft.com.
 
@@ -54,7 +54,7 @@ GLPI usa il contesto predefinito dell'utente API. La selezione esplicita di prof
 
 ## Prove effettuate e limiti
 
-- Parser PowerShell e 58 casi automatici in PowerShell 7.4.19: 28 cloud/aggregazione/date/worker, 12 AD, 18 GLPI. La suite cloud/date passa anche con fuso Europe/Rome. Dati sintetici, senza connessioni al tenant o ai DC aziendali. Inclusi runspace, coda concorrente, annullamento e riuso del worker.
+- Parser PowerShell e 65 casi automatici in PowerShell 7.4.19: 28 cloud/aggregazione/date/worker, 12 AD, 18 GLPI e 7 per le credenziali `.env`. La suite cloud/date passa anche con fuso Europe/Rome. Dati sintetici, senza connessioni al tenant o ai DC aziendali. Inclusi runspace, coda concorrente, annullamento e riuso del worker.
 - GLPI aziendale, 13 ottobre 2026: 528 record con ID validi e distinti, 527 nomi distinti e cinque stati. Il nome duplicato ha due seriali differenti. I risultati della prova appartengono all'entità 0; non descrivono l'intero server.
 - AD aziendale, stessa data: nel campione di 14 righe inviato dall'utente, 5/5 presenti e verificati, percorsi valorizzati e nessun GUID discordante. Le righe non condivise non sono state esaminate.
 - Il 15 ottobre 2026 l’utente ha confermato il funzionamento della prima finestra. Le nuove colonne sono verificate con risposte simulate; i nuovi valori reali e la loro visualizzazione vanno verificati sul PC aziendale.
