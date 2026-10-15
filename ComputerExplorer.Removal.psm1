@@ -246,6 +246,13 @@ function Invoke-ExplorerRemovalPlan {
                             throw 'Gli oggetti sono cambiati dopo la anteprima. Ripetere la verifica.'
                         }
                     }
+                    foreach ($target in $entry.Targets) {
+                        $live = Read-RemovalTargetById $target
+                        if ($null -ne $live -and -not (Test-RemovalSameTarget $target $live)) {
+                            throw 'Un oggetto verificato per ID ha cambiato identita. Ripetere la verifica.'
+                        }
+                    }
+                    if ((Get-RemovalContextKey $plan.Sources) -ne $plan.ContextKey) { throw 'Sessione Graph cambiata durante la verifica.' }
                 }
                 catch { $reason = $_.Exception.Message }
             }

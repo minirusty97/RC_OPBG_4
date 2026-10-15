@@ -47,6 +47,9 @@ try {
                 if ($record.Count -eq 0 -or ($script:Fixture.Mode -eq 'Replicated' -and @($script:Fixture.Writes | Where-Object { $_.Source -eq 'AD' -and $_.Id -eq $Identity.ToString() }).Count -gt 0)) {
                     Write-Error -Message 'Synthetic AD object absent.' -ErrorId 'ADIdentityNotFoundException' -Category ObjectNotFound -ErrorAction Stop
                 }
+                if ($script:Fixture.Mode -eq 'RenameAdById') {
+                    return [pscustomobject]@{Name='RENAMED-AD';ObjectGUID=$record[0].ObjectGUID;DistinguishedName=$record[0].DistinguishedName}
+                }
                 return $record[0]
             }
             if (-not $LDAPFilter.StartsWith('(name=') -or -not $LDAPFilter.EndsWith(')')) { throw 'Unexpected AD query.' }
@@ -138,6 +141,13 @@ try {
             $result=Invoke-ExplorerRemovalPlan -PlanId $plan.PlanId -Confirm:$false
             if ($script:Fixture.Writes.Count -ne 0 -or $result.Failed -ne 1) { throw 'By-ID race not detected.' }
             'PASS: immediate by-ID check blocks renamed or repurposed objects.'
+
+            Reset-Fixture
+            $plan=New-ExplorerRemovalPlan -Names PC-ONE -Sources AD,Entra,Intune -ConfigPath $configPath
+            $script:Fixture.Mode='RenameAdById'
+            $result=Invoke-ExplorerRemovalPlan -PlanId $plan.PlanId -Confirm:$false
+            if ($script:Fixture.Writes.Count -ne 0 -or $result.Failed -ne 1) { throw 'Later-source identity change did not block Intune before writes.' }
+            'PASS: all planned IDs are verified before the first write, including later AD/Entra sources.'
 
             Reset-Fixture
             $plan=New-ExplorerRemovalPlan -Names PC-ONE -Sources AD,Entra,Intune -ConfigPath $configPath
