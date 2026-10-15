@@ -65,7 +65,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Compilazione del launcher non riuscita.' }
     Remove-Item -LiteralPath $launcherSource -Force
     $setup = Join-Path $OutputDirectory ('Assistente-IT-Setup-' + $Version + '.exe')
-    & $MakeNsisPath /V3 /NOCD (('/DAPP_VERSION=' + $Version)) (('/DPACKAGE_ROOT=' + $stage)) (('/DOUTPUT_FILE=' + $setup)) (Join-Path $PSScriptRoot 'Suite.nsi') | ForEach-Object { Write-Host $_ }
+    & $MakeNsisPath /V3 /NOCD (('/DAPP_VERSION=' + $Version)) (('/DPACKAGE_ROOT=' + $stage)) (('/DOUTPUT_FILE=' + $setup)) (Join-Path $PSScriptRoot 'AssistenteIT.nsi') | ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $setup)) { throw 'Creazione dell''installer non riuscita.' }
     $checksum = Join-Path $OutputDirectory ('Assistente-IT-' + $Version + '-SHA256.txt')
     [IO.File]::WriteAllText($checksum, ((Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash + ' *' + [IO.Path]::GetFileName($setup) + "`r`n"), (New-Object Text.UTF8Encoding($false)))

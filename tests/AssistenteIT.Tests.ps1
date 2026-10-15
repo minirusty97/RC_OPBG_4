@@ -4,7 +4,7 @@ param([string]$InstallRoot=(Split-Path $PSScriptRoot -Parent))
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version 2.0
 Import-Module (Join-Path $InstallRoot 'AssistenteIT/AssistenteIT.Core.psm1') -Force -ErrorAction Stop
-$temporary = Join-Path ([IO.Path]::GetTempPath()) ('suite-tests-' + [guid]::NewGuid().ToString('N'))
+$temporary = Join-Path ([IO.Path]::GetTempPath()) ('assistente-it-tests-' + [guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory($temporary)
 try {
     $manifest = Read-AssistenteITManifest $InstallRoot
