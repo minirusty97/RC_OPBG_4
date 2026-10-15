@@ -73,6 +73,135 @@ function Set-CellPresence {
     $Cell.Style.SelectionForeColor = [Drawing.Color]::Black
 }
 
+function Update-ExplorerCounters {
+    $selected = @($grid.SelectedRows | Where-Object { $null -ne $_.Tag }).Count
+    $counterLabel.Text = 'Risultati: {0} | Selezionati: {1}' -f $grid.Rows.Count, $selected
+    $complete = $null -ne $script:Latest -and $script:Latest.Complete
+    $deleteButton.Enabled = $selected -gt 0 -and $complete -and -not $script:Busy -and -not $script:RemovalNeedsRefresh
+}
+
+function Show-RemovalSources {
+    param([string[]]$Names)
+    $dialog = New-Object Windows.Forms.Form
+    $dialog.Text = 'Elimina computer - origini'; $dialog.Size = New-Object Drawing.Size(640, 430)
+    $dialog.MinimumSize = New-Object Drawing.Size(520, 350); $dialog.StartPosition = 'CenterParent'
+    $panel = New-Object Windows.Forms.TableLayoutPanel
+    $panel.Dock = 'Fill'; $panel.ColumnCount = 1; $panel.RowCount = 4; $panel.Padding = New-Object Windows.Forms.Padding(12)
+    [void]$panel.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 45)))
+    [void]$panel.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 45)))
+    [void]$panel.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent', 100)))
+    [void]$panel.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 45)))
+    $intro = New-Object Windows.Forms.Label; $intro.Dock = 'Fill'
+    $intro.Text = 'Computer selezionati: {0}. Scegliere le origini; segue una verifica degli oggetti prima della conferma.' -f $Names.Count
+    $choices = New-Object Windows.Forms.FlowLayoutPanel; $choices.Dock = 'Fill'
+    $checks = @()
+    foreach ($name in @('AD', 'Entra', 'Intune')) {
+        $check = New-Object Windows.Forms.CheckBox; $check.Text = $name; $check.Checked = $true; $check.AutoSize = $true
+        $checks += @($check); $choices.Controls.Add($check)
+    }
+    $glpiLabel = New-Object Windows.Forms.Label; $glpiLabel.Text = 'GLPI: sola consultazione'; $glpiLabel.AutoSize = $true
+    $glpiLabel.Margin = New-Object Windows.Forms.Padding(20, 4, 0, 0); $choices.Controls.Add($glpiLabel)
+    $list = New-Object Windows.Forms.ListBox; $list.Dock = 'Fill'
+    foreach ($name in $Names) { [void]$list.Items.Add($name) }
+    $buttons = New-Object Windows.Forms.FlowLayoutPanel; $buttons.Dock = 'Fill'; $buttons.FlowDirection = 'RightToLeft'
+    $cancel = New-Object Windows.Forms.Button; $cancel.Text = 'Annulla'; $cancel.Width = 95; $cancel.DialogResult = 'Cancel'
+    $verify = New-Object Windows.Forms.Button; $verify.Text = 'Verifica oggetti'; $verify.Width = 140
+    $verify.Add_Click({
+        if (@($checks | Where-Object { $_.Checked }).Count -eq 0) {
+            [void][Windows.Forms.MessageBox]::Show($dialog, 'Selezionare almeno una origine.', 'Elimina', 'OK', 'Information'); return
+        }
+        $dialog.DialogResult = 'OK'; $dialog.Close()
+    })
+    $buttons.Controls.AddRange(@($cancel, $verify))
+    $panel.Controls.Add($intro, 0, 0); $panel.Controls.Add($choices, 0, 1); $panel.Controls.Add($list, 0, 2); $panel.Controls.Add($buttons, 0, 3)
+    $dialog.Controls.Add($panel); $dialog.AcceptButton = $verify; $dialog.CancelButton = $cancel
+    try {
+        if ($dialog.ShowDialog($form) -ne 'OK') { return $null }
+        return ,@($checks | Where-Object { $_.Checked } | ForEach-Object { $_.Text })
+    }
+    finally { $dialog.Dispose() }
+}
+
+function Show-RemovalPreview {
+    param($Plan)
+    $dialog = New-Object Windows.Forms.Form
+    $dialog.Text = 'Conferma eliminazione - oggetti verificati'; $dialog.Size = New-Object Drawing.Size(1000, 680)
+    $dialog.MinimumSize = New-Object Drawing.Size(750, 450); $dialog.StartPosition = 'CenterParent'
+    $panel = New-Object Windows.Forms.TableLayoutPanel
+    $panel.Dock = 'Fill'; $panel.ColumnCount = 1; $panel.RowCount = 3; $panel.Padding = New-Object Windows.Forms.Padding(10)
+    [void]$panel.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 65)))
+    [void]$panel.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent', 100)))
+    [void]$panel.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 45)))
+    $intro = New-Object Windows.Forms.Label; $intro.Dock = 'Fill'
+    $ready = @($Plan.Entries | Where-Object { [string]::IsNullOrWhiteSpace($_.Error) -and $_.Targets.Count -gt 0 }).Count
+    $intro.Text = 'Origini: {0}. Computer con oggetti pronti: {1}/{2}. Ordine: Intune, AD, Entra.' -f ($Plan.Sources -join ', '), $ready, $Plan.Entries.Count
+    if ($Plan.Sources -contains 'Intune') { $intro.Text += [Environment]::NewLine + 'Intune: eliminare una registrazione Windows avvia anche il ritiro dalla gestione.' }
+    $intro.Text += [Environment]::NewLine + 'Saranno rimossi solo gli ID elencati. I computer bloccati non verranno modificati.'
+    $preview = New-Object Windows.Forms.RichTextBox; $preview.Dock = 'Fill'; $preview.ReadOnly = $true
+    $preview.WordWrap = $false; $preview.Font = New-Object Drawing.Font('Consolas', 9)
+    $lines = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($entry in $Plan.Entries) {
+        [void]$lines.Add($entry.Name)
+        if (-not [string]::IsNullOrWhiteSpace($entry.Error)) { [void]$lines.Add('  BLOCCATO: ' + $entry.Error) }
+        elseif ($entry.Targets.Count -eq 0) { [void]$lines.Add('  Nessun oggetto presente nelle origini selezionate.') }
+        foreach ($target in $entry.Targets) {
+            [void]$lines.Add('  ' + $target.Source + ' | ' + $target.DomainController + ' | ID: ' + $target.Id)
+            if ($target.Source -eq 'AD') { [void]$lines.Add('    ' + $target.DistinguishedName) }
+            elseif ($target.Source -eq 'Intune') { [void]$lines.Add('    Windows | Seriale: ' + $target.SerialNumber + ' | DeviceId Entra: ' + $target.LinkId) }
+            else { [void]$lines.Add('    DeviceId: ' + $target.LinkId) }
+        }
+        [void]$lines.Add('')
+    }
+    $preview.Text = $lines -join [Environment]::NewLine
+    $buttons = New-Object Windows.Forms.FlowLayoutPanel; $buttons.Dock = 'Fill'; $buttons.FlowDirection = 'RightToLeft'
+    $cancel = New-Object Windows.Forms.Button; $cancel.Text = 'Annulla'; $cancel.Width = 100; $cancel.DialogResult = 'Cancel'
+    $confirm = New-Object Windows.Forms.Button; $confirm.Text = 'Elimina definitivamente'; $confirm.Width = 185; $confirm.DialogResult = 'OK'; $confirm.Enabled = $ready -gt 0
+    $buttons.Controls.AddRange(@($cancel, $confirm))
+    $panel.Controls.Add($intro, 0, 0); $panel.Controls.Add($preview, 0, 1); $panel.Controls.Add($buttons, 0, 2)
+    $dialog.Controls.Add($panel); $dialog.AcceptButton = $cancel; $dialog.CancelButton = $cancel
+    try { return $dialog.ShowDialog($form) -eq 'OK' }
+    finally { $dialog.Dispose() }
+}
+
+function Add-RemovalReportRow {
+    param($Result)
+    [void]$removalGrid.Rows.Add([object[]]@($Result.Name, $Result.Source, $Result.Destination, $Result.State, $Result.Id, $Result.Error))
+}
+
+function Start-RemovalOperation {
+    param([ValidateSet('PrepareRemoval', 'Remove')][string]$Operation, [string[]]$Names, [string[]]$Sources, [string]$PlanId)
+    try {
+        $script:Operation = $Operation; $script:Stopping = $false
+        $script:Queue = New-Object 'System.Collections.Concurrent.ConcurrentQueue[object]'
+        $script:Pipeline = [PowerShell]::Create(); $script:Pipeline.Runspace = $script:Worker
+        if ($Operation -eq 'Remove') {
+            $script:RemovalNeedsRefresh = $true
+            $script:RemovalCancellation = New-Object Threading.CancellationTokenSource
+            $removalGrid.Rows.Clear(); $tabs.SelectedTab = $removalTab
+        }
+        $workerCode = {
+            param($ModulePath, $OperationName, $Names, $Sources, $ConfigFile, $PlanId, $Queue, $Cancellation)
+            $ErrorActionPreference = 'Stop'
+            Import-Module $ModulePath -ErrorAction Stop
+            if ($OperationName -eq 'PrepareRemoval') {
+                New-ExplorerRemovalPlan -Names $Names -Sources $Sources -ConfigPath $ConfigFile -ProgressQueue $Queue
+            }
+            else { Invoke-ExplorerRemovalPlan -PlanId $PlanId -ProgressQueue $Queue -Cancellation $Cancellation -Confirm:$false }
+        }
+        [void]$script:Pipeline.AddScript($workerCode.ToString()).AddArgument((Join-Path $PSScriptRoot 'ComputerExplorer.Removal.psm1')).AddArgument($Operation).AddArgument($Names).AddArgument($Sources).AddArgument($ConfigPath).AddArgument($PlanId).AddArgument($script:Queue).AddArgument($script:RemovalCancellation)
+        $script:StartedAt = [datetime]::Now; $script:StageMessage = 'Verifica degli oggetti selezionati...'
+        if ($Operation -eq 'Remove') { $script:StageMessage = 'Eliminazione degli oggetti confermati...' }
+        Set-SearchBusy $true
+        $script:Invocation = $script:Pipeline.BeginInvoke(); $timer.Start()
+    }
+    catch {
+        if ($null -ne $script:Pipeline -and $null -eq $script:Invocation) { $script:Pipeline.Dispose(); $script:Pipeline = $null }
+        if ($null -ne $script:RemovalCancellation) { $script:RemovalCancellation.Dispose(); $script:RemovalCancellation = $null }
+        Set-SearchBusy $false
+        [void][Windows.Forms.MessageBox]::Show($form, $_.Exception.Message, 'Eliminazione', 'OK', 'Error')
+    }
+}
+
 function Show-SelectedComputer {
     if ($grid.SelectedRows.Count -eq 0 -or $null -eq $grid.SelectedRows[0].Tag) { $details.Clear(); return }
     $computer = $grid.SelectedRows[0].Tag
@@ -120,8 +249,8 @@ function Show-SelectedComputer {
 
 function Show-ExplorerSnapshot {
     param($Snapshot)
-    $selectedName = $null
-    if ($grid.SelectedRows.Count -gt 0 -and $null -ne $grid.SelectedRows[0].Tag) { $selectedName = $grid.SelectedRows[0].Tag.Name }
+    $selectedNames = @($grid.SelectedRows | Where-Object { $null -ne $_.Tag } | ForEach-Object { $_.Tag.Name })
+    $script:RenderingGrid = $true
     $script:Latest = $Snapshot
     $grid.SuspendLayout()
     try {
@@ -140,12 +269,13 @@ function Show-ExplorerSnapshot {
             }
         }
         $grid.ClearSelection()
-        if ($null -ne $selectedName) {
-            foreach ($row in $grid.Rows) { if ($row.Tag.Name -eq $selectedName) { $row.Selected = $true; break } }
+        foreach ($row in $grid.Rows) { if ($selectedNames -contains $row.Tag.Name) { $row.Selected = $true } }
+        foreach ($name in @('AD', 'ADLastModified', 'Entra', 'EntraLastActivity', 'Intune', 'IntuneLastCheckIn', 'GLPI', 'GlpiLastInventory')) {
+            $grid.AutoResizeColumn($grid.Columns[$name].Index, [Windows.Forms.DataGridViewAutoSizeColumnMode]::AllCells)
         }
-        if ($grid.SelectedRows.Count -eq 0 -and $grid.Rows.Count -gt 0) { $grid.Rows[0].Selected = $true }
     }
-    finally { $grid.ResumeLayout() }
+    finally { $grid.ResumeLayout(); $script:RenderingGrid = $false }
+    Update-ExplorerCounters
     $sourceGrid.Rows.Clear()
     foreach ($source in $Snapshot.Sources) {
         $date = ''
@@ -189,15 +319,18 @@ foreach ($name in @('AD', 'Entra', 'Intune', 'GLPI')) {
     if ($name -eq 'GLPI') { $check.Checked = [bool](Get-UiSetting $glpiSettings 'Enabled' $false) }
     $sourceChecks[$name] = $check; $options.Controls.Add($check)
 }
-$legend = New-Object Windows.Forms.Label; $legend.AutoSize = $true
-$legend.Text = 'Verde: presenza regolare   Giallo: parziale / duplicati   Rosso: assente   Grigio / ?: non verificato'
-$legend.Margin = New-Object Windows.Forms.Padding(16, 5, 0, 0); $options.Controls.Add($legend)
+$counterLabel = New-Object Windows.Forms.Label; $counterLabel.AutoSize = $true
+$counterLabel.Text = 'Risultati: 0 | Selezionati: 0'; $counterLabel.Margin = New-Object Windows.Forms.Padding(20, 5, 12, 0)
+$options.Controls.Add($counterLabel)
+$deleteButton = New-Object Windows.Forms.Button; $deleteButton.Text = 'Elimina...'; $deleteButton.Width = 100; $deleteButton.Enabled = $false
+$options.Controls.Add($deleteButton)
 $splitter = New-Object Windows.Forms.SplitContainer
 $splitter.Dock = 'Fill'; $splitter.Orientation = 'Horizontal'
 $splitter.Size = New-Object Drawing.Size(1300, 650); $splitter.SplitterDistance = 390
 $grid = New-Object Windows.Forms.DataGridView
 $grid.Dock = 'Fill'; $grid.ReadOnly = $true; $grid.AllowUserToAddRows = $false; $grid.AllowUserToDeleteRows = $false
-$grid.SelectionMode = 'FullRowSelect'; $grid.MultiSelect = $false; $grid.RowHeadersVisible = $false
+$grid.SelectionMode = 'FullRowSelect'; $grid.MultiSelect = $true; $grid.RowHeadersVisible = $false
+$grid.ColumnHeadersDefaultCellStyle.WrapMode = 'False'
 $grid.AutoSizeRowsMode = 'None'; $grid.BackgroundColor = [Drawing.Color]::White
 foreach ($column in @(
     @('Name', 'Nome computer', 180), @('AD', 'AD', 50), @('ADLastModified', 'Modifica AD', 135),
@@ -223,6 +356,14 @@ $grid.Columns['GlpiLastInventory'].ToolTipText += ' Data inventario GLPI; non è
 $tabs = New-Object Windows.Forms.TabControl; $tabs.Dock = 'Fill'
 $detailTab = New-Object Windows.Forms.TabPage; $detailTab.Text = 'Dettaglio del computer'
 $sourceTab = New-Object Windows.Forms.TabPage; $sourceTab.Text = 'Stato fonti e orari'
+$removalTab = New-Object Windows.Forms.TabPage; $removalTab.Text = 'Esiti eliminazione'
+$removalGrid = New-Object Windows.Forms.DataGridView
+$removalGrid.Dock = 'Fill'; $removalGrid.ReadOnly = $true; $removalGrid.AllowUserToAddRows = $false
+$removalGrid.AllowUserToDeleteRows = $false; $removalGrid.RowHeadersVisible = $false; $removalGrid.BackgroundColor = [Drawing.Color]::White
+foreach ($column in @(@('Computer', 190), @('Origine', 75), @('Destinazione / DC', 180), @('Esito', 100), @('Identificativo', 280), @('Errore', 500))) {
+    $index = $removalGrid.Columns.Add($column[0], $column[0]); $removalGrid.Columns[$index].Width = [int]$column[1]
+}
+$removalTab.Controls.Add($removalGrid)
 $details = New-Object Windows.Forms.RichTextBox; $details.Dock = 'Fill'; $details.ReadOnly = $true
 $details.WordWrap = $false; $details.Font = New-Object Drawing.Font('Consolas', 9)
 $sourceGrid = New-Object Windows.Forms.DataGridView
@@ -231,10 +372,10 @@ $sourceGrid.AllowUserToDeleteRows = $false; $sourceGrid.RowHeadersVisible = $fal
 foreach ($column in @(@('Fonte', 90), @('Esito', 100), @('Record', 75), @('Aggiornamento', 170), @('Cache', 65), @('Errore / informazioni', 740))) {
     $index = $sourceGrid.Columns.Add($column[0], $column[0]); $sourceGrid.Columns[$index].Width = [int]$column[1]
 }
-$detailTab.Controls.Add($details); $sourceTab.Controls.Add($sourceGrid); $tabs.TabPages.AddRange(@($detailTab, $sourceTab))
+$detailTab.Controls.Add($details); $sourceTab.Controls.Add($sourceGrid); $tabs.TabPages.AddRange(@($detailTab, $sourceTab, $removalTab))
 $splitter.Panel1.Controls.Add($grid); $splitter.Panel2.Controls.Add($tabs)
 $status = New-Object Windows.Forms.Label; $status.Dock = 'Fill'; $status.AutoEllipsis = $true
-$status.Text = 'Inserire almeno ' + $config.MinimumCharacters + ' caratteri. Ricerca di consultazione.'
+$status.Text = 'Inserire almeno ' + $config.MinimumCharacters + ' caratteri. Ctrl+clic o Maiusc+clic per selezionare più computer.'
 $layout.Controls.Add($toolbar, 0, 0); $layout.Controls.Add($options, 0, 1)
 $layout.Controls.Add($splitter, 0, 2); $layout.Controls.Add($status, 0, 3); $form.Controls.Add($layout)
 $form.AcceptButton = $searchButton
@@ -245,11 +386,15 @@ $script:Worker = [RunspaceFactory]::CreateRunspace()
 $script:Worker.ApartmentState = 'STA'; $script:Worker.ThreadOptions = 'ReuseThread'; $script:Worker.Open()
 $script:Pipeline = $null; $script:Invocation = $null; $script:Queue = $null
 $script:Latest = $null; $script:GlpiCredentials = $null; $script:CloseRequested = $false
+$script:Operation = 'Search'; $script:Busy = $false; $script:RenderingGrid = $false; $script:RemovalNeedsRefresh = $false
+$script:RemovalCancellation = $null; $script:LastQuery = ''
 $script:Stopping = $false; $script:StageMessage = ''; $script:StartedAt = [datetime]::Now
 $timer = New-Object Windows.Forms.Timer; $timer.Interval = 200
 
 function Set-SearchBusy {
     param([bool]$Busy)
+    $script:Busy = $Busy
+    Update-ExplorerCounters
     $searchButton.Enabled = -not $Busy; $nameBox.Enabled = -not $Busy; $tokensButton.Enabled = -not $Busy
     $forceRefresh.Enabled = -not $Busy; $cancelButton.Enabled = $Busy
     foreach ($check in $sourceChecks.Values) { $check.Enabled = -not $Busy }
@@ -258,8 +403,14 @@ function Set-SearchBusy {
 function Stop-ExplorerSearch {
     if ($null -eq $script:Pipeline -or $script:Stopping) { return }
     $script:Stopping = $true; $cancelButton.Enabled = $false
-    $script:StageMessage = 'Interruzione della ricerca...'
-    [void]$script:Pipeline.BeginStop($null, $null)
+    if ($script:Operation -eq 'Remove') {
+        $script:RemovalCancellation.Cancel()
+        $script:StageMessage = 'Interruzione richiesta: termino il computer corrente...'
+    }
+    else {
+        $script:StageMessage = 'Interruzione della verifica...'
+        [void]$script:Pipeline.BeginStop($null, $null)
+    }
 }
 
 $searchButton.Add_Click({
@@ -276,7 +427,8 @@ $searchButton.Add_Click({
             if ($null -eq $script:GlpiCredentials) { $script:GlpiCredentials = Read-GlpiCredentials $useAppToken }
             if ($null -eq $script:GlpiCredentials) { return }
         }
-        $grid.Rows.Clear(); $sourceGrid.Rows.Clear(); $details.Clear(); $script:Latest = $null
+        $script:Operation = 'Search'; $script:LastQuery = $nameBox.Text.Trim()
+        $script:Latest = $null; $grid.Rows.Clear(); $sourceGrid.Rows.Clear(); $details.Clear(); Update-ExplorerCounters
         $script:Queue = New-Object 'System.Collections.Concurrent.ConcurrentQueue[object]'
         $script:Pipeline = [PowerShell]::Create(); $script:Pipeline.Runspace = $script:Worker
         $workerScript = {
@@ -311,44 +463,75 @@ $tokensButton.Add_Click({
     }
     catch { [void][Windows.Forms.MessageBox]::Show($form, $_.Exception.Message, 'GLPI', 'OK', 'Error') }
 })
+$deleteButton.Add_Click({
+    try {
+        $names = @($grid.SelectedRows | Where-Object { $null -ne $_.Tag } | ForEach-Object { $_.Tag.Name } | Sort-Object -Unique)
+        if ($names.Count -eq 0 -or $script:Busy -or $script:RemovalNeedsRefresh) { return }
+        $sources = Show-RemovalSources $names
+        if ($null -eq $sources) { return }
+        Start-RemovalOperation -Operation 'PrepareRemoval' -Names $names -Sources $sources
+    }
+    catch { [void][Windows.Forms.MessageBox]::Show($form, $_.Exception.Message, 'Elimina', 'OK', 'Error') }
+})
 $cancelButton.Add_Click({ Stop-ExplorerSearch })
-$grid.Add_SelectionChanged({ if ($null -ne $script:Latest) { Show-SelectedComputer } })
+$grid.Add_SelectionChanged({ if (-not $script:RenderingGrid) { Update-ExplorerCounters; if ($null -ne $script:Latest) { Show-SelectedComputer } } })
 $timer.Add_Tick({
     try {
         $update = $null
-        while ($script:Queue.TryDequeue([ref]$update)) { Show-ExplorerSnapshot $update }
+        while ($script:Queue.TryDequeue([ref]$update)) {
+            if ($script:Operation -eq 'Search') { Show-ExplorerSnapshot $update }
+            else {
+                $script:StageMessage = $update.Message
+                if ($null -ne $update.Result) { Add-RemovalReportRow $update.Result }
+            }
+        }
         if (-not $script:Invocation.IsCompleted) {
-            $elapsed = [int]([datetime]::Now - $script:StartedAt).TotalSeconds
-            $status.Text = '{0} | {1}s' -f $script:StageMessage, $elapsed
+            $status.Text = '{0} | {1}s' -f $script:StageMessage, ([int]([datetime]::Now - $script:StartedAt).TotalSeconds)
             return
         }
+        $finishedOperation = $script:Operation
+        $output = @(); $failed = $false
         try {
-            $null = $script:Pipeline.EndInvoke($script:Invocation)
+            $output = @($script:Pipeline.EndInvoke($script:Invocation))
             if ($script:Pipeline.Streams.Error.Count -gt 0) { throw $script:Pipeline.Streams.Error[0] }
             if ($script:Pipeline.Streams.Warning.Count -gt 0) { $status.Text += ' | Avviso: ' + $script:Pipeline.Streams.Warning[0].Message }
+            if ($finishedOperation -eq 'Search') { $script:RemovalNeedsRefresh = $false }
         }
         catch {
-            $message = $_.Exception.Message
-            if ($script:Stopping) { $message = 'Ricerca interrotta. Le fonti ancora in attesa non sono state verificate.' }
-            if ($null -ne $script:Latest) {
+            $failed = $true; $message = $_.Exception.Message
+            if ($script:Stopping) { $message = 'Operazione interrotta. Le verifiche ancora in attesa non sono complete.' }
+            if ($null -ne $script:Latest -and $finishedOperation -eq 'Search') {
                 foreach ($source in $script:Latest.Sources) {
                     if ($source.State -eq 'In attesa') { $source.State = 'Interrotta'; $source.Error = $message }
                 }
                 Show-ExplorerSnapshot $script:Latest
             }
             $status.Text = $message
-            if (-not $script:Stopping) { [void][Windows.Forms.MessageBox]::Show($form, $message, 'Ricerca', 'OK', 'Error') }
+            if (-not $script:Stopping) { [void][Windows.Forms.MessageBox]::Show($form, $message, 'Computer Explorer', 'OK', 'Error') }
         }
         finally {
             $timer.Stop(); $script:Pipeline.Dispose(); $script:Pipeline = $null; $script:Invocation = $null
+            if ($null -ne $script:RemovalCancellation) { $script:RemovalCancellation.Dispose(); $script:RemovalCancellation = $null }
             Set-SearchBusy $false
         }
-        if ($script:CloseRequested) { $form.Close() }
+        if ($script:CloseRequested) { $form.Close(); return }
+        if (-not $failed -and $finishedOperation -eq 'PrepareRemoval' -and $output.Count -eq 1) {
+            if (Show-RemovalPreview $output[0]) { Start-RemovalOperation -Operation 'Remove' -PlanId $output[0].PlanId }
+        }
+        elseif ($finishedOperation -eq 'Remove') {
+            $tabs.SelectedTab = $removalTab
+            if (-not $failed -and $output.Count -eq 1) {
+                $status.Text = 'Eliminazione terminata: {0} oggetti eliminati, {1} errori/blocchi. Esiti nella scheda dedicata.' -f $output[0].Deleted, $output[0].Failed
+            }
+            if (-not $failed -and -not $script:Stopping) {
+                $nameBox.Text = $script:LastQuery; $forceRefresh.Checked = $true
+                $searchButton.PerformClick()
+                $tabs.SelectedTab = $removalTab
+            }
+        }
+        Update-ExplorerCounters
     }
-    catch {
-        $status.Text = 'Errore nella visualizzazione: ' + $_.Exception.Message
-        Stop-ExplorerSearch
-    }
+    catch { $status.Text = 'Errore nella visualizzazione: ' + $_.Exception.Message; Stop-ExplorerSearch }
 })
 $form.Add_FormClosing({
     param($sender, $eventArgs)

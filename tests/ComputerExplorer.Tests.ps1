@@ -62,6 +62,12 @@ try {
         if ($script:Fixture.Logins.Count -ne 1) { throw 'Application authentication replaced.' }
         'PASS: existing app-only session retained.'
         $script:Context.AuthType='Delegated'
+        $script:Context.Scopes=@('Device.Read.All','DeviceManagementManagedDevices.Read.All')
+        Connect-ExplorerGraph -Sources Entra,Intune -ForRemoval
+        $writeLogin=$script:Fixture.Logins[-1]
+        if ($writeLogin.Scopes -notcontains 'Directory.AccessAsUser.All' -or $writeLogin.Scopes -notcontains 'DeviceManagementManagedDevices.ReadWrite.All') { throw 'Removal accepted read-only scopes.' }
+        'PASS: removal requests the existing project write permissions when the session is read-only.'
+        $script:Context.Scopes=@('Directory.AccessAsUser.All','DeviceManagementManagedDevices.ReadWrite.All')
 
         $first=Get-ExplorerCloudInventory -Source Entra
         if ($first.Records.Count -ne 2 -or $first.FromCache -or $script:Fixture.Calls.Count -ne 2) { throw 'Pages not fully collected or duplicate not removed.' }

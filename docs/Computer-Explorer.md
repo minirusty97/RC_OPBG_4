@@ -6,7 +6,7 @@ Aggiornamento: 15 ottobre 2026. Branch: `feature/computer-explorer`.
 
 `Start-ComputerExplorer.ps1` è la prima interfaccia Windows Forms per la ricerca aggregata AD / Entra ID / Intune / GLPI. `ComputerExplorer.Core.psm1` gestisce raccolte cloud, cache, aggregazione e aggiornamenti del worker. Riutilizza `Test-AdLookup.ps1 -PassThru` per AD e `GLPI.Inventory.psm1` per GLPI.
 
-La console svolge consultazione. La rimozione resta nel tool esistente `Remove-Computer-FullTool.ps1`; sarà collegata al dettaglio selezionato dopo la verifica della nuova ricerca nell'ambiente aziendale.
+La console permette la rimozione delle righe selezionate da AD, Entra e Intune tramite `ComputerExplorer.Removal.psm1`. GLPI resta in consultazione. Il tool precedente `Remove-Computer-FullTool.ps1` rimane disponibile.
 
 ## Ricerca e associazioni
 
@@ -65,7 +65,7 @@ Comandi di avvio e test: vedere [README](../README.md).
 
 1. Verificare sul PC aziendale le quattro date aggiunte accanto alle presenze.
 2. Rifinire tempi, colonne e regole di associazione usando i casi reali e concordare profili/entità GLPI.
-3. Collegare le azioni di rimozione agli oggetti selezionati, rileggendo gli ID e mostrando un riepilogo prima della conferma.
+3. Rifinire il flusso di rimozione dopo la prova controllata nell'ambiente aziendale.
 
 Ordine previsto per la rimozione: Intune, AD, Entra. GLPI rimane una fonte di consultazione. La cancellazione di una registrazione Windows da Intune avvia anche il ritiro dalla gestione, come già indicato nel tool esistente.
 
@@ -81,3 +81,22 @@ Campi data verificati sulle fonti ufficiali:
 
 - [GLPI 10.0.11 Computer: last_inventory_update](https://github.com/glpi-project/glpi/blob/10.0.11/src/Computer.php)
 - [AD whenChanged](https://learn.microsoft.com/en-us/windows/win32/adschema/a-whenchanged)
+
+## Rimozione dalla griglia
+
+La legenda superiore è rimossa. Le colonne AD, Modifica AD, Entra ID, Attività Entra, Intune, Check-in Intune, GLPI e Inventario GLPI vengono dimensionate sui valori formattati e sulle intestazioni. I contatori **Risultati** e **Selezionati** sono sempre visibili.
+
+Selezionare una o più righe con Ctrl+clic o Maiusc+clic, quindi premere **Elimina...**. La finestra delle origini propone **AD, Entra e Intune già spuntati**; si possono deselezionare le origini da mantenere. GLPI non è selezionabile per la rimozione.
+
+**Verifica oggetti** rilegge i nomi completi senza usare la cache, verifica tutti i DC selezionati e mostra gli ID esatti nell'anteprima. Solo **Elimina definitivamente** avvia la rimozione. La cancellazione di una registrazione Windows in Intune avvia anche il ritiro dalla gestione.
+
+Il piano vale cinque minuti, viene consumato una sola volta ed è legato alla sessione Graph. Gli ID, i nomi e gli altri dati di identità vengono ricontrollati prima delle scritture e immediatamente prima di ogni eliminazione. Oggetti nuovi o modificati dopo l'anteprima bloccano quel computer. Le duplicazioni dello stesso nome sono mostrate e incluse nell'anteprima; nomi soltanto simili e altre piattaforme Intune sono esclusi.
+
+L'ordine è **Intune → AD sui DC → Entra**. Un errore blocca le operazioni successive per quel computer; gli altri computer proseguono. Le assenze già confermate, anche dovute alla replica AD, sono indicate come **Già assente**. Gli esiti per oggetto sono nella scheda **Esiti eliminazione**. Dopo il completamento la ricerca viene aggiornata con rilettura cloud.
+
+**Interrompi** durante una cancellazione termina il computer corrente e salta quelli successivi. Dopo un'interruzione o un errore generale, eseguire una nuova ricerca prima di un'altra eliminazione. La chiusura normale della finestra attende lo stesso arresto.
+
+Il modulo `ComputerExplorer.Removal.psm1` espone preparazione e applicazione del piano. Supporta `-WhatIf` per eseguire le verifiche senza cancellare.
+
+
+Il workflow `.github/workflows/powershell-checks.yml` esegue parser e test su Windows. Le nuove prove coprono ordine di rimozione, ID separati, preflight completo, nuove identità, cambi di nome/seriale, 404, replica AD, errori isolati per computer, origini escluse, WhatIf, piani scaduti o riusati, annullamento e integrità del piano. Lo smoke test costruisce i controlli WinForms, senza collegarsi alle fonti aziendali.

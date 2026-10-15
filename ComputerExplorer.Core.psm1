@@ -73,7 +73,7 @@ function Read-ExplorerConfiguration {
 
 function Connect-ExplorerGraph {
     [CmdletBinding()]
-    param([string[]]$Sources)
+    param([string[]]$Sources, [switch]$ForRemoval)
     try { Import-Module Microsoft.Graph.Authentication -ErrorAction Stop }
     catch { throw ('Modulo Microsoft.Graph.Authentication non caricabile. Verificare il modulo nella stessa versione di PowerShell usata per avviare la console. Dettaglio: ' + $_.Exception.Message) }
     $context = Get-MgContext -ErrorAction SilentlyContinue
@@ -85,11 +85,14 @@ function Connect-ExplorerGraph {
     if ($null -ne $context -and (Get-ExplorerValue $context 'AuthType') -eq 'AppOnly') { return }
     $scopes = Get-ExplorerValue $context 'Scopes' @()
     $required = New-Object 'System.Collections.Generic.List[string]'
+    $entraScopes = @('Device.Read.All', 'Device.ReadWrite.All', 'Directory.Read.All', 'Directory.ReadWrite.All', 'Directory.AccessAsUser.All')
+    $intuneScopes = @('DeviceManagementManagedDevices.Read.All', 'DeviceManagementManagedDevices.ReadWrite.All')
+    if ($ForRemoval) { $entraScopes = @('Directory.AccessAsUser.All'); $intuneScopes = @('DeviceManagementManagedDevices.ReadWrite.All') }
     if ($Sources -contains 'Entra' -and @($scopes | Where-Object {
-        $_ -in @('Device.Read.All', 'Device.ReadWrite.All', 'Directory.Read.All', 'Directory.ReadWrite.All', 'Directory.AccessAsUser.All')
+        $_ -in $entraScopes
     }).Count -eq 0) { [void]$required.Add('Directory.AccessAsUser.All') }
     if ($Sources -contains 'Intune' -and @($scopes | Where-Object {
-        $_ -in @('DeviceManagementManagedDevices.Read.All', 'DeviceManagementManagedDevices.ReadWrite.All')
+        $_ -in $intuneScopes
     }).Count -eq 0) { [void]$required.Add('DeviceManagementManagedDevices.ReadWrite.All') }
     if ($null -eq $context -or $required.Count -gt 0) {
         # Mantiene gli ambiti già autorizzati dall'utente nel tool di rimozione.
@@ -417,4 +420,6 @@ function Invoke-ComputerExplorerSearch {
     Send-ExplorerUpdate $sources $controllers 'Ricerca completata.' $ProgressQueue -Complete
 }
 
-Export-ModuleMember -Function Read-ExplorerConfiguration, Invoke-ComputerExplorerSearch, Merge-ExplorerResults, Format-ExplorerDate, Read-ExplorerGlpiCredentials
+function Clear-ExplorerCloudCache { $script:CloudCache.Clear() }
+
+Export-ModuleMember -Function Connect-ExplorerGraph, Get-ExplorerGraphCollection, Clear-ExplorerCloudCache, Read-ExplorerConfiguration, Invoke-ComputerExplorerSearch, Merge-ExplorerResults, Format-ExplorerDate, Read-ExplorerGlpiCredentials

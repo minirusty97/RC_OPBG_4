@@ -26,7 +26,7 @@ Le date usano il formato `dd/MM/yyyy HH:mm` e si ordinano cronologicamente. Con 
 
 Le date Graph con offset vengono convertite nell'ora locale del PC. GLPI restituisce normalmente una data senza offset: viene conservato l'orario del server. La data AD è propria di ciascun DC e può differire fra le repliche. Queste colonne riportano gli eventi del dispositivo; la scheda **Stato fonti e orari** continua a riportare l'orario della lettura eseguita dalla console.
 
-La console svolge consultazione. Le azioni di rimozione rimangono nel file `Remove-Computer-FullTool.ps1`; il loro collegamento agli ID selezionati è la fase successiva.
+La console permette ora anche la rimozione delle righe selezionate da AD, Entra e Intune. GLPI rimane una fonte di consultazione. Il file `Remove-Computer-FullTool.ps1` resta disponibile come tool precedente.
 
 ### Avvio sul PC Windows
 
@@ -74,13 +74,31 @@ L'App token può restare vuoto quando `Glpi.UseAppToken` è `false`. Il file `.e
 
 Il caricamento automatico è disponibile nella finestra e in `Test-GlpiLookup.ps1`. Una volta letti, i token vengono conservati come SecureString in memoria. Dopo aver modificato il `.env`, chiudere e riaprire la finestra. Gli inserimenti manuali non modificano il file.
 
+### Selezione ed eliminazione
+
+La legenda superiore è rimossa. Le colonne AD, Modifica AD, Entra ID, Attività Entra, Intune, Check-in Intune, GLPI e Inventario GLPI vengono dimensionate sui valori formattati e sulle intestazioni. I contatori **Risultati** e **Selezionati** sono sempre visibili.
+
+Selezionare una o più righe con Ctrl+clic o Maiusc+clic, quindi premere **Elimina...**. La finestra delle origini propone **AD, Entra e Intune già spuntati**; si possono deselezionare le origini da mantenere. GLPI non è selezionabile per la rimozione.
+
+**Verifica oggetti** rilegge i nomi completi senza usare la cache, verifica tutti i DC selezionati e mostra gli ID esatti nell'anteprima. Solo **Elimina definitivamente** avvia la rimozione. La cancellazione di una registrazione Windows in Intune avvia anche il ritiro dalla gestione.
+
+Il piano vale cinque minuti, viene consumato una sola volta ed è legato alla sessione Graph. Gli ID, i nomi e gli altri dati di identità vengono ricontrollati prima delle scritture e immediatamente prima di ogni eliminazione. Oggetti nuovi o modificati dopo l'anteprima bloccano quel computer. Le duplicazioni dello stesso nome sono mostrate e incluse nell'anteprima; nomi soltanto simili e altre piattaforme Intune sono esclusi.
+
+L'ordine è **Intune → AD sui DC → Entra**. Un errore blocca le operazioni successive per quel computer; gli altri computer proseguono. Le assenze già confermate, anche dovute alla replica AD, sono indicate come **Già assente**. Gli esiti per oggetto sono nella scheda **Esiti eliminazione**. Dopo il completamento la ricerca viene aggiornata con rilettura cloud.
+
+**Interrompi** durante una cancellazione termina il computer corrente e salta quelli successivi. Dopo un'interruzione o un errore generale, eseguire una nuova ricerca prima di un'altra eliminazione. La chiusura normale della finestra attende lo stesso arresto.
+
+Il modulo `ComputerExplorer.Removal.psm1` espone preparazione e applicazione del piano. Supporta `-WhatIf` per eseguire le verifiche senza cancellare.
+
 ### Verifiche eseguite
 
-Il parser PowerShell e 65 casi automatici sono passati in PowerShell 7.4.19: 28 per cloud, aggregazione, date e worker, 12 AD, 18 GLPI e 7 per il caricamento delle credenziali dal `.env`. La suite cloud/date è passata anche con fuso Europe/Rome. I test usano dati sintetici e API simulate; includono paginazione, errori senza risultati parziali, cache, duplicati, conflitti e annullamento.
+Il workflow GitHub Actions verifica parser e suite su Windows PowerShell 5.1 a ogni push. I test usano dati sintetici e API simulate: cloud, AD, GLPI, date, file `.env`, rimozioni ed errori. Lo smoke test WinForms costruisce la finestra e verifica selezione, contatori e dimensioni delle colonne senza effettuare ricerche o eliminazioni aziendali. Le verifiche precedenti sono passate anche in PowerShell 7.4.19; la suite cloud/date è stata provata con fuso Europe/Rome.
 
 ```powershell
 .\tests\ComputerExplorer.Tests.ps1
 .\tests\Glpi.Credentials.Tests.ps1
+.\tests\ComputerExplorer.Removal.Tests.ps1
+.\tests\ComputerExplorer.UI.Tests.ps1
 .\tests\AD.Lookup.Tests.ps1
 .\tests\GLPI.Inventory.Tests.ps1
 ```
@@ -203,5 +221,5 @@ Questi test coprono presenza su tutti o alcuni DC, DC indisponibile, nessun risu
 
 ## Sviluppi previsti
 
-Verificare la console sul PC aziendale, rifinire le associazioni fra sorgenti e collegare la rimozione agli ID selezionati dopo una nuova verifica. La scelta del contesto entità/profilo GLPI resta da progettare; oggi si usa quello predefinito dell'utente API.
+Verificare i nuovi comandi sul PC aziendale e rifinire le associazioni fra sorgenti. La scelta del contesto entità/profilo GLPI resta da progettare; oggi si usa quello predefinito dell'utente API.
 
