@@ -42,7 +42,7 @@ try {
     foreach ($name in @('AD', 'ADLastModified', 'Entra', 'EntraLastActivity', 'Intune', 'IntuneLastCheckIn', 'GLPI', 'GlpiLastInventory')) {
         $column = $grid.Columns[$name]
         $preferred = $column.GetPreferredWidth([Windows.Forms.DataGridViewAutoSizeColumnMode]::AllCells, $true)
-        if ($column.Width -ne $preferred) { throw ('Column does not fit formatted cells and header: ' + $name) }
+        if ($column.Width -ne $preferred) { throw ('Column does not fit formatted cells and header: {0}; width={1}, preferred={2}' -f $name, $column.Width, $preferred) }
     }
     'PASS: all eight source/date columns fit native formatted content and headers.'
     Set-SearchBusy $true

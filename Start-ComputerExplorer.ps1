@@ -270,11 +270,12 @@ function Show-ExplorerSnapshot {
         }
         $grid.ClearSelection()
         foreach ($row in $grid.Rows) { if ($selectedNames -contains $row.Tag.Name) { $row.Selected = $true } }
-        foreach ($name in @('AD', 'ADLastModified', 'Entra', 'EntraLastActivity', 'Intune', 'IntuneLastCheckIn', 'GLPI', 'GlpiLastInventory')) {
-            $grid.AutoResizeColumn($grid.Columns[$name].Index, [Windows.Forms.DataGridViewAutoSizeColumnMode]::AllCells)
-        }
     }
     finally { $grid.ResumeLayout(); $script:RenderingGrid = $false }
+    foreach ($name in @('AD', 'ADLastModified', 'Entra', 'EntraLastActivity', 'Intune', 'IntuneLastCheckIn', 'GLPI', 'GlpiLastInventory')) {
+        $column = $grid.Columns[$name]
+        $column.Width = $column.GetPreferredWidth([Windows.Forms.DataGridViewAutoSizeColumnMode]::AllCells, $true)
+    }
     Update-ExplorerCounters
     $sourceGrid.Rows.Clear()
     foreach ($source in $Snapshot.Sources) {
@@ -522,6 +523,7 @@ $timer.Add_Tick({
             $tabs.SelectedTab = $removalTab
             if (-not $failed -and $output.Count -eq 1) {
                 $status.Text = 'Eliminazione terminata: {0} oggetti eliminati, {1} errori/blocchi. Esiti nella scheda dedicata.' -f $output[0].Deleted, $output[0].Failed
+                if ($script:Stopping) { $status.Text = 'Eliminazione interrotta dopo il computer corrente. Consultare gli esiti e ripetere la ricerca.' }
             }
             if (-not $failed -and -not $script:Stopping) {
                 $nameBox.Text = $script:LastQuery; $forceRefresh.Checked = $true
