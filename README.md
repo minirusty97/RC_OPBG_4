@@ -2,7 +2,21 @@
 
 Script PowerShell per cercare computer in Active Directory, Microsoft Entra ID, Microsoft Intune e GLPI, e per gestire la rimozione con il tool esistente.
 
-## Computer Explorer: prima console di ricerca
+## OPBG IT Suite: installazione e distribuzione
+
+La versione funzionante di Computer Explorer è integrata in `main`. La suite aggiunge un punto di avvio comune e un installer per utente, predisposto per ospitare altri moduli di gestione Intune.
+
+I colleghi autorizzati al repository privato scaricano il file **OPBG-IT-Suite-Setup-VERSIONE.exe** da [Releases](https://github.com/minirusty97/RC_OPBG_4/releases/latest), installano e aprono **OPBG IT Suite**. Da **Impostazioni** configurano GLPI e i DC; Graph è incluso nel setup. Per AD serve RSAT/ActiveDirectory sul PC.
+
+Configurazione e `.env` personali restano in `%LOCALAPPDATA%\OPBG\ITSuite\Config`, separati dal programma e conservati durante gli aggiornamenti. I colleghi non devono installare Git. Il workflow costruisce e prova il setup, quindi pubblica una nuova release dopo il merge in `main` quando aumenta `Version` in `suite.json`.
+
+Vedere [installazione, aggiornamenti, build e nuovi moduli](docs/Installazione-Suite.md). Per avviare la suite dai sorgenti:
+
+```powershell
+powershell.exe -NoProfile -STA -File .\Start-ITSuite.ps1
+```
+
+## Computer Explorer: console di ricerca
 
 `Start-ComputerExplorer.ps1` apre una finestra con ricerca per frammento, griglia colorata e dettaglio degli oggetti. Usa i cinque DC configurati e riunisce tutti i nomi trovati in AD, Entra, Intune Windows e GLPI. Un nome presente in una sola fonte compare comunque nella lista.
 

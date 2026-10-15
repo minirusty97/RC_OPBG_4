@@ -1,6 +1,9 @@
 ﻿#requires -version 5.1
 [CmdletBinding()]
-param([string]$ConfigPath = (Join-Path $PSScriptRoot 'computer-explorer.config.local.json'))
+param(
+    [string]$ConfigPath = (Join-Path $PSScriptRoot 'computer-explorer.config.local.json'),
+    [string]$EnvPath = (Join-Path $PSScriptRoot '.env')
+)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
@@ -424,7 +427,7 @@ $searchButton.Add_Click({
         $glpiSettings = Get-UiSetting $config.Settings 'Glpi' $null
         if ($enabled -contains 'GLPI' -and [bool](Get-UiSetting $glpiSettings 'Enabled' $false) -and $null -eq $script:GlpiCredentials) {
             $useAppToken = [bool](Get-UiSetting $glpiSettings 'UseAppToken' $true)
-            $script:GlpiCredentials = Read-ExplorerGlpiCredentials -Path (Join-Path $PSScriptRoot '.env') -UseAppToken $useAppToken
+            $script:GlpiCredentials = Read-ExplorerGlpiCredentials -Path $EnvPath -UseAppToken $useAppToken
             if ($null -eq $script:GlpiCredentials) { $script:GlpiCredentials = Read-GlpiCredentials $useAppToken }
             if ($null -eq $script:GlpiCredentials) { return }
         }

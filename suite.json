@@ -1,0 +1,16 @@
+{
+  "SchemaVersion": 1,
+  "Product": "OPBG IT Suite",
+  "Version": "1.0.0",
+  "ReleasesUrl": "https://github.com/minirusty97/RC_OPBG_4/releases/latest",
+  "GraphVersion": "2.41.1",
+  "Modules": [
+    {
+      "Id": "computer-explorer",
+      "Name": "Computer Explorer",
+      "Description": "Ricerca e gestione dispositivi in AD, Entra ID, Intune e GLPI.",
+      "EntryPoint": "Start-ComputerExplorer.ps1",
+      "UsesSuiteSettings": true
+    }
+  ]
+}

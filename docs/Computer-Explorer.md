@@ -1,6 +1,6 @@
 # Computer Explorer — console di ricerca
 
-Aggiornamento: 15 ottobre 2026. Branch: `feature/computer-explorer`.
+Aggiornamento: 15 ottobre 2026. Versione funzionale integrata in `main`.
 
 ## Fase attuale
 
