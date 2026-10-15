@@ -5,7 +5,7 @@ $ErrorActionPreference='Stop'
 Set-StrictMode -Version 2.0
 if ($env:GITHUB_EVENT_NAME -ne 'push' -or $env:GITHUB_REF -ne 'refs/heads/main') { throw 'La pubblicazione richiede un push su main.' }
 $root=Split-Path $PSScriptRoot -Parent
-$manifest=Get-Content -LiteralPath (Join-Path $root 'suite.json') -Raw | ConvertFrom-Json
+$manifest=Get-Content -LiteralPath (Join-Path $root 'assistente-it.json') -Raw | ConvertFrom-Json
 $version=[string]$manifest.Version
 if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Versione di rilascio non valida.' }
 $tag='v'+$version

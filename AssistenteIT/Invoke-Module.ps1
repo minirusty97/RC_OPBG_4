@@ -6,14 +6,14 @@ $activity = $null
 try {
     Add-Type -AssemblyName System.Windows.Forms
     $root = Split-Path $PSScriptRoot -Parent
-    Import-Module (Join-Path $PSScriptRoot 'Suite.Core.psm1') -ErrorAction Stop
-    $activity = Open-ITSuiteActivity
-    Enable-ITSuiteDependencies $root
-    $manifest = Read-ITSuiteManifest $root
+    Import-Module (Join-Path $PSScriptRoot 'AssistenteIT.Core.psm1') -ErrorAction Stop
+    $activity = Open-AssistenteITActivity
+    Enable-AssistenteITDependencies $root
+    $manifest = Read-AssistenteITManifest $root
     $module = @($manifest.Modules | Where-Object { $_.Id -eq $ModuleId })
     if ($module.Count -ne 1) { throw 'Modulo non disponibile.' }
     $arguments = @{}
-    if ($module[0].UsesSuiteSettings) { $arguments.ConfigPath=$ConfigPath; $arguments.EnvPath=$EnvPath }
+    if ($module[0].UsesAppSettings) { $arguments.ConfigPath=$ConfigPath; $arguments.EnvPath=$EnvPath }
     & (Join-Path $root $module[0].EntryPoint) @arguments
 }
 catch {

@@ -1,6 +1,6 @@
 Assistente IT - componenti di terze parti
 
-Microsoft.Graph.Authentication, versione indicata in suite.json
+Microsoft.Graph.Authentication, versione indicata in assistente-it.json
 Copyright (c) Microsoft Corporation. All rights reserved.
 Progetto: https://github.com/microsoftgraph/msgraph-sdk-powershell
 Licenza: MIT

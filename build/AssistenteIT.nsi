@@ -1,8 +1,9 @@
-Unicode true
+﻿Unicode true
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
 !include "WordFunc.nsh"
 !include "x64.nsh"
+!include "FileFunc.nsh"
 !ifndef APP_VERSION
   !error "APP_VERSION is required"
 !endif
@@ -13,12 +14,12 @@ Unicode true
   !error "OUTPUT_FILE is required"
 !endif
 !define PRODUCT "Assistente IT"
-!define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\OPBGITSuite"
-!define MARKER "OPBGITSuite-56bc1182-02a3-4b1a-9d4a-99d44231c26b"
+!define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\AssistenteIT"
+!define MARKER "AssistenteIT-56bc1182-02a3-4b1a-9d4a-99d44231c26b"
 Name "${PRODUCT}"
 OutFile "${OUTPUT_FILE}"
-InstallDir "$LOCALAPPDATA\Programs\OPBGITSuite"
-InstallDirRegKey HKCU "${UNINSTALL_KEY}" "InstallLocation"
+; An explicit /D is populated before .onInit; otherwise choose the 64-bit registry/default path.
+InstallDir ""
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
 VIProductVersion "${APP_VERSION}.0"
@@ -36,10 +37,11 @@ VIAddVersionKey /LANG=1040 "LegalCopyright" "Assistente IT contributors"
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "Italian"
+!include "${__FILEDIR__}\Legacy-Migration.nsh"
 
 !macro CHECK_RUNNING PREFIX
 Function ${PREFIX}CheckRunning
-  System::Call 'kernel32::OpenEventW(i 0x00100000, i 0, w "Local\OPBGITSuite.Running") p.r0'
+  System::Call 'kernel32::OpenEventW(i 0x00100000, i 0, w "Local\AssistenteIT.Running") p.r0'
   ${If} $0 != 0
     System::Call 'kernel32::CloseHandle(p r0)'
     IfSilent +2
@@ -47,6 +49,7 @@ Function ${PREFIX}CheckRunning
     SetErrorLevel 2
     Abort
   ${EndIf}
+  !insertmacro CHECK_LEGACY_RUNNING
 FunctionEnd
 !macroend
 !insertmacro CHECK_RUNNING ""
@@ -71,33 +74,60 @@ Function .onInit
       SetErrorLevel 2
       Abort
     ${EndIf}
+    ; Restore the registered 64-bit path unless /D selected another folder.
+    ReadRegStr $1 HKCU "${UNINSTALL_KEY}" "InstallLocation"
+    ${If} $INSTDIR == ""
+      StrCpy $INSTDIR $1
+    ${EndIf}
   ${EndIf}
+  ${If} $INSTDIR == ""
+    StrCpy $INSTDIR "$LOCALAPPDATA\Programs\AssistenteIT"
+  ${EndIf}
+  Call FindLegacyInstall
 FunctionEnd
 
 Section "Installa"
   Call CheckRunning
+  Call CheckLegacyLocation
   IfFileExists "$INSTDIR\app\*.*" 0 directory_ready
-    IfFileExists "$INSTDIR\suite-install.marker" directory_ready 0
-    IfSilent +2
-    MessageBox MB_OK|MB_ICONSTOP "La cartella contiene file di un'altra applicazione. Scegliere un'altra cartella."
-    SetErrorLevel 2
-    Abort
+    ClearErrors
+    FileOpen $0 "$INSTDIR\assistente-it-install.marker" r
+    IfErrors check_legacy_marker
+    FileRead $0 $1
+    FileClose $0
+    StrCmp $1 "${MARKER}" directory_ready directory_invalid
+    check_legacy_marker:
+      StrCmp $INSTDIR $LegacyInstallDir directory_ready directory_invalid
+    directory_invalid:
+      IfSilent +2
+      MessageBox MB_OK|MB_ICONSTOP "La cartella contiene file di un'altra applicazione. Scegliere un'altra cartella."
+      SetErrorLevel 2
+      Abort
   directory_ready:
-  ; Only the reserved application directory is replaced. User data lives
-  ; under LocalAppData\OPBG\ITSuite and is never removed by setup.
+  ; Config and tokens live under LocalAppData\AssistenteIT, outside app.
   RMDir /r "$INSTDIR\app"
   SetOutPath "$INSTDIR"
+  ClearErrors
   File /r "${PACKAGE_ROOT}\*.*"
-  FileOpen $0 "$INSTDIR\suite-install.marker" w
+  IfErrors install_failed
+  ; Move personal data before removing the verified previous installation.
+  SetRegView 64
+  ${DisableX64FSRedirection}
+  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\app\AssistenteIT\Import-UserData.ps1"'
+  Pop $0
+  Pop $1
+  ${EnableX64FSRedirection}
+  ${If} $0 != 0
+    IfSilent +2
+    MessageBox MB_OK|MB_ICONSTOP "Migrazione dei dati personali non completata. I dati precedenti sono conservati. Riprovare il setup."
+    SetErrorLevel 2
+    Abort
+  ${EndIf}
+  Call RemoveLegacyInstall
+  FileOpen $0 "$INSTDIR\assistente-it-install.marker" w
   FileWrite $0 "${MARKER}"
   FileClose $0
   WriteUninstaller "$INSTDIR\Uninstall.exe"
-  ; Upgrade from 1.0.0: keep install identity and user data, replace visible names.
-  Delete "$INSTDIR\OPBGITSuite.exe"
-  Delete "$SMPROGRAMS\OPBG IT Suite\OPBG IT Suite.lnk"
-  Delete "$SMPROGRAMS\OPBG IT Suite\Disinstalla.lnk"
-  RMDir "$SMPROGRAMS\OPBG IT Suite"
-  Delete "$DESKTOP\OPBG IT Suite.lnk"
   CreateDirectory "$SMPROGRAMS\Assistente IT"
   CreateShortcut "$SMPROGRAMS\Assistente IT\Assistente IT.lnk" "$INSTDIR\AssistenteIT.exe"
   CreateShortcut "$SMPROGRAMS\Assistente IT\Disinstalla.lnk" "$INSTDIR\Uninstall.exe"
@@ -112,6 +142,11 @@ Section "Installa"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "URLInfoAbout" "https://github.com/minirusty97/RC_OPBG_4"
   WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoModify" 1
   WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoRepair" 1
+  Goto install_done
+  install_failed:
+    SetErrorLevel 2
+    Abort
+  install_done:
 SectionEnd
 
 Function un.onInit
@@ -119,7 +154,7 @@ Function un.onInit
   SetRegView 64
   Call un.CheckRunning
   ClearErrors
-  FileOpen $0 "$INSTDIR\suite-install.marker" r
+  FileOpen $0 "$INSTDIR\assistente-it-install.marker" r
   IfErrors bad_marker
   FileRead $0 $1
   FileClose $0
@@ -136,17 +171,12 @@ Section "Uninstall"
   Call un.CheckRunning
   RMDir /r "$INSTDIR\app"
   Delete "$INSTDIR\AssistenteIT.exe"
-  Delete "$INSTDIR\OPBGITSuite.exe"
-  Delete "$INSTDIR\suite-install.marker"
+  Delete "$INSTDIR\assistente-it-install.marker"
   Delete "$INSTDIR\Uninstall.exe"
   RMDir "$INSTDIR"
   Delete "$SMPROGRAMS\Assistente IT\Assistente IT.lnk"
   Delete "$SMPROGRAMS\Assistente IT\Disinstalla.lnk"
   RMDir "$SMPROGRAMS\Assistente IT"
   Delete "$DESKTOP\Assistente IT.lnk"
-  Delete "$SMPROGRAMS\OPBG IT Suite\OPBG IT Suite.lnk"
-  Delete "$SMPROGRAMS\OPBG IT Suite\Disinstalla.lnk"
-  RMDir "$SMPROGRAMS\OPBG IT Suite"
-  Delete "$DESKTOP\OPBG IT Suite.lnk"
   DeleteRegKey HKCU "${UNINSTALL_KEY}"
 SectionEnd

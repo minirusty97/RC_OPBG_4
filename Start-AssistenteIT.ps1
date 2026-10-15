@@ -7,14 +7,14 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -or [Threading.T
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [Windows.Forms.Application]::EnableVisualStyles()
-Import-Module (Join-Path $PSScriptRoot 'Suite/Suite.Core.psm1') -ErrorAction Stop
-Enable-ITSuiteDependencies $PSScriptRoot
-$manifest = Read-ITSuiteManifest $PSScriptRoot
-$paths = Initialize-ITSuite -InstallRoot $PSScriptRoot -DataRoot $DataRoot
-$prerequisites = Get-ITSuitePrerequisites
-$activity = Open-ITSuiteActivity
+Import-Module (Join-Path $PSScriptRoot 'AssistenteIT/AssistenteIT.Core.psm1') -ErrorAction Stop
+Enable-AssistenteITDependencies $PSScriptRoot
+$manifest = Read-AssistenteITManifest $PSScriptRoot
+$activity = Open-AssistenteITActivity
+$paths = Initialize-AssistenteIT -InstallRoot $PSScriptRoot -DataRoot $DataRoot
+$prerequisites = Get-AssistenteITPrerequisites
 
-function Show-ITSuiteSettings {
+function Show-AssistenteITSettings {
     $settings = Get-Content -LiteralPath $paths.ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
     $dialog = New-Object Windows.Forms.Form
     $dialog.Text = 'Impostazioni - ' + $manifest.Product; $dialog.ClientSize = New-Object Drawing.Size(630, 520)
@@ -37,7 +37,7 @@ function Show-ITSuiteSettings {
     $dialog.AcceptButton=$save; $dialog.CancelButton=$cancel
     $save.Add_Click({
         try {
-            Save-ITSuiteSettings -Paths $paths -DomainControllers $dcBox.Lines -GlpiBaseUri $urlBox.Text -GlpiEnabled $glpiCheck.Checked -UseAppToken $appCheck.Checked -UserToken $userBox.Text -AppToken $appBox.Text
+            Save-AssistenteITSettings -Paths $paths -DomainControllers $dcBox.Lines -GlpiBaseUri $urlBox.Text -GlpiEnabled $glpiCheck.Checked -UseAppToken $appCheck.Checked -UserToken $userBox.Text -AppToken $appBox.Text
             $dialog.DialogResult='OK'; $dialog.Close()
         }
         catch { [void][Windows.Forms.MessageBox]::Show($dialog, $_.Exception.Message, 'Impostazioni', 'OK', 'Error') }
@@ -70,7 +70,7 @@ foreach ($module in $manifest.Modules) {
     $open.Add_Click({
         param($sender, $eventArgs)
         try {
-            $info = Get-ITSuiteModuleStartInfo -InstallRoot $PSScriptRoot -ModuleId ([string]$sender.Tag) -Paths $paths
+            $info = Get-AssistenteITModuleStartInfo -InstallRoot $PSScriptRoot -ModuleId ([string]$sender.Tag) -Paths $paths
             [void][Diagnostics.Process]::Start($info)
         }
         catch { [void][Windows.Forms.MessageBox]::Show($form, $_.Exception.Message, 'Avvio modulo', 'OK', 'Error') }
@@ -81,7 +81,7 @@ $toolbar = New-Object Windows.Forms.FlowLayoutPanel; $toolbar.Dock='Fill'; $tool
 $settingsButton = New-Object Windows.Forms.Button; $settingsButton.Text='Impostazioni'; $settingsButton.Size=New-Object Drawing.Size(135, 34)
 $dataButton = New-Object Windows.Forms.Button; $dataButton.Text='Cartella dati'; $dataButton.Size=New-Object Drawing.Size(135, 34)
 $releaseButton = New-Object Windows.Forms.Button; $releaseButton.Text='Release su GitHub'; $releaseButton.Size=New-Object Drawing.Size(165, 34)
-$settingsButton.Add_Click({ try { Show-ITSuiteSettings } catch { [void][Windows.Forms.MessageBox]::Show($form, $_.Exception.Message, 'Impostazioni', 'OK', 'Error') } })
+$settingsButton.Add_Click({ try { Show-AssistenteITSettings } catch { [void][Windows.Forms.MessageBox]::Show($form, $_.Exception.Message, 'Impostazioni', 'OK', 'Error') } })
 $dataButton.Add_Click({ [void][Diagnostics.Process]::Start('explorer.exe', ('"' + $paths.DataRoot + '"')) })
 $releaseButton.Add_Click({ $info=New-Object Diagnostics.ProcessStartInfo; $info.FileName=$manifest.ReleasesUrl; $info.UseShellExecute=$true; [void][Diagnostics.Process]::Start($info) })
 $toolbar.Controls.AddRange(@($settingsButton,$dataButton,$releaseButton))

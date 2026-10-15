@@ -17,7 +17,7 @@ internal static class Launcher
         try
         {
             string app = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "app");
-            string script = Path.Combine(app, "Start-ITSuite.ps1");
+            string script = Path.Combine(app, "Start-AssistenteIT.ps1");
             if (!File.Exists(script)) throw new FileNotFoundException("Installazione incompleta. Reinstallare Assistente IT.");
             string powerShell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe");
             string arguments = "-NoLogo -NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" + script + "\"";
