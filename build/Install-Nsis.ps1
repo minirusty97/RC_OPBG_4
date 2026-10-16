@@ -19,7 +19,8 @@ try {
     $downloaded=$false
     foreach ($url in $urls) {
         try {
-            Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $setup -TimeoutSec 60
+            & curl.exe --fail --location --connect-timeout 15 --max-time 60 --output $setup $url
+            if ($LASTEXITCODE -ne 0) { throw ('NSIS download failed with curl exit code '+$LASTEXITCODE) }
             $actual=(Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash
             if ($actual -ne $expected) { throw ('NSIS checksum mismatch: SHA256='+$actual+'; bytes='+([IO.FileInfo]$setup).Length) }
             $downloaded=$true; break
