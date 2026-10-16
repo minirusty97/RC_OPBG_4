@@ -239,3 +239,13 @@ Questi test coprono presenza su tutti o alcuni DC, DC indisponibile, nessun risu
 
 Verificare i nuovi comandi sul PC aziendale e rifinire le associazioni fra sorgenti. La scelta del contesto entità/profilo GLPI resta da progettare; oggi si usa quello predefinito dell'utente API.
 
+
+### Censimento, seriali e copia dei risultati
+
+Le righe mantengono altezza fissa. Ctrl+C copia le righe selezionate con le intestazioni; il menu destro offre anche Copia cella senza cambiare la selezione multipla.
+
+Censito mostra una spunta verde solo se il campo Gruppo (`groups_id`, non `groups_id_tech`) di tutte le schede GLPI dello stesso nome è esattamente CENSITO e non vi sono conflitti di seriale. Il connettore risolve il nome con GET /Group/{id}, con cache nella singola ricerca. Se il gruppo non è leggibile o le schede non concordano, mostra ? e il dettaglio nel suggerimento. Una mancata lettura del gruppo conserva gli altri dati dell’asset.
+
+Seriale Intune e Seriale GLPI mostrano tutti i seriali significativi. Verifica seriale è Coerente solo quando entrambe le fonti sono concluse correttamente e ogni istanza ha lo stesso seriale valido. I segnaposto firmware e i valori mancanti restano Non verificabile. Seriali diversi producono Conflitto e bloccano Elimina per la selezione interessata: deselezionare le righe in conflitto per agire sulle altre. Il confronto ignora maiuscole e spazi esterni, senza rimuovere punteggiatura significativa.
+
+La riga è un raggruppamento per nome, non un’associazione hardware certificata: AD ed Entra non forniscono qui il seriale. Nessun oggetto viene scelto o escluso automaticamente in base alla data più recente. Il controllo è una protezione dell’interfaccia sui dati letti, non una nuova verifica hardware atomica durante l’eliminazione.

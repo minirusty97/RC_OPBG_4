@@ -105,7 +105,7 @@ function ConvertFrom-GlpiSecureString {
 function Invoke-GlpiRead {
     param([hashtable]$Session, [string]$Path, [hashtable]$Query = @{})
     # La lista di percorsi evita l'uso del connettore per modificare gli asset.
-    if ($Path -notmatch '^(initSession|killSession|listSearchOptions/Computer|search/Computer|Computer/[1-9][0-9]*|State/[1-9][0-9]*)$') {
+    if ($Path -notmatch '^(initSession|killSession|listSearchOptions/Computer|search/Computer|Computer/[1-9][0-9]*|State/[1-9][0-9]*|Group/[1-9][0-9]*)$') {
         throw "Endpoint GLPI non previsto dal connettore di consultazione."
     }
     $uri = $Session.BaseUri + '/' + $Path
@@ -149,6 +149,7 @@ function Find-GlpiComputer {
     }
     $sessionOpened = $false
     $stateCache = @{}
+    $groupCache = @{}
     $results = @{}
 
     try {
@@ -227,11 +228,37 @@ function Find-GlpiComputer {
                     }
                     $stateName = $stateCache[$stateId]
                 }
+                # "Gruppo" assegnatario (groups_id), non il gruppo tecnico (groups_id_tech).
+                $groupId=0; $groupName=''; $groupPath=''; $groupError=$null
+                $groupVerified=$false
+                $rawGroup=Get-GlpiValue $computer 'groups_id'
+                if ($null -ne $rawGroup -and [int]::TryParse([string]$rawGroup,[ref]$groupId) -and $groupId -ge 0) {
+                    $groupVerified=$true
+                    if ($groupId -gt 0) {
+                        if (-not $groupCache.ContainsKey($groupId)) {
+                            try {
+                                $assignedGroup=Invoke-GlpiRead -Session $session -Path "Group/$groupId"
+                                $label=[string](Get-GlpiValue $assignedGroup 'name')
+                                if ((Get-GlpiValue $assignedGroup 'id') -ne $groupId -or [string]::IsNullOrWhiteSpace($label)) { throw 'Risposta Gruppo GLPI non valida.' }
+                                $groupCache[$groupId]=@{Name=$label;Path=[string](Get-GlpiValue $assignedGroup 'completename');Error=$null}
+                            }
+                            catch { $groupCache[$groupId]=@{Name='';Path='';Error=$_.Exception.Message} }
+                        }
+                        $groupName=$groupCache[$groupId].Name; $groupPath=$groupCache[$groupId].Path
+                        $groupError=$groupCache[$groupId].Error; $groupVerified=$null -eq $groupError
+                    }
+                }
+                else { $groupError='Campo Gruppo GLPI assente o non valido.' }
                 $results[$id] = [pscustomobject]@{
                     Source = 'GLPI'
                     Exists = $true
                     GlpiId = $id
                     Name = $name
+                    GroupId = $groupId
+                    GroupName = $groupName
+                    GroupPath = $groupPath
+                    GroupVerified = $groupVerified
+                    GroupError = $groupError
                     StateId = $stateId
                     State = $stateName
                     SerialNumber = Get-GlpiValue $computer 'serial'

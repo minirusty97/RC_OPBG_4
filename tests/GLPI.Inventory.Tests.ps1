@@ -80,7 +80,11 @@ try {
                 }
                 '/Computer/([0-9]+)$' {
                     $id = [int]$Matches[1]
-                    return [pscustomobject]@{id=$id;name="PORT-$id";states_id=9;serial="TEST-$id";otherserial="INV-$id";entities_id=0;is_deleted=0;date_mod='2026-10-15 10:00:00';last_inventory_update='2026-10-14 08:20:00'}
+                    return [pscustomobject]@{id=$id;name="PORT-$id";groups_id=7;groups_id_tech=8;states_id=9;serial="TEST-$id";otherserial="INV-$id";entities_id=0;is_deleted=0;date_mod='2026-10-15 10:00:00';last_inventory_update='2026-10-14 08:20:00'}
+                }
+                '/Group/7$' {
+                    if ($script:FixtureKind -eq 'GroupFailure') { throw 'Synthetic group permission failure.' }
+                    return [pscustomobject]@{id=7;name='CENSITO';completename='Inventario > CENSITO'}
                 }
                 '/State/9$' { return [pscustomobject]@{ id=9; name='Assegnato noleggio' } }
                 default { throw 'Unexpected mocked endpoint.' }
@@ -98,14 +102,22 @@ try {
             if ($mode -eq 'NoResults') { $expected=0 }
             if ($rows.Count -ne $expected) { throw "Result count incorrect: $mode" }
             foreach ($row in $rows) {
+                if (-not $row.GroupVerified -or $row.GroupName -ne 'CENSITO' -or $row.GroupId -ne 7) { throw 'Assigned group not resolved independently of technical group.' }
                 if ($row.State -ne 'Assegnato noleggio' -or $row.GlpiId -le 0) { throw 'Invalid parsed inventory.' }
                 if ($row.LastInventory -ne '2026-10-14 08:20:00' -or $row.LastModified -ne '2026-10-15 10:00:00') { throw 'GLPI inventory date confused with asset modification date.' }
             }
             if (@($script:RequestPaths | Where-Object { $_ -like '*/killSession' }).Count -ne 1) { throw 'Session not closed.' }
             if ($expected -gt 0 -and @($script:RequestPaths | Where-Object { $_ -like '*/State/9' }).Count -ne 1) { throw 'State lookup not cached.' }
+            if ($expected -gt 0 -and @($script:RequestPaths | Where-Object { $_ -like '*/Group/7' }).Count -ne 1) { throw 'Group lookup not cached.' }
             "PASS: full connector / mocked REST: $mode."
         }
-        $script:FixtureKind='PageFailure'
+        $script:FixtureKind='GroupFailure'
+        $script:RequestPaths=New-Object 'System.Collections.Generic.List[string]'
+        $groupFailure=@(Find-GlpiComputer -BaseUri 'https://example.invalid/apirest.php' -NameFragment 'PORT-' -UserToken $userToken -PageSize 1)
+        if ($groupFailure.Count -ne 2 -or @($groupFailure | Where-Object { $_.GroupVerified -or $_.GroupError -ne 'Synthetic group permission failure.' }).Count -gt 0) { throw 'Unreadable groups lost assets or became a confirmed group.' }
+        if (@($script:RequestPaths | Where-Object { $_ -like '*/killSession' }).Count -ne 1) { throw 'Group error leaked session.' }
+        'PASS: an unreadable group preserves inventory, exposes uncertainty and closes the session.'
+        $script:FixtureKind='PageFailure' 
         $script:RequestPaths=New-Object 'System.Collections.Generic.List[string]'
         $out=@()
         $failed=$false
