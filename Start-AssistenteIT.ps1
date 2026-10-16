@@ -32,7 +32,7 @@ function Show-AssistenteITSettings {
     $userBox = New-Object Windows.Forms.TextBox; $userBox.UseSystemPasswordChar=$true; $userBox.SetBounds(170, 303, 438, 25)
     $appLabel = New-Object Windows.Forms.Label; $appLabel.Text='App token GLPI'; $appLabel.SetBounds(18, 348, 145, 24)
     $appBox = New-Object Windows.Forms.TextBox; $appBox.UseSystemPasswordChar=$true; $appBox.SetBounds(170, 345, 438, 25)
-    $hint = New-Object Windows.Forms.Label; $hint.Text='Lascia vuoti i token per conservare quelli salvati. I token restano nel .env personale su questo PC.'; $hint.SetBounds(18, 393, 590, 42)
+    $hint = New-Object Windows.Forms.Label; $hint.Text='Lascia vuoti i token per conservare quelli salvati. I token sono cifrati da Windows per il tuo account su questo PC.'; $hint.SetBounds(18, 393, 590, 42)
     $save = New-Object Windows.Forms.Button; $save.Text='Salva'; $save.SetBounds(388, 463, 105, 32)
     $cancel = New-Object Windows.Forms.Button; $cancel.Text='Annulla'; $cancel.DialogResult='Cancel'; $cancel.SetBounds(503, 463, 105, 32)
     $dialog.AcceptButton=$save; $dialog.CancelButton=$cancel

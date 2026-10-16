@@ -24,9 +24,10 @@ I dati personali sono separati dai file del programma:
 | Percorso | Contenuto |
 | --- | --- |
 | `%LOCALAPPDATA%\AssistenteIT\Config\computer-explorer.config.local.json` | DC, URL GLPI e opzioni di ricerca |
-| `%LOCALAPPDATA%\AssistenteIT\Config\.env` | User token GLPI e App token |
+| `%LOCALAPPDATA%\AssistenteIT\Config\glpi-credentials.dpapi.json` | Token GLPI cifrati per l’account Windows |
+| `%LOCALAPPDATA%\AssistenteIT\Config\.env` | Importazione dei token delle vecchie versioni; ripulito dopo verifica |
 
-La prima apertura copia i modelli solo se i file personali non esistono. In Impostazioni i campi dei token sono vuoti: lasciarli vuoti conserva i token già salvati. I token sono nel `.env` personale in chiaro, come nella versione da sorgenti; non vengono incorporati nella build, pubblicati nella release o condivisi fra utenti.
+La prima apertura copia i modelli solo se i file personali non esistono. In Impostazioni i campi dei token sono vuoti: lasciarli vuoti conserva i token già salvati. I token vengono salvati cifrati con DPAPI per l’account Windows corrente; non vengono incorporati nella build, pubblicati nella release o condivisi fra utenti.
 
 Per aggiornare, chiudere la suite e i moduli aperti, scaricare il nuovo setup dalla release ed eseguirlo. Configurazione e token vengono conservati. Il setup rifiuta di aggiornare mentre un processo della suite è aperto e impedisce di installare una versione precedente. La disinstallazione rimuove il programma e mantiene i dati personali; questi possono essere rimossi separatamente dalla propria cartella dati.
 
@@ -88,3 +89,13 @@ Con `UsesAppSettings: true` il modulo riceve i parametri `ConfigPath` ed `EnvPat
 - [NSIS: manuale](https://nsis.sourceforge.io/Docs/), [licenza](https://nsis.sourceforge.io/Docs/AppendixI.html) e [opzioni del setup](https://nsis.sourceforge.io/Docs/Chapter3.html).
 - [Microsoft.Graph.Authentication 2.41.1](https://www.powershellgallery.com/packages/Microsoft.Graph.Authentication/2.41.1).
 - [GitHub: gestione delle release](https://docs.github.com/en/repositories/releasing-projects-on-github/managing-releases-in-a-repository).
+
+### Credenziali GLPI cifrate (dalla 1.0.6)
+
+I token vengono salvati in `glpi-credentials.dpapi.json`, accanto al `.env` configurato (nell’installazione: `%LOCALAPPDATA%\AssistenteIT\Config`). Windows DPAPI CurrentUser li protegge senza una chiave condivisa nell’app. Il salvataggio richiede Windows; su altri sistemi non viene usato un formato in chiaro.
+
+Alla prima ricerca GLPI o al salvataggio delle impostazioni, i token presenti nel `.env` in uso vengono importati, scritti e riletti per verifica prima di rimuovere le sole righe GLPI_USER_TOKEN/GLPI_APP_TOKEN. Gli altri contenuti rimangono. Se la scrittura o la verifica falliscono, il testo originale non viene ripulito. Se archivio e .env contengono token discordanti, reinserire entrambi dalle impostazioni; un archivio illeggibile va conservato per il recupero e rimosso dal percorso attivo prima di reinserire le credenziali.
+
+Le caselle vuote nelle impostazioni conservano i token esistenti; Token GLPI in Computer Explorer salva ora le nuove credenziali cifrate. Ogni collega configura i propri token, evitando di copiare questo archivio su un altro account o PC. L’archivio resta fuori da Git e dal pacchetto di installazione.
+
+La migrazione interessa solo il .env del percorso attivo. Copie precedenti nel checkout, backup e Importazione-precedente non vengono eliminate automaticamente. La rimozione del testo non è una cancellazione sicura dei supporti: se i token sono stati esposti, revocarli e generarne di nuovi. DPAPI protegge il salvataggio su disco; l’app deve poterli usare durante le richieste API e non protegge da codice eseguito con il medesimo account.

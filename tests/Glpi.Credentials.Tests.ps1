@@ -2,7 +2,17 @@
 [CmdletBinding()]
 param([string]$ModulePath = (Join-Path $PSScriptRoot '../ComputerExplorer.Core.psm1'))
 $ErrorActionPreference = 'Stop'
-Import-Module $ModulePath -Force -ErrorAction Stop
+. (Join-Path (Split-Path $ModulePath -Parent) 'Glpi.Credentials.ps1')
+# Test the literal legacy parser independently; production DPAPI is exercised on Windows below.
+function Read-TestLegacyCredentials {
+    param([string]$Path,[bool]$UseAppToken=$true)
+    $values=Read-ExplorerGlpiEnvValues -Path $Path
+    if (-not $values.ContainsKey('GLPI_USER_TOKEN') -or [string]::IsNullOrWhiteSpace($values.GLPI_USER_TOKEN) -or
+        ($UseAppToken -and (-not $values.ContainsKey('GLPI_APP_TOKEN') -or [string]::IsNullOrWhiteSpace($values.GLPI_APP_TOKEN)))) { return $null }
+    $app=$null
+    if ($UseAppToken) { $app=ConvertTo-SecureString $values.GLPI_APP_TOKEN -AsPlainText -Force }
+    [pscustomobject]@{User=(ConvertTo-SecureString $values.GLPI_USER_TOKEN -AsPlainText -Force);App=$app}
+}
 $directory = Join-Path ([IO.Path]::GetTempPath()) ('glpi-env-' + [guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory($directory)
 $envFile = Join-Path $directory '.env'
@@ -26,24 +36,24 @@ function Assert-Credentials {
 }
 
 try {
-    if ($null -ne (Read-ExplorerGlpiCredentials -Path $envFile)) { throw 'Missing file did not allow fallback.' }
+    if ($null -ne (Read-TestLegacyCredentials -Path $envFile)) { throw 'Missing file did not allow fallback.' }
     'PASS: missing .env allows prompt fallback.'
     [IO.File]::WriteAllText($envFile, "GLPI_USER_TOKEN=user-token`nGLPI_APP_TOKEN=app-token", [Text.Encoding]::UTF8)
-    Assert-Credentials (Read-ExplorerGlpiCredentials -Path $envFile) 'user-token' 'app-token'
+    Assert-Credentials (Read-TestLegacyCredentials -Path $envFile) 'user-token' 'app-token'
     'PASS: unquoted tokens loaded as SecureString.'
     $lines = @('# comment', '', " export GLPI_USER_TOKEN = 'user=a#b' # comment", ' GLPI_APP_TOKEN = "app # = value" # comment', 'UNRELATED_SETTING=ignored')
     [IO.File]::WriteAllLines($envFile, $lines, [Text.Encoding]::UTF8)
-    Assert-Credentials (Read-ExplorerGlpiCredentials -Path $envFile) 'user=a#b' 'app # = value'
+    Assert-Credentials (Read-TestLegacyCredentials -Path $envFile) 'user=a#b' 'app # = value'
     'PASS: BOM, CRLF, comments, export, quotes and embedded delimiters.'
     [IO.File]::WriteAllLines($envFile, @('GLPI_USER_TOKEN=''$(throw "must-not-run")''', 'GLPI_APP_TOKEN=literal$VALUE#suffix'), [Text.Encoding]::UTF8)
-    Assert-Credentials (Read-ExplorerGlpiCredentials -Path $envFile) '$(throw "must-not-run")' 'literal$VALUE#suffix'
+    Assert-Credentials (Read-TestLegacyCredentials -Path $envFile) '$(throw "must-not-run")' 'literal$VALUE#suffix'
     'PASS: expressions and variable markers remain literal data.'
     [IO.File]::WriteAllText($envFile, 'GLPI_USER_TOKEN=user-only', [Text.Encoding]::UTF8)
-    if ($null -ne (Read-ExplorerGlpiCredentials -Path $envFile)) { throw 'Missing required app token accepted.' }
-    Assert-Credentials (Read-ExplorerGlpiCredentials -Path $envFile -UseAppToken $false) 'user-only' $null
+    if ($null -ne (Read-TestLegacyCredentials -Path $envFile)) { throw 'Missing required app token accepted.' }
+    Assert-Credentials (Read-TestLegacyCredentials -Path $envFile -UseAppToken $false) 'user-only' $null
     'PASS: app token optional only when configured.'
     [IO.File]::WriteAllText($envFile, "GLPI_USER_TOKEN= `nGLPI_APP_TOKEN=", [Text.Encoding]::UTF8)
-    if ($null -ne (Read-ExplorerGlpiCredentials -Path $envFile)) { throw 'Empty template treated as credentials.' }
+    if ($null -ne (Read-TestLegacyCredentials -Path $envFile)) { throw 'Empty template treated as credentials.' }
     'PASS: empty template allows prompt fallback.'
     $invalidCases = @(
         @('GLPI_USER_TOKEN=synthetic-secret', 'GLPI_USER_TOKEN=other', 'GLPI_APP_TOKEN=app'),
@@ -53,7 +63,7 @@ try {
     foreach ($lines in $invalidCases) {
         [IO.File]::WriteAllLines($envFile, [string[]]$lines, [Text.Encoding]::UTF8)
         $rejected = $false
-        try { Read-ExplorerGlpiCredentials -Path $envFile | Out-Null }
+        try { Read-TestLegacyCredentials -Path $envFile | Out-Null }
         catch {
             if ($_.Exception.Message -like '*synthetic-secret*') { throw 'Parser error exposed token content.' }
             $rejected = $_.Exception.Message -like '*riga*'
