@@ -21,7 +21,7 @@ public static class GlpiRestrictedTokenProbe {
     public static WindowsImpersonationContext Begin() {
         IntPtr original=IntPtr.Zero, restricted=IntPtr.Zero;
         try {
-            if (!OpenProcessToken(GetCurrentProcess(), 0x000E, out original)) throw new Win32Exception();
+            if (!OpenProcessToken(GetCurrentProcess(), 0x000F01FF, out original)) throw new Win32Exception();
             if (!CreateRestrictedToken(original, 1, 0, IntPtr.Zero, 0, IntPtr.Zero, 0, IntPtr.Zero, out restricted)) throw new Win32Exception();
             using (var identity=new WindowsIdentity(restricted)) { return identity.Impersonate(); }
         }
