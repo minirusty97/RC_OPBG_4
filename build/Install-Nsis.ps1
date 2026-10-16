@@ -20,7 +20,8 @@ try {
     foreach ($url in $urls) {
         try {
             Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $setup -TimeoutSec 60
-            if ((Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash -ne $expected) { throw 'NSIS checksum mismatch.' }
+            $actual=(Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash
+            if ($actual -ne $expected) { throw ('NSIS checksum mismatch: SHA256='+$actual+'; bytes='+([IO.FileInfo]$setup).Length) }
             $downloaded=$true; break
         }
         catch { Write-Warning ('NSIS download failed: '+$_.Exception.Message) }
