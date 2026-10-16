@@ -8,7 +8,10 @@ $configPath=Join-Path ([IO.Path]::GetTempPath()) ('parallel-'+[guid]::NewGuid().
 function New-TestState {
     param([bool]$Blocked=$false)
     $state=@{ Auth=(New-Object 'System.Collections.Concurrent.ConcurrentQueue[string]'); Reads=(New-Object 'System.Collections.Concurrent.ConcurrentQueue[string]')
-        Exited=(New-Object 'System.Collections.Concurrent.ConcurrentQueue[string]'); Started=(New-Object Threading.CountdownEvent(8))
+        Exited=(New-Object 'System.Collections.Concurrent.ConcurrentQueue[string]'); Started=(New-Object Threading.CountdownEvent(4))
+        Kinds=(New-Object 'System.Collections.Concurrent.ConcurrentDictionary[string,bool]')
+        AdEvents=(New-Object 'System.Collections.Concurrent.ConcurrentQueue[string]'); AdRunspaces=(New-Object 'System.Collections.Concurrent.ConcurrentQueue[string]')
+        AdGates=@{}; PendingDC=''; FailedSource=''
         Gates=@{}; AuthFailure=$false; FailedDC='' }
     foreach($name in @('AD','Entra','Intune','GLPI')) {
         $state.Gates[$name]=New-Object Threading.ManualResetEventSlim((-not $Blocked))
@@ -24,10 +27,18 @@ $worker={
         if($state.AuthFailure){throw 'Synthetic Graph auth failure.'}
         return [pscustomobject]@{State='OK';Error=$null}
     }
-    [void]$state.Started.Signal()
+    if($state.Kinds.TryAdd($Job.Kind,$true)){[void]$state.Started.Signal()}
+    if($Job.Kind -eq 'AD'){
+        $state.AdEvents.Enqueue('start:'+$Job.DomainController)
+        $state.AdRunspaces.Enqueue([string][Runspace]::DefaultRunspace.InstanceId)
+    }
     try {
         while(-not $state.Gates[$Job.Kind].IsSet){Start-Sleep -Milliseconds 20}
-        if($Job.Kind -eq 'AD' -and $Job.DomainController -eq $state.FailedDC){throw 'Synthetic unavailable DC.'}
+        if($Job.Kind -eq 'AD' -and $state.AdGates.ContainsKey($Job.DomainController)){
+            while(-not $state.AdGates[$Job.DomainController].IsSet){Start-Sleep -Milliseconds 20}
+        }
+        if($Job.Kind -eq $state.FailedSource){throw 'Synthetic source failure.'}
+        if($Job.Kind -eq 'AD' -and ($Job.DomainController -eq $state.FailedDC -or $state.FailedDC -eq '*')){throw 'Synthetic unavailable DC.'}
         $result=[pscustomobject]@{Name=$Job.Kind;State='OK';Records=@();DcSources=@();CheckedAtUtc=[datetimeoffset]::UtcNow;FromCache=$false;Error=$null}
         $name='PC-PARALLEL'
         if($Job.Kind -eq 'AD') {
@@ -47,9 +58,13 @@ $worker={
             }
         }
         else {$result.Records=@([pscustomobject]@{Name=$name;GlpiId=1;State='Assegnato';SerialNumber='SYNTHETIC';LastInventory='2026-10-15 09:00:00'})}
+        if($Job.Kind -eq 'AD' -and $Job.DomainController -eq $state.PendingDC){$result.State='In attesa'}
         return $result
     }
-    finally{$state.Exited.Enqueue($Job.Kind)}
+    finally{
+        if($Job.Kind -eq 'AD'){$state.AdEvents.Enqueue('end:'+$Job.DomainController)}
+        $state.Exited.Enqueue($Job.Kind)
+    }
 }
 
 function Start-TestSearch {
@@ -83,19 +98,33 @@ function Close-TestSearch {
 }
 function Close-TestState {
     param($Cache)
-    foreach($gate in $Cache.State.Gates.Values){$gate.Dispose()};$Cache.State.Started.Dispose()
+    foreach($gate in $Cache.State.Gates.Values){$gate.Dispose()};foreach($gate in $Cache.State.AdGates.Values){$gate.Dispose()};$Cache.State.Started.Dispose()
 }
 
 try {
     @{DomainControllers=@(1..5|ForEach-Object{"dc$_.example.invalid"});Search=@{MinimumCharacters=2;CloudCacheMinutes=5};Glpi=@{Enabled=$false}}|ConvertTo-Json -Depth 4|Set-Content $configPath -Encoding UTF8
     $cache=New-TestState $true;$task=$null
     try {
+        $cache.State.AdGates['dc2.example.invalid']=New-Object Threading.ManualResetEventSlim($false)
         $queue=New-Object 'System.Collections.Concurrent.ConcurrentQueue[object]'
         $task=Start-TestSearch $cache $queue
-        if(-not $cache.State.Started.Wait(10000)){throw 'Eight source readers did not overlap.'}
+        if(-not $cache.State.Started.Wait(10000)){throw 'AD and all three independent sources did not overlap.'}
         if($cache.State.Auth.Count -ne 1){throw 'Graph authenticated more than once.'}
-        'PASS: all five DCs and the three other sources overlap; a single Graph auth gates cloud reads.'
+        if($cache.State.AdEvents.Count -ne 1){throw 'More than one DC started while the first DC was blocked.'}
+        'PASS: one AD reader overlaps with Entra, Intune and GLPI; Graph authenticates once.'
         foreach($name in @('AD','Entra','Intune')){$cache.State.Gates[$name].Set()}
+        $oneDC=$null;$deadline=[datetime]::UtcNow.AddSeconds(10)
+        while([datetime]::UtcNow -lt $deadline){
+            $snapshot=$null
+            while($queue.TryDequeue([ref]$snapshot)){
+                $ad=@($snapshot.Sources|Where-Object{$_.Name -eq 'AD'})[0]
+                if(-not $snapshot.Complete -and $ad.DcSources.Count -eq 1 -and $snapshot.Rows.Count -eq 1 -and $snapshot.Rows[0].Entra -eq '1' -and $snapshot.Rows[0].Intune -eq '1'){$oneDC=$snapshot}
+            }
+            if($null -ne $oneDC){break};Start-Sleep -Milliseconds 20
+        }
+        if($null -eq $oneDC -or @($oneDC.Sources|Where-Object{$_.Name -eq 'AD'})[0].Progress -ne '1/5 DC'){throw 'A completed DC did not publish progress while the next DC was blocked.'}
+        $cache.State.AdGates['dc2.example.invalid'].Set()
+        'PASS: AD publishes each completed DC while the next DC and a separate source are still running.'
         $partial=$null;$deadline=[datetime]::UtcNow.AddSeconds(10)
         while([datetime]::UtcNow -lt $deadline){
             $snapshot=$null
@@ -109,12 +138,19 @@ try {
         $cache.State.Gates.GLPI.Set()
         $complete=Complete-TestSearch $task
         if($complete.Rows.Count -ne 1 -or $complete.Rows[0].ADColor -ne 'Verde' -or $complete.Rows[0].GLPI -ne '1' -or $cache.State.Exited.Count -ne 8){throw 'Parallel union lost records or readers.'}
-        'PASS: final aggregation preserves all source IDs, counts and completed DCs.'
+        $events=@($cache.State.AdEvents.ToArray())
+        if($events.Count -ne 10 -or @($cache.State.AdRunspaces.ToArray()|Select-Object -Unique).Count -ne 1){throw 'AD reads did not reuse one dedicated runspace.'}
+        for($i=0;$i -lt 5;$i++){
+            $dc='dc{0}.example.invalid' -f ($i+1)
+            if($events[$i*2] -ne ('start:'+$dc) -or $events[$i*2+1] -ne ('end:'+$dc)){throw 'DC queries overlapped or ran out of order.'}
+        }
+        if(@($oneDC.Sources|Where-Object{$_.Name -eq 'AD'})[0].DcSources.Count -ne 1){throw 'Later AD updates mutated an earlier snapshot.'}
+        'PASS: all five DCs execute sequentially in one runspace; final aggregation preserves IDs, counts and immutable progress.'
     }
     finally{Close-TestSearch $task}
     try {
         foreach($refresh in @($false,$true)){
-            $cache.State.Started.Reset(8);$task=$null
+            $cache.State.Started.Reset(4);$cache.State.Kinds.Clear();$task=$null
             try{
                 $task=Start-TestSearch -Cache $cache -Queue (New-Object 'System.Collections.Concurrent.ConcurrentQueue[object]') -Refresh $refresh
                 $result=Complete-TestSearch $task
@@ -127,12 +163,12 @@ try {
     }
     finally{Close-TestState $cache}
 
-    $cache=New-TestState;$cache.State.AuthFailure=$true;$cache.State.FailedDC='dc5.example.invalid';$task=$null
+    $cache=New-TestState;$cache.State.AuthFailure=$true;$cache.State.FailedDC='dc1.example.invalid';$task=$null
     try {
         $task=Start-TestSearch $cache (New-Object 'System.Collections.Concurrent.ConcurrentQueue[object]')
         $result=Complete-TestSearch $task
         if($result.Rows[0].AD -ne '4/5' -or $result.Rows[0].ADColor -ne 'Grigio' -or $result.Rows[0].Verificati -ne '4/5' -or $result.Rows[0].Entra -ne '?' -or $result.Rows[0].GLPI -ne '1' -or $cache.State.Reads.Count -ne 0){throw 'Source failures leaked absence, lost other results, or started cloud before auth.'}
-        'PASS: DC and authentication failures remain isolated; unavailable sources are gray.'
+        'PASS: failure on the first DC does not stop the next four DCs; authentication errors are terminal and unavailable sources stay gray.'
     }
     finally{Close-TestSearch $task;Close-TestState $cache}
 
@@ -151,8 +187,36 @@ try {
         if(-not $cache.State.Started.Wait(10000)){throw 'Cancellation fixture failed to start readers.'}
         $stop=$task.Pipeline.BeginStop($null,$null);$task.Pipeline.EndStop($stop)
         try{$null=$task.Pipeline.EndInvoke($task.Operation)}catch{}
-        if($cache.State.Exited.Count -ne 8){throw 'A reader survived cancellation.'}
-        'PASS: cancelling the coordinator stops and disposes all eight active source readers.'
+        if($cache.State.Exited.Count -ne 4 -or $cache.State.AdEvents.Count -ne 2){throw 'A reader survived cancellation or a queued DC started after cancellation.'}
+        'PASS: cancellation stops all four active sources and never starts the remaining queued DCs.'
+    }
+    finally{Close-TestSearch $task;Close-TestState $cache}
+
+    $cache=New-TestState;$cache.State.PendingDC='dc1.example.invalid';$task=$null
+    try {
+        $task=Start-TestSearch $cache (New-Object 'System.Collections.Concurrent.ConcurrentQueue[object]')
+        $result=Complete-TestSearch $task
+        $ad=@($result.Sources|Where-Object{$_.Name -eq 'AD'})[0]
+        if($ad.State -ne 'Errore' -or $ad.DcSources.Count -ne 5 -or @($result.Sources|Where-Object{$_.State -eq 'In attesa'}).Count -gt 0){throw 'A malformed reader left a finished search pending.'}
+        'PASS: a nonterminal reader response becomes a source error and all queued DCs still complete.'
+    }
+    finally{Close-TestSearch $task;Close-TestState $cache}
+
+    $cache=New-TestState;$cache.State.FailedSource='Intune';$task=$null
+    try {
+        $task=Start-TestSearch $cache (New-Object 'System.Collections.Concurrent.ConcurrentQueue[object]')
+        $result=Complete-TestSearch $task
+        if(@($result.Sources|Where-Object{$_.Name -eq 'Intune'})[0].State -ne 'Errore' -or @($result.Sources|Where-Object{$_.State -eq 'OK'}).Count -ne 3 -or -not $result.Complete){throw 'An Intune failure blocked other sources or final completion.'}
+        'PASS: an individual cloud reader failure completes with an error while the other three sources succeed.'
+    }
+    finally{Close-TestSearch $task;Close-TestState $cache}
+
+    $cache=New-TestState;$cache.State.FailedDC='*';$cache.State.AuthFailure=$true;$cache.State.FailedSource='GLPI';$task=$null
+    try {
+        $task=Start-TestSearch $cache (New-Object 'System.Collections.Concurrent.ConcurrentQueue[object]')
+        $result=Complete-TestSearch $task
+        if($result.Rows.Count -ne 0 -or @($result.Sources|Where-Object{$_.State -eq 'Errore'}).Count -ne 4 -or -not $result.Complete){throw 'A search with errors in all four sources did not terminate.'}
+        'PASS: errors in all four sources still produce a final completed search with no fabricated results.'
     }
     finally{Close-TestSearch $task;Close-TestState $cache}
 

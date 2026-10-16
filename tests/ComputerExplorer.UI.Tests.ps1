@@ -39,6 +39,11 @@ try {
     Show-ExplorerSnapshot $snapshot
     if ($grid.SelectedRows.Count -ne 2) { throw 'Selection not retained after snapshot update.' }
     'PASS: native WinForms counters, multiple selection and removal button state.'
+    if ($sourceStatusLabels.Count -ne 4) { throw 'Four persistent source statuses are missing.' }
+    foreach ($name in @('AD','Entra','Intune','GLPI')) {
+        if ($sourceStatusLabels[$name].BackColor -ne [Drawing.Color]::Honeydew -or $sourceStatusLabels[$name].Text -notlike '*Terminata*') { throw ('Successful source did not turn green: '+$name) }
+    }
+    'PASS: all four successful sources show a separate green completed indicator in the footer.'
     foreach ($name in @('AD', 'ADLastModified', 'Entra', 'EntraLastActivity', 'Intune', 'IntuneLastCheckIn', 'GLPI', 'GlpiLastInventory')) {
         $column = $grid.Columns[$name]
         $preferred = $column.GetPreferredWidth([Windows.Forms.DataGridViewAutoSizeColumnMode]::AllCells, $true)
@@ -71,11 +76,36 @@ try {
     if (-not $script:Latest.Complete -or $script:Busy -or $script:RemovalNeedsRefresh -or -not $deleteButton.Enabled) { throw 'Native timer left a finished search blocked.' }
     if ($counterLabel.Text -ne 'Risultati: 2 | Selezionati: 2' -or $status.Text -notlike 'Ricerca completata*') { throw 'Native completion lost selection or final status.' }
     'PASS: native timer applies the returned final snapshot and enables deletion of selected rows.'
+
+    $snapshot.Complete=$false
+    $snapshot.Sources[0].State='In attesa'
+    $snapshot.Sources[0] | Add-Member -NotePropertyName Progress -NotePropertyValue '1/5 DC'
+    $snapshot.Sources[0] | Add-Member -NotePropertyName CurrentTarget -NotePropertyValue 'dc2.example.invalid'
+    $snapshot.Sources[2].State='In attesa'
+    $snapshot.Sources[3].State='Errore'; $snapshot.Sources[3].Error='Synthetic GLPI failure'
+    Show-ExplorerSnapshot $snapshot
+    if ($deleteButton.Enabled -or $sourceStatusLabels.AD.Text -notlike '*1/5 DC*' -or $sourceStatusLabels.AD.BackColor -ne [Drawing.Color]::LightGoldenrodYellow -or $sourceStatusLabels.Entra.BackColor -ne [Drawing.Color]::Honeydew -or $sourceStatusLabels.GLPI.BackColor -ne [Drawing.Color]::MistyRose -or $sourceToolTip.GetToolTip($sourceStatusLabels.AD) -notlike '*dc2.example.invalid*') { throw 'Independent progress, colors, AD target or busy deletion guard failed.' }
+    'PASS: one source can be green and another red while AD progress stays visible and deletion remains disabled.'
+
+    $snapshot.Complete=$true; $snapshot.Message='Ricerca completata con errori'
+    $snapshot.Sources[0].State='OK'; $snapshot.Sources[0].Progress='5/5 DC'; $snapshot.Sources[0].CurrentTarget=''
+    $snapshot.Sources[2].State='OK'
+    $script:Queue=New-Object 'System.Collections.Concurrent.ConcurrentQueue[object]'
+    $script:Pipeline=[PowerShell]::Create(); $script:Pipeline.Runspace=$script:Worker
+    [void]$script:Pipeline.AddScript({param($FinalSnapshot) return $FinalSnapshot}.ToString()).AddArgument($snapshot)
+    Set-SearchBusy $true
+    $script:Invocation=$script:Pipeline.BeginInvoke()
+    if (-not $script:Invocation.AsyncWaitHandle.WaitOne(5000)) { throw 'Mixed-error completion worker timed out.' }
+    [void]$tickMethod.Invoke($timer, [object[]]@([EventArgs]::Empty))
+    if ($script:Busy -or -not $deleteButton.Enabled -or $script:RemovalNeedsRefresh -or $sourceStatusLabels.AD.BackColor -ne [Drawing.Color]::Honeydew -or $sourceStatusLabels.GLPI.BackColor -ne [Drawing.Color]::MistyRose) { throw 'A terminal source error kept completed results blocked or cleared source colors.' }
+    'PASS: the real timer releases selected results when every source terminates, including a source with errors.'
+
 }
 finally {
     $timer.Dispose()
     if ($null -ne $script:Pipeline) { $script:Pipeline.Stop(); $script:Pipeline.Dispose() }
     $script:Worker.Close(); $script:Worker.Dispose()
+    $sourceToolTip.Dispose()
     $form.Dispose()
     $applicationIcon.Dispose()
 }

@@ -1,10 +1,10 @@
 # Computer Explorer — console di ricerca
 
-Aggiornamento: 15 ottobre 2026. Versione funzionale integrata in `main`.
+Aggiornamento: 16 ottobre 2026. Versione funzionale integrata in `main`.
 
 ## Fase attuale
 
-`Start-ComputerExplorer.ps1` è la prima interfaccia Windows Forms per la ricerca aggregata AD / Entra ID / Intune / GLPI. `ComputerExplorer.Core.psm1` gestisce letture, raccolte cloud, cache e aggregazione. `ComputerExplorer.Parallel.psm1` coordina un pool di massimo otto lettori indipendenti. Riutilizza `Test-AdLookup.ps1 -PassThru` per AD e `GLPI.Inventory.psm1` per GLPI.
+`Start-ComputerExplorer.ps1` è la prima interfaccia Windows Forms per la ricerca aggregata AD / Entra ID / Intune / GLPI. `ComputerExplorer.Core.psm1` gestisce letture, raccolte cloud, cache e aggregazione. `ComputerExplorer.Parallel.psm1` coordina un lettore AD sequenziale dedicato e tre lettori indipendenti per Entra, Intune e GLPI. Riutilizza `Test-AdLookup.ps1 -PassThru` per AD e `GLPI.Inventory.psm1` per GLPI.
 
 La console permette la rimozione delle righe selezionate da AD, Entra e Intune tramite `ComputerExplorer.Removal.psm1`. GLPI resta in consultazione. Il tool precedente `Remove-Computer-FullTool.ps1` rimane disponibile.
 
@@ -105,7 +105,7 @@ Il workflow `.github/workflows/powershell-checks.yml` esegue parser e test su Wi
 
 La finestra richiama Invoke-ComputerExplorerParallelSearch. GLPI e i lettori dei singoli DC partono indipendentemente. Un solo lavoro esegue Connect-ExplorerGraph per le fonti cloud selezionate; al termine partono Entra e Intune contemporaneamente, riutilizzando la sessione statica del Graph SDK nello stesso processo. Nessun lettore cloud esegue un proprio login.
 
-Il pool ha al massimo otto runspace STA: con la configurazione attuale possono procedere i cinque DC, Entra, Intune e GLPI. Ogni lettore AD usa il parametro DomainController di Test-AdLookup.ps1, limitato ai DC configurati. Gli esiti AD vengono riuniti per DC; la presenza rimane grigia finché tutti i DC non hanno terminato o se una verifica fallisce.
+AD usa un pool STA con un solo runspace e una coda: il DC successivo parte soltanto dopo il termine del precedente, anche in caso di errore. Un secondo pool STA con al massimo tre lettori mantiene Entra, Intune e GLPI in parallelo, indipendenti da AD. Ogni lettore AD usa il parametro DomainController di Test-AdLookup.ps1, limitato ai DC configurati. Gli esiti AD vengono riuniti per DC; la presenza rimane grigia finché tutti i DC non hanno terminato o se una verifica fallisce.
 
 I risultati vengono pubblicati progressivamente. Le fonti ancora in attesa restano grigie; un errore Graph non ferma AD o GLPI. La UI riunisce gli aggiornamenti ravvicinati e abilita la rimozione solo dopo la fine della ricerca. Le cancellazioni conservano il piano e l'ordine sequenziale già implementati.
 
@@ -116,3 +116,9 @@ Ogni API mantiene la propria paginazione sequenziale. Il connettore GLPI mantien
 L'annullamento invia lo stop a tutti i lavori, ne attende la chiusura e dispone il pool. Le cache parziali non vengono pubblicate; le cache complete restano condivise e il refresh forzato viene rispettato.
 
 Riferimenti: [runspace pool PowerShell](https://learn.microsoft.com/en-us/powershell/scripting/developer/hosting/creating-multiple-runspaces) e [GraphSession thread-safe del Graph SDK](https://github.com/microsoftgraph/msgraph-sdk-powershell/blob/main/src/Authentication/Authentication.Core/Common/GraphSession.cs).
+
+## Stato delle fonti e completamento
+
+Il footer mostra separatamente AD, Entra ID, Intune e GLPI. Verde indica un esito corretto anche senza risultati, rosso un esito con errori, giallo una lettura ancora in corso e grigio una fonte esclusa. Per AD si vede il numero di DC completati; il suggerimento mostra il DC attualmente interrogato e gli eventuali errori.
+
+Il completamento globale richiede la conclusione di tutti i lettori. Un errore di una fonte non lascia la ricerca appesa e non interrompe le fonti indipendenti. Le righe restano consultabili durante la ricerca; le operazioni sui risultati selezionati vengono abilitate solo dopo la conclusione globale e la pulizia dei lettori. L’annullamento conserva lo stato incompleto e non autorizza la cancellazione.
