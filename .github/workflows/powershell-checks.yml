@@ -43,8 +43,7 @@ jobs:
       - name: Install pinned NSIS compiler
         shell: powershell
         run: |
-          choco install nsis --version=3.13.0 --yes --no-progress --limit-output
-          if ($LASTEXITCODE -ne 0) { throw 'NSIS installation failed.' }
+          ./build/Install-Nsis.ps1
       - name: Build installer and test installation lifecycle
         id: build
         shell: powershell
