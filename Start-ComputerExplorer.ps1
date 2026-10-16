@@ -35,14 +35,14 @@ function Read-GlpiCredentials {
     $dialog.StartPosition = 'CenterParent'; $dialog.FormBorderStyle = 'FixedDialog'
     $dialog.MaximizeBox = $false; $dialog.MinimizeBox = $false
     $intro = New-Object Windows.Forms.Label
-    $intro.Text = 'Token usati per questa finestra. Nessun salvataggio su file.'
+    $intro.Text = 'Token salvati cifrati da Windows per il tuo account su questo PC.'
     $intro.SetBounds(15, 12, 450, 35)
     $userLabel = New-Object Windows.Forms.Label; $userLabel.Text = 'User token'; $userLabel.SetBounds(15, 55, 95, 25)
     $userBox = New-Object Windows.Forms.TextBox; $userBox.SetBounds(115, 52, 340, 25); $userBox.UseSystemPasswordChar = $true
     $appLabel = New-Object Windows.Forms.Label; $appLabel.Text = 'App token'; $appLabel.SetBounds(15, 95, 95, 25)
     $appBox = New-Object Windows.Forms.TextBox; $appBox.SetBounds(115, 92, 340, 25); $appBox.UseSystemPasswordChar = $true
     $appBox.Enabled = $UseAppToken; $appLabel.Enabled = $UseAppToken
-    $ok = New-Object Windows.Forms.Button; $ok.Text = 'Usa token'; $ok.SetBounds(255, 145, 95, 30)
+    $ok = New-Object Windows.Forms.Button; $ok.Text = 'Salva token'; $ok.SetBounds(255, 145, 95, 30)
     $cancel = New-Object Windows.Forms.Button; $cancel.Text = 'Annulla'; $cancel.SetBounds(360, 145, 95, 30)
     $cancel.DialogResult = 'Cancel'; $dialog.CancelButton = $cancel; $dialog.AcceptButton = $ok
     $ok.Add_Click({
@@ -58,6 +58,8 @@ function Read-GlpiCredentials {
         $user = ConvertTo-SecureString -String $userBox.Text.Trim() -AsPlainText -Force
         $app = $null
         if ($UseAppToken) { $app = ConvertTo-SecureString -String $appBox.Text.Trim() -AsPlainText -Force }
+        try { Save-ExplorerGlpiCredentials -Path $EnvPath -User $user -App $app }
+        catch { $user.Dispose(); if ($null -ne $app) { $app.Dispose() }; throw }
         return [pscustomobject]@{ User = $user; App = $app }
     }
     finally { $userBox.Clear(); $appBox.Clear(); $dialog.Dispose() }
@@ -566,7 +568,7 @@ $tokensButton.Add_Click({
                 $script:GlpiCredentials.User.Dispose()
                 if ($null -ne $script:GlpiCredentials.App) { $script:GlpiCredentials.App.Dispose() }
             }
-            $script:GlpiCredentials = $credentials; $status.Text = 'Token GLPI aggiornati per questa finestra.'
+            $script:GlpiCredentials = $credentials; $status.Text = 'Token GLPI aggiornati e salvati cifrati per questo account Windows.'
         }
     }
     catch { [void][Windows.Forms.MessageBox]::Show($form, $_.Exception.Message, 'GLPI', 'OK', 'Error') }

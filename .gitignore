@@ -16,3 +16,7 @@ output/
 *.log
 *.tmp
 *.bak
+
+# Credenziali locali protette con Windows DPAPI
+glpi-credentials.dpapi.json
+glpi-credentials.dpapi.json.*

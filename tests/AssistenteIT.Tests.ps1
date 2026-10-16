@@ -2,6 +2,7 @@
 [CmdletBinding()]
 param([string]$InstallRoot=(Split-Path $PSScriptRoot -Parent))
 $ErrorActionPreference='Stop'
+if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { Write-Host 'SKIP: suite settings persistence requires Windows DPAPI.'; return }
 Set-StrictMode -Version 2.0
 Import-Module (Join-Path $InstallRoot 'AssistenteIT/AssistenteIT.Core.psm1') -Force -ErrorAction Stop
 $temporary = Join-Path ([IO.Path]::GetTempPath()) ('assistente-it-tests-' + [guid]::NewGuid().ToString('N'))
@@ -22,7 +23,7 @@ try {
 
     Save-AssistenteITSettings -Paths $paths -DomainControllers @('dc1.example.invalid','dc2.example.invalid') -GlpiBaseUri 'https://glpi.example.invalid/glpi/apirest.php/' -GlpiEnabled $true -UseAppToken $true
     $config = Get-Content -LiteralPath $paths.ConfigPath -Raw | ConvertFrom-Json
-    if ($config.Search.MinimumCharacters -ne 4 -or $config.Glpi.BaseUri -ne 'https://glpi.example.invalid/glpi/apirest.php' -or $config.DomainControllers.Count -ne 2 -or [IO.File]::ReadAllText($paths.EnvPath) -ne $envBefore) { throw 'Settings changed unrelated options or blank inputs erased tokens.' }
+    if ($config.Search.MinimumCharacters -ne 4 -or $config.Glpi.BaseUri -ne 'https://glpi.example.invalid/glpi/apirest.php' -or $config.DomainControllers.Count -ne 2 -or [IO.File]::ReadAllText($paths.EnvPath) -match 'existing-(user|app)' -or -not (Test-Path -LiteralPath (Join-Path $paths.ConfigDirectory 'glpi-credentials.dpapi.json'))) { throw 'Settings changed unrelated options or blank inputs erased tokens.' }
     'PASS: saving connection settings preserves search options and tokens left blank.'
 
     Save-AssistenteITSettings -Paths $paths -DomainControllers 'dc1.example.invalid' -GlpiBaseUri 'https://glpi.example.invalid/apirest.php' -GlpiEnabled $true -UserToken 'new#literal$token' -AppToken 'new-app'
@@ -96,6 +97,7 @@ try {
         [void][IO.Directory]::CreateDirectory((Join-Path $fixture 'AssistenteIT'))
         Copy-Item -LiteralPath (Join-Path $InstallRoot 'AssistenteIT/AssistenteIT.Core.psm1') -Destination (Join-Path $fixture 'AssistenteIT/AssistenteIT.Core.psm1')
         Copy-Item -LiteralPath (Join-Path $InstallRoot 'AssistenteIT/Invoke-Module.ps1') -Destination (Join-Path $fixture 'AssistenteIT/Invoke-Module.ps1')
+        Copy-Item -LiteralPath (Join-Path $InstallRoot 'Glpi.Credentials.ps1') -Destination (Join-Path $fixture 'Glpi.Credentials.ps1')
         Copy-Item -LiteralPath (Join-Path $InstallRoot 'AssistenteIT/LegacyMigration.ps1') -Destination (Join-Path $fixture 'AssistenteIT/LegacyMigration.ps1')
         'param($ConfigPath,$EnvPath); [pscustomobject]@{ConfigPath=$ConfigPath;EnvPath=$EnvPath}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $PSScriptRoot "result.json") -Encoding UTF8' | Set-Content -LiteralPath (Join-Path $fixture 'valid.ps1') -Encoding UTF8
         [pscustomobject]@{SchemaVersion=1;Product='Fixture';Version='1.0.0';Modules=@([pscustomobject]@{Id='test-module';EntryPoint='valid.ps1';UsesAppSettings=$true})} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $fixture 'assistente-it.json') -Encoding UTF8

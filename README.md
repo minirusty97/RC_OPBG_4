@@ -54,7 +54,7 @@ powershell.exe -NoProfile -STA -File .\Start-ComputerExplorer.ps1
 
 Riutilizza `computer-explorer.config.local.json`, già configurato per le prove AD e GLPI. Se manca, copiarlo dal modello e impostare URL GLPI, Enabled e UseAppToken come descritto sotto. Il modello viene lasciato disabilitato per GLPI e non contiene token.
 
-Scrivere ad esempio `PORT-` e premere **Cerca**. I token GLPI vengono letti automaticamente dal `.env` nella cartella degli script. Se il file manca o i token richiesti sono vuoti, si apre il prompt della finestra. **Token GLPI** permette una sostituzione temporanea per la finestra corrente. Graph riutilizza la sessione disponibile nello stesso processo; se manca o richiede ambiti aggiuntivi, apre il login interattivo. I token GLPI non vanno inseriti nel JSON o nel repository.
+Scrivere ad esempio `PORT-` e premere **Cerca**. I token GLPI vengono letti dall’archivio cifrato personale; un `.env` precedente viene migrato alla prima lettura. Se mancano i token richiesti, si apre il prompt della finestra. **Token GLPI** permette di aggiornarli e salvarli cifrati. Graph riutilizza la sessione disponibile nello stesso processo; se manca o richiede ambiti aggiuntivi, apre il login interattivo. I token GLPI non vanno inseriti nel JSON o nel repository.
 
 I cinque DC vengono interrogati in sequenza da un unico lettore AD dedicato. In parallelo ad AD procedono GLPI, Entra e Intune, per un massimo di quattro lettori attivi. Un solo lavoro prepara la sessione Graph, poi Entra e Intune partono insieme; AD e GLPI possono già procedere durante il login. La finestra riceve i risultati man mano, senza aspettare le fonti più lente. Gli aggiornamenti arrivati nello stesso intervallo vengono riuniti prima di ridisegnare la griglia. **Interrompi** annulla tutti i lettori della ricerca; le fonti ancora in attesa restano non verificate. I lettori vengono arrestati e disposti prima di consentire una nuova operazione. Le caselle AD / Entra / Intune / GLPI scelgono le fonti da interrogare. Quattro indicatori permanenti in basso mostrano lo stato di ogni fonte: verde se terminata correttamente, rosso se terminata con errori, giallo se in corso e grigio se esclusa. AD indica anche i DC completati. La ricerca si conclude quando tutte le fonti selezionate hanno un esito finale, compresi gli errori; a quel punto si può agire sui risultati selezionati. La verifica prima della cancellazione continua a controllare le fonti scelte.
 
@@ -68,25 +68,13 @@ Install-Module Microsoft.Graph.Authentication -Scope CurrentUser
 
 La console accetta gli ambiti di lettura e quelli più ampi già utilizzati. Se serve autenticarsi, mantiene gli ambiti autorizzati del progetto: `Directory.AccessAsUser.All` per Entra e `DeviceManagementManagedDevices.ReadWrite.All` per Intune. Una sessione applicativa preconfigurata viene conservata; le risposte API ne verificano i diritti effettivi.
 
-### Token GLPI nel file .env
+### Token GLPI
 
-Creare una sola volta il file locale dal modello, senza sovrascrivere un `.env` già compilato:
+Inserire i token nelle **Impostazioni** della suite o tramite **Token GLPI** nella finestra Computer Explorer. Vengono salvati cifrati con Windows DPAPI CurrentUser, nel file `glpi-credentials.dpapi.json` accanto al `.env` configurato. L’App token non è richiesto se `Glpi.UseAppToken` è `false`, ma un token già salvato viene conservato.
 
-```powershell
-if (-not (Test-Path -LiteralPath .\.env)) { Copy-Item .\.env.example .\.env }
-notepad .\.env
-```
+Il `.env` è mantenuto come formato di importazione dalle versioni precedenti: dopo una scrittura e rilettura riuscita dell’archivio cifrato, le righe dei token vengono rimosse. Commenti e altre variabili rimangono. Il parser non esegue espressioni e rifiuta duplicati o righe malformate senza mostrare valori. Non inserire token nel JSON, nel modello `.env.example` o nel repository.
 
-Inserire i token dopo il segno `=`:
-
-```dotenv
-GLPI_USER_TOKEN=il_tuo_user_token
-GLPI_APP_TOKEN=il_tuo_app_token
-```
-
-L'App token può restare vuoto quando `Glpi.UseAppToken` è `false`. Il file `.env` contiene i token in chiaro e rimane locale, escluso da Git insieme a `.env.*`; soltanto `.env.example` è versionato. Non inserire i token reali nel modello. Sono supportati commenti, spazi e valori tra virgolette; variabili ed espressioni restano testo letterale. Un file malformato produce un errore con il numero di riga, senza mostrare il valore.
-
-Il caricamento automatico è disponibile nella finestra e in `Test-GlpiLookup.ps1`. Una volta letti, i token vengono conservati come SecureString in memoria. Dopo aver modificato il `.env`, chiudere e riaprire la finestra. Gli inserimenti manuali non modificano il file.
+Il lettore è condiviso con `Test-GlpiLookup.ps1`. La finestra conserva SecureString in memoria fino alla chiusura. Per aggiornare i token già caricati usare il pulsante Token GLPI o chiudere e riaprire la finestra.
 
 ### Selezione ed eliminazione
 
@@ -195,7 +183,7 @@ Copy-Item .\computer-explorer.config.example.json .\computer-explorer.config.loc
 notepad .\computer-explorer.config.local.json
 ```
 
-Nel file locale impostare `Glpi.Enabled` su `true`, inserire in `Glpi.BaseUri` l'URL corretto di `apirest.php` e verificare `Glpi.UseAppToken`. I token vengono letti dal `.env`; se manca o è incompleto, vengono richiesti nei prompt.
+Nel file locale impostare `Glpi.Enabled` su `true`, inserire in `Glpi.BaseUri` l'URL corretto di `apirest.php` e verificare `Glpi.UseAppToken`. I token vengono letti dall’archivio DPAPI; il `.env` esistente viene migrato. Se mancano le credenziali richieste, vengono richieste nei prompt.
 
 Per provare la ricerca:
 
@@ -249,3 +237,13 @@ Censito mostra una spunta verde solo se il campo Gruppo (`groups_id`, non `group
 Seriale Intune e Seriale GLPI mostrano tutti i seriali significativi. Verifica seriale è Coerente solo quando entrambe le fonti sono concluse correttamente e ogni istanza ha lo stesso seriale valido. I segnaposto firmware e i valori mancanti restano Non verificabile. Seriali diversi producono Conflitto e bloccano Elimina per la selezione interessata: deselezionare le righe in conflitto per agire sulle altre. Il confronto ignora maiuscole e spazi esterni, senza rimuovere punteggiatura significativa.
 
 La riga è un raggruppamento per nome, non un’associazione hardware certificata: AD ed Entra non forniscono qui il seriale. Nessun oggetto viene scelto o escluso automaticamente in base alla data più recente. Il controllo è una protezione dell’interfaccia sui dati letti, non una nuova verifica hardware atomica durante l’eliminazione.
+
+### Credenziali GLPI cifrate (dalla 1.0.6)
+
+I token vengono salvati in `glpi-credentials.dpapi.json`, accanto al `.env` configurato (nell’installazione: `%LOCALAPPDATA%\AssistenteIT\Config`). Windows DPAPI CurrentUser li protegge senza una chiave condivisa nell’app. Il salvataggio richiede Windows; su altri sistemi non viene usato un formato in chiaro.
+
+Alla prima ricerca GLPI o al salvataggio delle impostazioni, i token presenti nel `.env` in uso vengono importati, scritti e riletti per verifica prima di rimuovere le sole righe GLPI_USER_TOKEN/GLPI_APP_TOKEN. Gli altri contenuti rimangono. Se la scrittura o la verifica falliscono, il testo originale non viene ripulito. Se archivio e .env contengono token discordanti, reinserire entrambi dalle impostazioni; un archivio illeggibile va conservato per il recupero e rimosso dal percorso attivo prima di reinserire le credenziali.
+
+Le caselle vuote nelle impostazioni conservano i token esistenti; Token GLPI in Computer Explorer salva ora le nuove credenziali cifrate. Ogni collega configura i propri token, evitando di copiare questo archivio su un altro account o PC. L’archivio resta fuori da Git e dal pacchetto di installazione.
+
+La migrazione interessa solo il .env del percorso attivo. Copie precedenti nel checkout, backup e Importazione-precedente non vengono eliminate automaticamente. La rimozione del testo non è una cancellazione sicura dei supporti: se i token sono stati esposti, revocarli e generarne di nuovi. DPAPI protegge il salvataggio su disco; l’app deve poterli usare durante le richieste API e non protegge da codice eseguito con il medesimo account.

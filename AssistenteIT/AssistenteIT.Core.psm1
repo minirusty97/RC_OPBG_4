@@ -1,6 +1,7 @@
 ﻿#requires -version 5.1
 Set-StrictMode -Version 2.0
 . (Join-Path $PSScriptRoot 'LegacyMigration.ps1')
+. (Join-Path (Split-Path $PSScriptRoot -Parent) 'Glpi.Credentials.ps1')
 
 function Read-AssistenteITManifest {
     [CmdletBinding()]
@@ -87,31 +88,19 @@ function Save-AssistenteITSettings {
         $uri = $null
         if (-not [Uri]::TryCreate($uriText, [UriKind]::Absolute, [ref]$uri) -or $uri.Scheme -notin @('http','https') -or $uri.UserInfo -or $uri.Query -or $uri.Fragment) { throw 'URL API GLPI non valido. Esempio: https://server/glpi/apirest.php' }
     }
-    $tokens = @{}
-    if (-not [string]::IsNullOrWhiteSpace($UserToken)) { $tokens.GLPI_USER_TOKEN = ConvertTo-AssistenteITEnvValue $UserToken.Trim() }
-    if (-not [string]::IsNullOrWhiteSpace($AppToken)) { $tokens.GLPI_APP_TOKEN = ConvertTo-AssistenteITEnvValue $AppToken.Trim() }
+    foreach ($value in @($UserToken,$AppToken)) {
+        if ($null -ne $value -and $value.IndexOfAny([char[]]@([char]0,[char]10,[char]13)) -ge 0) { throw 'Il token deve occupare una sola riga.' }
+    }
     $configuration = Get-Content -LiteralPath $Paths.ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
     $configuration.DomainControllers = $controllers
     $configuration.Glpi.Enabled = $GlpiEnabled; $configuration.Glpi.BaseUri = $uriText; $configuration.Glpi.UseAppToken = $UseAppToken
-    $envText = $null
-    if ($tokens.Count -gt 0) {
-        $lines = New-Object 'System.Collections.Generic.List[string]'
-        $seen = @{}
-        foreach ($line in [IO.File]::ReadAllLines($Paths.EnvPath, [Text.Encoding]::UTF8)) {
-            if ($line -match '^\s*(?:export\s+)?(GLPI_USER_TOKEN|GLPI_APP_TOKEN)\s*=') {
-                $key = $Matches[1]
-                if ($tokens.ContainsKey($key)) {
-                    if (-not $seen.ContainsKey($key)) { [void]$lines.Add($key + '=' + $tokens[$key]); $seen[$key]=$true }
-                    continue
-                }
-            }
-            [void]$lines.Add($line)
-        }
-        foreach ($key in $tokens.Keys) { if (-not $seen.ContainsKey($key)) { [void]$lines.Add($key + '=' + $tokens[$key]) } }
-        $envText = ($lines -join [Environment]::NewLine) + [Environment]::NewLine
+    $user=$null; $app=$null
+    try {
+        if (-not [string]::IsNullOrWhiteSpace($UserToken)) { $user=ConvertTo-SecureString $UserToken.Trim() -AsPlainText -Force }
+        if (-not [string]::IsNullOrWhiteSpace($AppToken)) { $app=ConvertTo-SecureString $AppToken.Trim() -AsPlainText -Force }
+        Save-ExplorerGlpiCredentials -Path $Paths.EnvPath -User $user -App $app
     }
-    # Validate everything before replacing either user-owned file.
-    if ($null -ne $envText) { Write-AssistenteITAtomicFile $Paths.EnvPath $envText }
+    finally { if ($null -ne $user) { $user.Dispose() }; if ($null -ne $app) { $app.Dispose() } }
     Write-AssistenteITAtomicFile $Paths.ConfigPath (($configuration | ConvertTo-Json -Depth 20) + [Environment]::NewLine)
 }
 
