@@ -82,7 +82,9 @@ function Update-ExplorerCounters {
     $counterLabel.Text = 'Risultati: {0} | Selezionati: {1}' -f $grid.Rows.Count, $selected
     $complete = $null -ne $script:Latest -and $script:Latest.Complete
     if ($complete) { $complete = @($script:Latest.Sources | Where-Object { $_.State -notin @('OK','Errore','Esclusa') }).Count -eq 0 }
-    $deleteButton.Enabled = $selected -gt 0 -and $complete -and -not $script:Busy -and -not $script:RemovalNeedsRefresh
+    $conflicts=@($grid.SelectedRows | Where-Object { $null -ne $_.Tag -and $null -ne $_.Tag.PSObject.Properties['SerialConflict'] -and $_.Tag.SerialConflict }).Count
+    if ($conflicts -gt 0) { $counterLabel.Text+=' | Conflitti seriale: '+$conflicts }
+    $deleteButton.Enabled = $conflicts -eq 0 -and $selected -gt 0 -and $complete -and -not $script:Busy -and -not $script:RemovalNeedsRefresh
 }
 
 function Show-RemovalSources {
@@ -286,6 +288,7 @@ function Update-ExplorerSourceStatus {
 
 function Show-ExplorerSnapshot {
     param($Snapshot)
+    $script:CopyCell=$null
     $selectedNames = @($grid.SelectedRows | Where-Object { $null -ne $_.Tag } | ForEach-Object { $_.Tag.Name })
     $script:RenderingGrid = $true
     $script:Latest = $Snapshot
@@ -295,8 +298,17 @@ function Show-ExplorerSnapshot {
         foreach ($computer in $Snapshot.Rows) {
             $index = $grid.Rows.Add([object[]]@($computer.Name, $computer.AD, $computer.ADLastModified,
                 $computer.Entra, $computer.EntraLastActivity, $computer.Intune, $computer.IntuneLastCheckIn,
-                $computer.GLPI, $computer.GlpiLastInventory, $computer.StatoGLPI, $computer.PercorsoAD, $computer.Note))
+                $computer.GLPI, $computer.GlpiLastInventory, $computer.StatoGLPI, (Get-UiSetting $computer 'Censito' ''),
+                (Get-UiSetting $computer 'IntuneSerial' ''), (Get-UiSetting $computer 'GlpiSerial' ''),
+                (Get-UiSetting $computer 'SerialCheck' 'Non verificabile'), $computer.PercorsoAD, $computer.Note))
             $row = $grid.Rows[$index]; $row.Tag = $computer
+            $row.Cells['Censito'].ToolTipText=[string](Get-UiSetting $computer 'CensitoInfo' '')
+            if ((Get-UiSetting $computer 'Censito' '') -eq '✓') {
+                $row.Cells['Censito'].Style.ForeColor=[Drawing.Color]::DarkGreen
+                $row.Cells['Censito'].Style.SelectionForeColor=[Drawing.Color]::DarkGreen
+            }
+            Set-CellPresence $row.Cells['SerialCheck'] (Get-UiSetting $computer 'SerialColor' 'Grigio')
+            $row.Cells['SerialCheck'].ToolTipText='Confronto dei seriali Intune/GLPI dello stesso nome. AD ed Entra non forniscono qui un seriale hardware. Coerente non certifica identita AD/Entra.' 
             foreach ($name in @('AD', 'Entra', 'Intune', 'GLPI')) {
                 $color = $computer.PSObject.Properties[$name + 'Color'].Value
                 Set-CellPresence $row.Cells[$name] $color
@@ -370,6 +382,8 @@ $splitter.Dock = 'Fill'; $splitter.Orientation = 'Horizontal'
 $splitter.Size = New-Object Drawing.Size(1300, 650); $splitter.SplitterDistance = 390
 $grid = New-Object Windows.Forms.DataGridView
 $grid.Dock = 'Fill'; $grid.ReadOnly = $true; $grid.AllowUserToAddRows = $false; $grid.AllowUserToDeleteRows = $false
+$grid.AllowUserToResizeRows = $false
+$grid.ClipboardCopyMode = 'EnableAlwaysIncludeHeaderText'
 $grid.SelectionMode = 'FullRowSelect'; $grid.MultiSelect = $true; $grid.RowHeadersVisible = $false
 $grid.ColumnHeadersDefaultCellStyle.WrapMode = 'False'
 $grid.AutoSizeRowsMode = 'None'; $grid.BackgroundColor = [Drawing.Color]::White
@@ -378,7 +392,8 @@ foreach ($column in @(
     @('Entra', 'Entra ID', 60), @('EntraLastActivity', 'Attività Entra', 135),
     @('Intune', 'Intune', 55), @('IntuneLastCheckIn', 'Check-in Intune', 135),
     @('GLPI', 'GLPI', 50), @('GlpiLastInventory', 'Inventario GLPI', 135), @('StatoGLPI', 'Stato GLPI', 185),
-    @('PercorsoAD', 'Percorso AD', 290), @('Note', 'Segnalazioni', 290)
+    @('Censito', 'Censito', 65), @('IntuneSerial', 'Seriale Intune', 140), @('GlpiSerial', 'Seriale GLPI', 140),
+    @('SerialCheck', 'Verifica seriale', 120), @('PercorsoAD', 'Percorso AD', 290), @('Note', 'Segnalazioni', 290)
 )) {
     $control = New-Object Windows.Forms.DataGridViewTextBoxColumn
     $control.Name = $column[0]; $control.HeaderText = $column[1]; $control.Width = [int]$column[2]
@@ -391,6 +406,37 @@ foreach ($column in @(
     }
     [void]$grid.Columns.Add($control)
 }
+# Right-click copies a cell without changing the multiple-row selection used by deletion.
+$gridCopyMenu=New-Object Windows.Forms.ContextMenuStrip
+$copyCellItem=$gridCopyMenu.Items.Add('Copia cella')
+$copyRowsItem=$gridCopyMenu.Items.Add('Copia righe selezionate (Ctrl+C)')
+$script:CopyCell=$null
+$grid.ContextMenuStrip=$gridCopyMenu
+$grid.Add_CellMouseDown({
+    param($sender,$eventArgs)
+    if ($eventArgs.Button -eq [Windows.Forms.MouseButtons]::Right) {
+        $script:CopyCell=$null
+        if ($eventArgs.RowIndex -ge 0 -and $eventArgs.ColumnIndex -ge 0) { $script:CopyCell=$grid.Rows[$eventArgs.RowIndex].Cells[$eventArgs.ColumnIndex] }
+        $copyCellItem.Enabled=$null -ne $script:CopyCell
+        $copyRowsItem.Enabled=$grid.SelectedRows.Count -gt 0
+    }
+})
+$copyCellItem.Add_Click({
+    if ($null -ne $script:CopyCell) {
+        $value=[string]$script:CopyCell.FormattedValue
+        if ($value.Length -gt 0) {
+            try { [Windows.Forms.Clipboard]::SetText($value) }
+            catch { $status.Text="Appunti occupati: riprovare la copia." }
+        }
+    }
+})
+$copyRowsItem.Add_Click({
+    $content=$grid.GetClipboardContent()
+    if ($null -ne $content) {
+        try { [Windows.Forms.Clipboard]::SetDataObject($content,$true) }
+        catch { $status.Text="Appunti occupati: riprovare la copia." }
+    }
+})
 $grid.Columns['ADLastModified'].ToolTipText += ' Modifica oggetto AD sui DC letti.'
 $grid.Columns['EntraLastActivity'].ToolTipText += ' Attività approssimativa comunicata da Entra.'
 $grid.Columns['GlpiLastInventory'].ToolTipText += ' Data inventario GLPI; non è la modifica della scheda. Orario del server GLPI.'
@@ -529,6 +575,8 @@ $deleteButton.Add_Click({
     try {
         $names = @($grid.SelectedRows | Where-Object { $null -ne $_.Tag } | ForEach-Object { $_.Tag.Name } | Sort-Object -Unique)
         if ($names.Count -eq 0 -or $script:Busy -or $script:RemovalNeedsRefresh) { return }
+        Update-ExplorerCounters
+        if (-not $deleteButton.Enabled) { return }
         $sources = Show-RemovalSources $names
         if ($null -eq $sources) { return }
         Start-RemovalOperation -Operation 'PrepareRemoval' -Names $names -Sources $sources
@@ -626,6 +674,7 @@ finally {
         $script:GlpiCredentials.User.Dispose()
         if ($null -ne $script:GlpiCredentials.App) { $script:GlpiCredentials.App.Dispose() }
     }
+    $gridCopyMenu.Dispose()
     $sourceToolTip.Dispose()
     $form.Dispose()
     $applicationIcon.Dispose()

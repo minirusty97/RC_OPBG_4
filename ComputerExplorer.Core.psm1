@@ -272,6 +272,15 @@ function Format-ExplorerDate {
     return $date.ToString('dd/MM/yyyy HH:mm')
 }
 
+function Get-ExplorerSerials {
+    param([object[]]$Records)
+    foreach ($record in $Records) {
+        $serial=([string](Get-ExplorerValue $record 'SerialNumber')).Trim().ToUpperInvariant()
+        # Do not treat firmware placeholders as hardware identities; keep real punctuation.
+        if ($serial -and $serial -notmatch '^(UNKNOWN|NONE|N/?A|NOT (AVAILABLE|APPLICABLE|SPECIFIED)|DEFAULT STRING|SYSTEM SERIAL NUMBER|TO BE FILLED BY O\.?E\.?M\.?|0+|F+|-+)$') { $serial }
+    }
+}
+
 function Merge-ExplorerResults {
     [CmdletBinding()]
     param([System.Collections.IDictionary]$Sources, [string[]]$DomainControllers)
@@ -309,9 +318,33 @@ function Merge-ExplorerResults {
         $notes = New-Object 'System.Collections.Generic.List[string]'
         if ($guids.Count -gt 1) { [void]$notes.Add('GUID AD diversi') }
         if ($paths.Count -gt 1) { [void]$notes.Add('Percorsi AD diversi') }
-        $serials = @(@($intune) + @($glpi) | ForEach-Object { [string](Get-ExplorerValue $_ 'SerialNumber') } |
-            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_.Trim().ToUpperInvariant() } | Sort-Object -Unique)
-        if ($serials.Count -gt 1) { [void]$notes.Add('Seriali diversi: verificare associazione') }
+        $intuneSerials=@(Get-ExplorerSerials $intune | Sort-Object -Unique)
+        $glpiSerials=@(Get-ExplorerSerials $glpi | Sort-Object -Unique)
+        $serials=@(@($intuneSerials)+@($glpiSerials) | Sort-Object -Unique)
+        $serialConflict=$serials.Count -gt 1
+        $serialCheck='Non verificabile'; $serialColor='Grigio'
+        if ($serialConflict) {
+            $serialCheck='Conflitto'; $serialColor='Rosso'
+            [void]$notes.Add('Seriali diversi: stesso nome, identita hardware non confermata. Eliminazione bloccata.')
+        }
+        elseif ($Sources.Intune.State -eq 'OK' -and $Sources.GLPI.State -eq 'OK' -and
+            $intune.Count -gt 0 -and $glpi.Count -gt 0 -and $intuneSerials.Count -eq 1 -and $glpiSerials.Count -eq 1 -and
+            @(Get-ExplorerSerials $intune).Count -eq $intune.Count -and @(Get-ExplorerSerials $glpi).Count -eq $glpi.Count) {
+            $serialCheck='Coerente'; $serialColor='Verde'
+        }
+        $groupUnknown=@($glpi | Where-Object { (Get-ExplorerValue $_ 'GroupVerified') -ne $true }).Count -gt 0
+        $censito=''; $censitoColor='Grigio'
+        $censitoInfo='Nessuna scheda GLPI per questo nome.'
+        if ($Sources.GLPI.State -ne 'OK') { $censito='?'; $censitoInfo='GLPI non verificato: '+$Sources.GLPI.State }
+        elseif ($glpi.Count -gt 0) {
+            $groupNames=@($glpi | ForEach-Object { [string](Get-ExplorerValue $_ 'GroupName') })
+            $censitoInfo=(@($glpi | ForEach-Object { 'GLPI #'+$_.GlpiId+': '+[string](Get-ExplorerValue $_ 'GroupName')+' '+[string](Get-ExplorerValue $_ 'GroupError') }) -join ' | ')
+            if ($groupUnknown -or $serialConflict) { $censito='?' }
+            elseif (@($groupNames | Where-Object { $_.Trim() -ine 'CENSITO' }).Count -eq 0) { $censito='✓'; $censitoColor='Verde' }
+            elseif (@($groupNames | Where-Object { $_.Trim() -ieq 'CENSITO' }).Count -gt 0) { $censito='?'; $censitoInfo+=' | Gruppi discordanti tra le schede.' }
+            if ($groupUnknown) { [void]$notes.Add('Gruppo GLPI non verificabile') }
+            if ($serialConflict) { $censitoInfo+=' | Associazione hardware in conflitto: censimento non confermato.' }
+        }
         $deviceIds = @($entra | ForEach-Object { $_.DeviceId } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
         foreach ($device in $intune) {
             $id = [string]$device.AzureADDeviceId
@@ -324,6 +357,9 @@ function Merge-ExplorerResults {
         [pscustomobject]@{
             Name = $group.Name; AD = $adText; ADColor = $adColor; Verificati = ('{0}/{1}' -f $verified, $DomainControllers.Count)
             Entra = $entraPresence.Text; EntraColor = $entraPresence.Color; Intune = $intunePresence.Text; IntuneColor = $intunePresence.Color
+            Censito=$censito; CensitoColor=$censitoColor; CensitoInfo=$censitoInfo
+            IntuneSerial=($intuneSerials -join ' | '); GlpiSerial=($glpiSerials -join ' | ')
+            SerialCheck=$serialCheck; SerialColor=$serialColor; SerialConflict=$serialConflict
             GLPI = $glpiPresence.Text; GLPIColor = $glpiPresence.Color
             ADLastModified = Get-ExplorerLatestDate -Records @($group.AD) -Property 'LastModified'
             EntraLastActivity = Get-ExplorerLatestDate -Records $entra -Property 'LastSignIn'

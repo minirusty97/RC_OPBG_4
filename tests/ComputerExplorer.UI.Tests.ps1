@@ -18,6 +18,7 @@ try {
     if (@($options.Controls | Where-Object { $_.Text -like 'Verde:*' }).Count -gt 0) { throw 'Old legend still displayed.' }
     $rows = @(1..2 | ForEach-Object {
         [pscustomobject]@{
+            Censito='✓'; CensitoInfo='Gruppo: CENSITO'; IntuneSerial='ABC'; GlpiSerial='ABC'; SerialCheck='Coerente'; SerialColor='Verde'; SerialConflict=$false
             Name = ('PC-UI-' + $_); AD = '5/5'; ADColor = 'Verde'; Verificati = '5/5'
             Entra = '12'; EntraColor = 'Giallo'; Intune = '1'; IntuneColor = 'Verde'; GLPI = '1'; GLPIColor = 'Verde'
             ADLastModified = [datetime]'2026-10-15T10:05:00'; EntraLastActivity = [datetime]'2026-10-14T23:50:00'
@@ -39,6 +40,21 @@ try {
     Show-ExplorerSnapshot $snapshot
     if ($grid.SelectedRows.Count -ne 2) { throw 'Selection not retained after snapshot update.' }
     'PASS: native WinForms counters, multiple selection and removal button state.'
+    if ($grid.AllowUserToResizeRows -or $grid.AutoSizeRowsMode -ne 'None') { throw 'Result row heights can still change.' }
+    $script:CopyCell=$grid.Rows[0].Cells['Name']; $copyCellItem.PerformClick()
+    if ([Windows.Forms.Clipboard]::GetText() -ne 'PC-UI-1') { throw 'Cell copy did not use displayed text.' }
+    $copyRowsItem.PerformClick()
+    $copied=[Windows.Forms.Clipboard]::GetText()
+    if ($copied -notlike '*Nome computer*' -or $copied -notlike '*PC-UI-1*' -or $copied -notlike '*PC-UI-2*' -or $grid.SelectedRows.Count -ne 2) { throw 'Row copy changed selection or omitted headers/rows.' }
+    if ($grid.Rows[0].Cells['Censito'].Value -ne '✓' -or $grid.Rows[0].Cells['Censito'].Style.ForeColor -ne [Drawing.Color]::DarkGreen) { throw 'Census check is missing or not green.' }
+    'PASS: fixed row heights, green census and clipboard cell/row copying preserve multi-selection.'
+    $rows[0].SerialConflict=$true; $rows[0].SerialCheck='Conflitto'; $rows[0].SerialColor='Rosso'
+    Show-ExplorerSnapshot $snapshot
+    if ($deleteButton.Enabled -or $counterLabel.Text -notlike '*Conflitti seriale: 1*') { throw 'Conflicting selected hardware can be deleted.' }
+    $rows[0].SerialConflict=$false; $rows[0].SerialCheck='Coerente'; $rows[0].SerialColor='Verde'
+    Show-ExplorerSnapshot $snapshot
+    if (-not $deleteButton.Enabled) { throw 'Nonconflicting results remain blocked.' }
+    'PASS: selected serial conflicts block deletion and normal selections remain actionable.'
     if ($sourceStatusLabels.Count -ne 4) { throw 'Four persistent source statuses are missing.' }
     foreach ($name in @('AD','Entra','Intune','GLPI')) {
         if ($sourceStatusLabels[$name].BackColor -ne [Drawing.Color]::Honeydew -or $sourceStatusLabels[$name].Text -notlike '*Terminata*') { throw ('Successful source did not turn green: '+$name) }
@@ -105,6 +121,7 @@ finally {
     $timer.Dispose()
     if ($null -ne $script:Pipeline) { $script:Pipeline.Stop(); $script:Pipeline.Dispose() }
     $script:Worker.Close(); $script:Worker.Dispose()
+    $gridCopyMenu.Dispose()
     $sourceToolTip.Dispose()
     $form.Dispose()
     $applicationIcon.Dispose()
