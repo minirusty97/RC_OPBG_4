@@ -4,7 +4,7 @@ Import-Module (Join-Path $PSScriptRoot 'ComputerExplorer.Core.psm1') -ErrorActio
 
 function New-ParallelSource {
     param([string]$Name, [string]$State = 'In attesa', [string]$ErrorText)
-    [pscustomobject]@{ Name=$Name; State=$State; Records=@(); DcSources=@(); CheckedAtUtc=$null; FromCache=$false; Error=$ErrorText }
+    [pscustomobject]@{ Name=$Name; State=$State; Records=@(); DcSources=@(); CheckedAtUtc=$null; FromCache=$false; Error=$ErrorText; Progress=''; CurrentTarget='' }
 }
 
 function Get-ExplorerReadWorkerScript {
@@ -56,7 +56,9 @@ function Send-ParallelSnapshot {
         Rows=@(Merge-ExplorerResults -Sources $Sources -DomainControllers $Controllers)
         Sources=@($Sources.Values | ForEach-Object {
             [pscustomobject]@{ Name=$_.Name; State=$_.State; Count=$_.Records.Count; CheckedAtUtc=$_.CheckedAtUtc
-                FromCache=$_.FromCache; Error=$_.Error; DcSources=@($_.DcSources) }
+                FromCache=$_.FromCache; Error=$_.Error; DcSources=@($_.DcSources)
+                Progress=$(if ($null -ne $_.PSObject.Properties['Progress']) { $_.Progress } else { '' })
+                CurrentTarget=$(if ($null -ne $_.PSObject.Properties['CurrentTarget']) { $_.CurrentTarget } else { '' }) }
         })
     }
     if ($null -ne $Queue) { $Queue.Enqueue($snapshot) }
@@ -92,22 +94,33 @@ function Invoke-ComputerExplorerParallelSearch {
     # Servizi indipendenti subito; il solo login Graph precede le due letture cloud.
     if ($enabled -contains 'GLPI') { [void]$jobs.Add([pscustomobject]@{Kind='GLPI'}) }
     if ($cloud.Count -gt 0) { [void]$jobs.Add([pscustomobject]@{Kind='GraphAuth';CloudSources=$cloud}) }
+    # One AD runspace and one queued DC at a time, independent of cloud/GLPI.
+    $adPending=New-Object 'System.Collections.Generic.Queue[string]'
     if ($sources.AD.State -eq 'In attesa') {
-        foreach ($dc in $controllers) { [void]$jobs.Add([pscustomobject]@{Kind='AD';DomainController=$dc}) }
+        foreach ($dc in $controllers) { $adPending.Enqueue($dc) }
+        $sources.AD.Progress='0/{0} DC' -f $controllers.Count
     }
-    Send-ParallelSnapshot $sources $controllers 'Ricerche in parallelo. Se richiesto, completare il login Graph nel browser.' $ProgressQueue
-    $pool=[RunspaceFactory]::CreateRunspacePool(1,8)
+    foreach ($name in $cloud) { $sources[$name].Progress='Accesso Graph' }
+    $pool=[RunspaceFactory]::CreateRunspacePool(1,3)
     $pool.ApartmentState='STA'; $pool.ThreadOptions='ReuseThread'
+    $adPool=[RunspaceFactory]::CreateRunspacePool(1,1)
+    $adPool.ApartmentState='STA'; $adPool.ThreadOptions='ReuseThread'
     $tasks=New-Object 'System.Collections.Generic.List[object]'
     $cache=Get-ExplorerCloudCache
     $body=Get-ExplorerReadWorkerScript
     $adCompleted=0
     $watch=[Diagnostics.Stopwatch]::StartNew()
     try {
-        $pool.Open()
+        $pool.Open(); $adPool.Open()
         $arguments=@{Pool=$pool;Body=$body;ConfigPath=$ConfigPath;Fragment=$fragment;Configuration=$config;Cache=$cache
             UserToken=$GlpiUserToken;AppToken=$GlpiAppToken;Refresh=[bool]$ForceCloudRefresh}
+        $adArguments=@{}; foreach ($key in $arguments.Keys) { $adArguments[$key]=$arguments[$key] }; $adArguments.Pool=$adPool
         foreach ($job in $jobs) { [void]$tasks.Add((Start-ExplorerReadTask -Job $job @arguments)) }
+        if ($adPending.Count -gt 0) {
+            $dc=$adPending.Dequeue(); $sources.AD.CurrentTarget=$dc
+            [void]$tasks.Add((Start-ExplorerReadTask -Job ([pscustomobject]@{Kind='AD';DomainController=$dc}) @adArguments))
+        }
+        Send-ParallelSnapshot $sources $controllers 'Ricerca avviata. Se richiesto, completare il login Graph nel browser.' $ProgressQueue
         while ($tasks.Count -gt 0) {
             $updated=$false
             foreach ($task in @($tasks.ToArray())) {
@@ -117,14 +130,20 @@ function Invoke-ComputerExplorerParallelSearch {
                     $output=@($task.Pipeline.EndInvoke($task.Operation))
                     if ($task.Pipeline.Streams.Error.Count -gt 0) { throw $task.Pipeline.Streams.Error[0] }
                     foreach ($warning in $task.Pipeline.Streams.Warning) { Write-Warning $warning.Message }
-                    if ($output.Count -ne 1 -or $null -eq $output[0].PSObject.Properties['State']) { throw 'Risposta del lettore non valida.' }
+                    if ($output.Count -ne 1 -or $null -eq $output[0].PSObject.Properties['State'] -or
+                        $output[0].State -notin @('OK','Errore','Esclusa')) { throw 'Risposta del lettore non valida o non conclusiva.' }
+                    if ($job.Kind -ne 'GraphAuth') {
+                        foreach ($field in @('Records','DcSources','CheckedAtUtc','FromCache','Error')) {
+                            if ($null -eq $output[0].PSObject.Properties[$field]) { throw ('Risposta del lettore incompleta: ' + $field) }
+                        }
+                    }
                     $result=$output[0]
                 }
                 catch { $result=New-ParallelSource $job.Kind 'Errore' $_.Exception.Message }
                 finally { $task.Pipeline.Dispose(); [void]$tasks.Remove($task) }
                 if ($job.Kind -eq 'GraphAuth') {
                     if ($result.State -eq 'OK') {
-                        foreach ($name in $cloud) { [void]$tasks.Add((Start-ExplorerReadTask -Job ([pscustomobject]@{Kind=$name}) @arguments)) }
+                        foreach ($name in $cloud) { $sources[$name].Progress='Lettura'; [void]$tasks.Add((Start-ExplorerReadTask -Job ([pscustomobject]@{Kind=$name}) @arguments)) }
                     }
                     else {
                         foreach ($name in $cloud) { $sources[$name]=New-ParallelSource $name 'Errore' $result.Error }
@@ -132,6 +151,7 @@ function Invoke-ComputerExplorerParallelSearch {
                 }
                 elseif ($job.Kind -eq 'AD') {
                     $adCompleted++
+                    $sources.AD.Progress='{0}/{1} DC' -f $adCompleted,$controllers.Count
                     if ($result.DcSources.Count -eq 0) {
                         $result.DcSources=@([pscustomobject]@{DomainController=$job.DomainController;Stato='Errore';Verificato=$false;Trovati=$null;Errore=$result.Error})
                     }
@@ -140,7 +160,12 @@ function Invoke-ComputerExplorerParallelSearch {
                     $sources.AD.CheckedAtUtc=[datetimeoffset]::UtcNow
                     $errors=@($sources.AD.DcSources | Where-Object { -not $_.Verificato } | ForEach-Object { "$($_.DomainController): $($_.Errore)" })
                     $sources.AD.Error=$errors -join ' | '
-                    if ($adCompleted -eq $controllers.Count) {
+                    if ($adPending.Count -gt 0) {
+                        $dc=$adPending.Dequeue(); $sources.AD.CurrentTarget=$dc
+                        [void]$tasks.Add((Start-ExplorerReadTask -Job ([pscustomobject]@{Kind='AD';DomainController=$dc}) @adArguments))
+                    }
+                    else {
+                        $sources.AD.CurrentTarget=''
                         $sources.AD.State='OK'; if ($errors.Count -gt 0) { $sources.AD.State='Errore' }
                     }
                 }
@@ -153,9 +178,16 @@ function Invoke-ComputerExplorerParallelSearch {
             }
             if ($tasks.Count -gt 0) { [Threading.Thread]::Sleep(30) }
         }
-        Send-ParallelSnapshot $sources $controllers ('Ricerca completata in {0:N1} s.' -f $watch.Elapsed.TotalSeconds) $ProgressQueue -Complete
+        # All scheduled readers have terminated; errors are terminal outcomes too.
+        foreach ($source in $sources.Values) {
+            if ($source.State -eq 'In attesa') { $source.State='Errore'; $source.Error='Il lettore non ha restituito un esito conclusivo.' }
+        }
+        $errorCount=@($sources.Values | Where-Object { $_.State -eq 'Errore' }).Count
+        $message='Ricerca completata in {0:N1} s.' -f $watch.Elapsed.TotalSeconds
+        if ($errorCount -gt 0) { $message+=' Fonti con errori: {0}.' -f $errorCount }
+        Send-ParallelSnapshot $sources $controllers $message $ProgressQueue -Complete
     }
-    finally { Stop-ExplorerReadTasks $tasks; $pool.Close(); $pool.Dispose(); $watch.Stop() }
+    finally { Stop-ExplorerReadTasks $tasks; $adPool.Close(); $adPool.Dispose(); $pool.Close(); $pool.Dispose(); $watch.Stop() }
 }
 
 Export-ModuleMember -Function Invoke-ComputerExplorerParallelSearch

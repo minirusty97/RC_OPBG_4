@@ -112,6 +112,28 @@ try {
 }
 finally { Close-TestOperation }
 
+Start-TestOperation
+try {
+    $script:Final.Sources[0].State='Errore'; $script:Final.Sources[0].Error='Synthetic source failure'
+    $script:Release.Set()
+    if (-not $script:Invocation.AsyncWaitHandle.WaitOne(5000)) { throw 'Worker with a source error did not finish.' }
+    & $tick
+    Assert-CompletedView
+    'PASS: a terminal source error releases the search and permits actions on selected completed results.'
+}
+finally { Close-TestOperation }
+
+Start-TestOperation
+try {
+    $script:Final.Sources[0].State='In attesa'
+    $script:Release.Set()
+    if (-not $script:Invocation.AsyncWaitHandle.WaitOne(5000)) { throw 'Inconsistent final fixture did not finish.' }
+    & $tick
+    if ($deleteButton.Enabled) { throw 'A Complete flag enabled deletion with a source still pending.' }
+    'PASS: the final flag alone cannot enable deletion while a source has a nonterminal state.'
+}
+finally { Close-TestOperation }
+
 Start-TestOperation -Fail $true
 try {
     $script:Stopping = $true

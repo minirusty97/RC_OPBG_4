@@ -81,6 +81,7 @@ function Update-ExplorerCounters {
     $selected = @($grid.SelectedRows | Where-Object { $null -ne $_.Tag }).Count
     $counterLabel.Text = 'Risultati: {0} | Selezionati: {1}' -f $grid.Rows.Count, $selected
     $complete = $null -ne $script:Latest -and $script:Latest.Complete
+    if ($complete) { $complete = @($script:Latest.Sources | Where-Object { $_.State -notin @('OK','Errore','Esclusa') }).Count -eq 0 }
     $deleteButton.Enabled = $selected -gt 0 -and $complete -and -not $script:Busy -and -not $script:RemovalNeedsRefresh
 }
 
@@ -253,6 +254,36 @@ function Show-SelectedComputer {
     $details.Text = $lines -join [Environment]::NewLine
 }
 
+function Update-ExplorerSourceStatus {
+    param([object[]]$Sources)
+    foreach ($source in $Sources) {
+        if (-not $sourceStatusLabels.Contains($source.Name)) { continue }
+        $label=$sourceStatusLabels[$source.Name]
+        $name=$source.Name; if ($name -eq 'Entra') { $name='Entra ID' }
+        $text='Pronta'; $foreground=[Drawing.Color]::DimGray; $background=[Drawing.Color]::WhiteSmoke
+        switch ($source.State) {
+            'OK' { $text='Terminata'; $foreground=[Drawing.Color]::DarkGreen; $background=[Drawing.Color]::Honeydew }
+            'Errore' { $text='Terminata con errori'; $foreground=[Drawing.Color]::Firebrick; $background=[Drawing.Color]::MistyRose }
+            'Esclusa' { $text='Esclusa' }
+            'In attesa' {
+                $text='In corso'
+                $foreground=[Drawing.Color]::DarkGoldenrod; $background=[Drawing.Color]::LightGoldenrodYellow
+                if ($source.Name -ne 'AD' -and (Get-UiSetting $source 'Progress' '') -eq 'Accesso Graph') { $text='Accesso Graph' }
+            }
+            'Interrotta' { $text='Interrotta'; $foreground=[Drawing.Color]::DarkOrange; $background=[Drawing.Color]::OldLace }
+        }
+        $progress=[string](Get-UiSetting $source 'Progress' '')
+        if ($source.Name -eq 'AD' -and $progress) { $text+=' ('+$progress+')' }
+        $label.Text=$name+': '+$text; $label.ForeColor=$foreground; $label.BackColor=$background
+        $information=$label.Text
+        $target=[string](Get-UiSetting $source 'CurrentTarget' '')
+        if ($target) { $information+=' | DC: '+$target }
+        $errorText=[string](Get-UiSetting $source 'Error' '')
+        if ($errorText) { $information+=' | '+$errorText }
+        $sourceToolTip.SetToolTip($label,$information)
+    }
+}
+
 function Show-ExplorerSnapshot {
     param($Snapshot)
     $selectedNames = @($grid.SelectedRows | Where-Object { $null -ne $_.Tag } | ForEach-Object { $_.Tag.Name })
@@ -293,6 +324,7 @@ function Show-ExplorerSnapshot {
         if ($source.State -eq 'OK' -or $source.Name -eq 'AD') { $count = [string]$source.Count }
         [void]$sourceGrid.Rows.Add([object[]]@($source.Name, $source.State, $count, $date, $cache, $source.Error))
     }
+    Update-ExplorerSourceStatus -Sources $Snapshot.Sources
     Show-SelectedComputer
     $script:StageMessage = $Snapshot.Message
     $status.Text = '{0} | {1} nomi' -f $Snapshot.Message, $Snapshot.Rows.Count
@@ -310,7 +342,7 @@ $layout.Dock = 'Fill'; $layout.ColumnCount = 1; $layout.RowCount = 4
 [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 48)))
 [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 40)))
 [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent', 100)))
-[void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 35)))
+[void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 68)))
 $layout.Padding = New-Object Windows.Forms.Padding(8)
 $toolbar = New-Object Windows.Forms.FlowLayoutPanel; $toolbar.Dock = 'Fill'; $toolbar.WrapContents = $false
 $nameLabel = New-Object Windows.Forms.Label; $nameLabel.Text = 'Parte del nome:'; $nameLabel.AutoSize = $true; $nameLabel.Margin = New-Object Windows.Forms.Padding(4, 9, 4, 0)
@@ -383,10 +415,27 @@ foreach ($column in @(@('Fonte', 90), @('Esito', 100), @('Record', 75), @('Aggio
 }
 $detailTab.Controls.Add($details); $sourceTab.Controls.Add($sourceGrid); $tabs.TabPages.AddRange(@($detailTab, $sourceTab, $removalTab))
 $splitter.Panel1.Controls.Add($grid); $splitter.Panel2.Controls.Add($tabs)
+$footer = New-Object Windows.Forms.TableLayoutPanel; $footer.Dock='Fill'; $footer.ColumnCount=4; $footer.RowCount=2
+[void]$footer.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 34)))
+[void]$footer.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent', 100)))
+$sourceStatusLabels=[ordered]@{}
+$sourceToolTip=New-Object Windows.Forms.ToolTip
+$columnIndex=0
+foreach ($name in @('AD','Entra','Intune','GLPI')) {
+    [void]$footer.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle('Percent', 25)))
+    $label=New-Object Windows.Forms.Label; $label.Dock='Fill'; $label.AutoEllipsis=$true
+    $label.TextAlign='MiddleLeft'; $label.Margin=New-Object Windows.Forms.Padding(3)
+    $sourceStatusLabels[$name]=$label; $footer.Controls.Add($label,$columnIndex,0); $columnIndex++
+}
+Update-ExplorerSourceStatus -Sources @(foreach ($name in $sourceChecks.Keys) {
+    $state='Esclusa'; if ($sourceChecks[$name].Checked) { $state='Pronta' }
+    [pscustomobject]@{Name=$name;State=$state}
+})
 $status = New-Object Windows.Forms.Label; $status.Dock = 'Fill'; $status.AutoEllipsis = $true
 $status.Text = 'Inserire almeno ' + $config.MinimumCharacters + ' caratteri. Ctrl+clic o Maiusc+clic per selezionare più computer.'
 $layout.Controls.Add($toolbar, 0, 0); $layout.Controls.Add($options, 0, 1)
-$layout.Controls.Add($splitter, 0, 2); $layout.Controls.Add($status, 0, 3); $form.Controls.Add($layout)
+$footer.Controls.Add($status,0,1); $footer.SetColumnSpan($status,4)
+$layout.Controls.Add($splitter, 0, 2); $layout.Controls.Add($footer, 0, 3); $form.Controls.Add($layout)
 $form.AcceptButton = $searchButton
 
 # Un runspace persistente conserva la cache cloud. Nessun controllo WinForms
@@ -450,6 +499,10 @@ $searchButton.Add_Click({
         }
         [void]$script:Pipeline.AddScript($workerScript.ToString()).AddArgument((Join-Path $PSScriptRoot 'ComputerExplorer.Parallel.psm1')).AddArgument($nameBox.Text.Trim()).AddArgument($ConfigPath).AddArgument($enabled).AddArgument($script:GlpiCredentials).AddArgument($forceRefresh.Checked).AddArgument($script:Queue)
         $script:Stopping = $false; $script:StartedAt = [datetime]::Now; $script:StageMessage = 'Avvio della ricerca...'
+        Update-ExplorerSourceStatus -Sources @(foreach ($name in $sourceChecks.Keys) {
+            $state='Esclusa'; if ($enabled -contains $name) { $state='In attesa' }
+            [pscustomobject]@{Name=$name;State=$state}
+        })
         Set-SearchBusy $true
         $script:Invocation = $script:Pipeline.BeginInvoke(); $timer.Start()
     }
@@ -524,6 +577,12 @@ $timer.Add_Tick({
                 }
                 Show-ExplorerSnapshot $script:Latest
             }
+            if ($null -eq $script:Latest -and $finishedOperation -eq 'Search') {
+                Update-ExplorerSourceStatus -Sources @(foreach ($name in $sourceChecks.Keys) {
+                    $state='Esclusa'; if ($sourceChecks[$name].Checked) { $state='Interrotta' }
+                    [pscustomobject]@{Name=$name;State=$state;Error=$message}
+                })
+            }
             $status.Text = $message
             if (-not $script:Stopping) { [void][Windows.Forms.MessageBox]::Show($form, $message, 'Computer Explorer', 'OK', 'Error') }
         }
@@ -567,6 +626,7 @@ finally {
         $script:GlpiCredentials.User.Dispose()
         if ($null -ne $script:GlpiCredentials.App) { $script:GlpiCredentials.App.Dispose() }
     }
+    $sourceToolTip.Dispose()
     $form.Dispose()
     $applicationIcon.Dispose()
 }
