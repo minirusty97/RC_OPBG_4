@@ -18,14 +18,37 @@ public static class GlpiRestrictedTokenProbe {
     [DllImport("advapi32.dll", SetLastError=true)] static extern bool GetTokenInformation(IntPtr token, int type, IntPtr data, int length, out int needed);
     [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool LookupPrivilegeValue(string system, string name, out Luid luid);
     [StructLayout(LayoutKind.Sequential)] struct Luid { public uint Low; public int High; }
-    public static WindowsImpersonationContext Begin() {
-        IntPtr original=IntPtr.Zero, restricted=IntPtr.Zero;
+    [DllImport("advapi32.dll", SetLastError=true)] static extern bool DuplicateTokenEx(IntPtr token, uint access, IntPtr attributes, int level, int type, out IntPtr result);
+    [DllImport("advapi32.dll", SetLastError=true)] static extern bool SetThreadToken(IntPtr thread, IntPtr token);
+    [DllImport("advapi32.dll", SetLastError=true)] static extern bool RevertToSelf();
+    public sealed class Scope : IDisposable {
+        IntPtr previous; bool restored;
+        public Scope(IntPtr token) { previous=token; }
+        public void Undo() {
+            if (restored) return;
+            bool ok=previous==IntPtr.Zero ? RevertToSelf() : SetThreadToken(IntPtr.Zero,previous);
+            if (!ok) throw new Win32Exception();
+            restored=true;
+            if (previous!=IntPtr.Zero) { CloseHandle(previous); previous=IntPtr.Zero; }
+        }
+        public void Dispose() { Undo(); }
+    }
+    public static Scope Begin() {
+        IntPtr original=IntPtr.Zero, restricted=IntPtr.Zero, impersonation=IntPtr.Zero, previous=IntPtr.Zero;
         try {
+            if (!OpenThreadToken(GetCurrentThread(), 0x000E, true, out previous) && Marshal.GetLastWin32Error()!=1008) throw new Win32Exception();
             if (!OpenProcessToken(GetCurrentProcess(), 0x000F01FF, out original)) throw new Win32Exception();
             if (!CreateRestrictedToken(original, 1, 0, IntPtr.Zero, 0, IntPtr.Zero, 0, IntPtr.Zero, out restricted)) throw new Win32Exception();
-            using (var identity=new WindowsIdentity(restricted)) { return identity.Impersonate(); }
+            if (!DuplicateTokenEx(restricted, 0x000F01FF, IntPtr.Zero, 2, 2, out impersonation)) throw new Win32Exception();
+            if (!SetThreadToken(IntPtr.Zero,impersonation)) throw new Win32Exception();
+            var scope=new Scope(previous); previous=IntPtr.Zero; return scope;
         }
-        finally { if (restricted!=IntPtr.Zero) CloseHandle(restricted); if (original!=IntPtr.Zero) CloseHandle(original); }
+        finally {
+            if (previous!=IntPtr.Zero) CloseHandle(previous);
+            if (impersonation!=IntPtr.Zero) CloseHandle(impersonation);
+            if (restricted!=IntPtr.Zero) CloseHandle(restricted);
+            if (original!=IntPtr.Zero) CloseHandle(original);
+        }
     }
     public static bool HasSecurityPrivilege() {
         IntPtr token=IntPtr.Zero, data=IntPtr.Zero;
