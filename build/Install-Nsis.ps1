@@ -7,6 +7,9 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'NSIS i
 # https://github.com/mkevenaar/chocolatey-packages/blob/master/automatic/nsis.install/legal/VERIFICATION.txt
 $expected='DB9A1038BBC0E53FEF24F423FD609979BD578E942F1BE1198DB186D1C42652A3'
 $urls=@(
+    'https://phoenixnap.dl.sourceforge.net/project/nsis/NSIS%203/3.13/nsis-3.13-setup.exe',
+    'https://netix.dl.sourceforge.net/project/nsis/NSIS%203/3.13/nsis-3.13-setup.exe',
+    'https://pilotfiber.dl.sourceforge.net/project/nsis/NSIS%203/3.13/nsis-3.13-setup.exe',
     'https://downloads.sourceforge.net/project/nsis/NSIS%203/3.13/nsis-3.13-setup.exe',
     'https://sourceforge.net/projects/nsis/files/NSIS%203/3.13/nsis-3.13-setup.exe/download'
 )
@@ -16,8 +19,10 @@ try {
     $downloaded=$false
     foreach ($url in $urls) {
         try {
-            Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $setup -TimeoutSec 60
-            if ((Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash -ne $expected) { throw 'NSIS checksum mismatch.' }
+            & curl.exe --fail --location --connect-timeout 15 --max-time 60 --output $setup $url
+            if ($LASTEXITCODE -ne 0) { throw ('NSIS download failed with curl exit code '+$LASTEXITCODE) }
+            $actual=(Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash
+            if ($actual -ne $expected) { throw ('NSIS checksum mismatch: SHA256='+$actual+'; bytes='+([IO.FileInfo]$setup).Length) }
             $downloaded=$true; break
         }
         catch { Write-Warning ('NSIS download failed: '+$_.Exception.Message) }
