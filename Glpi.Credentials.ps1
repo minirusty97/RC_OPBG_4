@@ -113,7 +113,11 @@ function Write-ExplorerGlpiPrivateFile {
         }
         if ([IO.File]::Exists($Path)) { [IO.File]::Replace($temporary,$Path,[Management.Automation.Language.NullString]::Value) }
         else { [IO.File]::Move($temporary,$Path) }
-        if ($Private) { Set-Acl -LiteralPath $Path -AclObject $acl -ErrorAction Stop }
+        if ($Private) {
+            # Persist only the modified DACL. Set-Acl can also attempt audit/owner
+            # sections and request SeSecurityPrivilege, unavailable to normal users.
+            [IO.File]::SetAccessControl($Path,$acl)
+        }
     }
     finally { if ([IO.File]::Exists($temporary)) { [IO.File]::Delete($temporary) } }
 }
