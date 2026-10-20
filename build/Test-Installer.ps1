@@ -2,7 +2,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory=$true)][string]$SetupPath,
-    [Parameter(Mandatory=$true)][string]$BaselineSetupPath,
+    [string]$BaselineSetupPath,
     [Parameter(Mandatory=$true)][string]$PreviousSetupPath,
     [Parameter(Mandatory=$true)][string]$OtaPreviousSetupPath
 )
@@ -76,10 +76,10 @@ function Assert-InstalledApplication {
 }
 try{
     $cases=@(
-        @{Version='1.0.0';Setup=$BaselineSetupPath;Directory=$legacyDefault;InPlace=$false},
         @{Version='1.0.1';Setup=$PreviousSetupPath;Directory=(Join-Path $temporary 'previous install with spaces');InPlace=$false},
         @{Version='1.0.1';Setup=$PreviousSetupPath;Directory=(Join-Path $temporary 'in place with spaces');InPlace=$true}
     )
+    if ($BaselineSetupPath) { $cases=@(@{Version='1.0.0';Setup=$BaselineSetupPath;Directory=$legacyDefault;InPlace=$false})+$cases }
     foreach($case in $cases){
         Invoke-TestSetup $case.Setup -Directory $case.Directory
         if((Get-ItemProperty $legacyKey).DisplayVersion -ne $case.Version){throw 'Original published installer did not register its version.'}
