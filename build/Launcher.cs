@@ -31,6 +31,7 @@ internal static class Launcher
             start.WorkingDirectory = app;
             start.UseShellExecute = false;
             start.CreateNoWindow = true;
+            start.WindowStyle = ProcessWindowStyle.Hidden;
             using (var process = Process.Start(start))
             {
                 process.WaitForExit();

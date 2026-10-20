@@ -542,6 +542,11 @@ $footer.Controls.Add($status,0,1); $footer.SetColumnSpan($status,4)
 $layout.Controls.Add($splitter, 0, 2); $layout.Controls.Add($footer, 0, 3); $form.Controls.Add($layout)
 $form.AcceptButton = $searchButton
 
+# Register the visible GUI on its own thread. The SDK follows the hidden
+# console's owner chain to this window when it opens the Microsoft broker.
+if (-not ('AssistenteIT.GraphLoginBridge' -as [type])) { Add-Type -Path (Join-Path $PSScriptRoot 'Graph.LoginBridge.cs') -ErrorAction Stop }
+[AssistenteIT.GraphAuthConsole]::RegisterOwner($form.Handle)
+
 # Un runspace persistente conserva la cache cloud. Nessun controllo WinForms
 # viene letto o modificato dal worker: gli aggiornamenti passano nella coda.
 $script:Worker = [RunspaceFactory]::CreateRunspace()
@@ -747,6 +752,7 @@ finally {
     }
     $gridCopyMenu.Dispose()
     $sourceToolTip.Dispose()
+    [AssistenteIT.GraphAuthConsole]::ReleaseOwner()
     $form.Dispose()
     $applicationIcon.Dispose()
 }

@@ -84,8 +84,8 @@ namespace AssistenteIT
         }
     }
     // The Graph SDK obtains WAM's parent from GetConsoleWindow. A GUI launcher
-    // uses CREATE_NO_WINDOW, so create a real console owner during sign-in.
-    // Keep its handle alive for later silent refreshes; hide it when sign-in ends.
+    // uses CREATE_NO_WINDOW. Keep a hidden console handle, owned by the visible
+    // application window, so the SDK resolves the GUI as the WAM parent.
     public sealed class GraphAuthConsole : IDisposable
     {
         [DllImport("kernel32.dll")] private static extern IntPtr GetConsoleWindow();
@@ -95,8 +95,40 @@ namespace AssistenteIT
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] private static extern bool SetConsoleTitle(string title);
         [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr handle);
         [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr handle, int command);
+        [DllImport("user32.dll")] private static extern bool IsWindow(IntPtr handle);
+        [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr handle, out uint processId);
+        [DllImport("kernel32.dll")] private static extern void SetLastError(uint error);
+        [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW", ExactSpelling = true)] private static extern IntPtr GetOwner64(IntPtr handle, int index);
+        [DllImport("user32.dll", EntryPoint = "GetWindowLongW", ExactSpelling = true)] private static extern int GetOwner32(IntPtr handle, int index);
+        [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", ExactSpelling = true, SetLastError = true)] private static extern IntPtr SetOwner64(IntPtr handle, int index, IntPtr owner);
+        [DllImport("user32.dll", EntryPoint = "SetWindowLongW", ExactSpelling = true, SetLastError = true)] private static extern int SetOwner32(IntPtr handle, int index, int owner);
+        private static IntPtr applicationWindow;
+        private static IntPtr ownedConsole;
+        private static IntPtr previousOwner;
         private IntPtr handle;
         private bool wasVisible;
+
+        private static IntPtr ReadOwner(IntPtr window) { return IntPtr.Size == 8 ? GetOwner64(window, -8) : new IntPtr(GetOwner32(window, -8)); }
+        private static void WriteOwner(IntPtr window, IntPtr owner)
+        {
+            SetLastError(0);
+            IntPtr result = IntPtr.Size == 8 ? SetOwner64(window, -8, owner) : new IntPtr(SetOwner32(window, -8, owner.ToInt32()));
+            int error = Marshal.GetLastWin32Error();
+            if (result == IntPtr.Zero && error != 0) throw new InvalidOperationException("Impossibile associare l'accesso Microsoft alla finestra dell'app (Windows " + error + ").");
+        }
+        public static void RegisterOwner(IntPtr window)
+        {
+            uint processId;
+            if (!IsWindow(window) || GetWindowThreadProcessId(window, out processId) == 0 || processId != System.Diagnostics.Process.GetCurrentProcess().Id)
+                throw new ArgumentException("Finestra dell'app non valida.");
+            applicationWindow = window;
+        }
+        public static void ReleaseOwner()
+        {
+            if (ownedConsole != IntPtr.Zero && IsWindow(ownedConsole) && ReadOwner(ownedConsole) == applicationWindow)
+                WriteOwner(ownedConsole, previousOwner);
+            ownedConsole = IntPtr.Zero; previousOwner = IntPtr.Zero; applicationWindow = IntPtr.Zero;
+        }
         private GraphAuthConsole() { }
         public static GraphAuthConsole Open()
         {
@@ -114,7 +146,15 @@ namespace AssistenteIT
                 SetConsoleTitle("Accesso Microsoft - Assistente IT");
             }
             if (scope.handle == IntPtr.Zero) throw new InvalidOperationException("Finestra di accesso Microsoft non disponibile.");
-            ShowWindow(scope.handle, 5);
+            if (!scope.wasVisible)
+            {
+                ShowWindow(scope.handle, 0);
+                if (applicationWindow != IntPtr.Zero && IsWindow(applicationWindow))
+                {
+                    if (ownedConsole != scope.handle) { ownedConsole = scope.handle; previousOwner = ReadOwner(scope.handle); }
+                    WriteOwner(scope.handle, applicationWindow);
+                }
+            }
             return scope;
         }
         public void Dispose()
