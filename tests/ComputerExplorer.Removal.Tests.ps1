@@ -29,7 +29,7 @@ try {
                 )
             }
         }
-        function script:Initialize-RemovalSources { param([string[]]$Sources) }
+        function script:Initialize-RemovalSources { param([string[]]$Sources,$ProgressQueue) }
         function script:Get-RemovalContextKey { param([string[]]$Sources) return $script:Fixture.Context }
         function script:Clear-ExplorerCloudCache { $script:Fixture.CacheCleared++ }
         function script:Throw-GraphMissing {

@@ -10,8 +10,8 @@ try {
             Scopes = @('Directory.AccessAsUser.All', 'DeviceManagementManagedDevices.ReadWrite.All') }
         function script:Get-MgContext { [CmdletBinding()]param() return $script:Context }
         function script:Connect-MgGraph {
-            [CmdletBinding()]param([string[]]$Scopes, [string]$ContextScope, [switch]$NoWelcome, [string]$TenantId, [string]$ClientId)
-            $script:Fixture.Logins += @([pscustomobject]@{Scopes=$Scopes;TenantId=$TenantId;ClientId=$ClientId})
+            [CmdletBinding()]param([string[]]$Scopes, [string]$ContextScope, [switch]$NoWelcome, [switch]$UseDeviceAuthentication, [string]$TenantId, [string]$ClientId)
+            $script:Fixture.Logins += @([pscustomobject]@{Scopes=$Scopes;TenantId=$TenantId;ClientId=$ClientId;DeviceCode=[bool]$UseDeviceAuthentication})
         }
         function script:Import-Module {
             [CmdletBinding()]param([string]$Name)

@@ -213,6 +213,46 @@ function Start-RemovalOperation {
     }
 }
 
+function Close-ExplorerGraphLogin {
+    if ($null -ne $script:GraphLoginWindow) {
+        $script:ClosingGraphLogin=$true
+        try { $script:GraphLoginWindow.Close(); $script:GraphLoginWindow.Dispose(); $script:GraphLoginWindow=$null }
+        finally { $script:ClosingGraphLogin=$false }
+    }
+}
+
+function Open-ExplorerGraphBrowser {
+    $info=New-Object Diagnostics.ProcessStartInfo
+    $info.FileName='https://microsoft.com/devicelogin'; $info.UseShellExecute=$true
+    [void][Diagnostics.Process]::Start($info)
+}
+
+function Show-ExplorerGraphLogin {
+    param($Notice)
+    Close-ExplorerGraphLogin
+    $dialog=New-Object Windows.Forms.Form; $dialog.Icon=$form.Icon
+    $dialog.Text='Accesso Microsoft Graph'; $dialog.ClientSize=New-Object Drawing.Size(620,270)
+    $dialog.StartPosition='CenterParent'; $dialog.FormBorderStyle='FixedDialog'; $dialog.MaximizeBox=$false; $dialog.MinimizeBox=$false
+    $intro=New-Object Windows.Forms.Label; $intro.SetBounds(18,15,580,60)
+    $intro.Text='Completa l''accesso nella pagina Microsoft aperta nel browser. Inserisci questo codice quando richiesto:'
+    $codeBox=New-Object Windows.Forms.TextBox; $codeBox.ReadOnly=$true; $codeBox.SetBounds(18,80,350,35)
+    $codeBox.Font=New-Object Drawing.Font('Consolas',16); $codeBox.Text=[string]$Notice.Code
+    $copy=New-Object Windows.Forms.Button; $copy.Text='Copia codice'; $copy.SetBounds(385,80,210,35)
+    $copy.Tag=$codeBox
+    $copy.Add_Click({ param($sender,$eventArgs); try { if ($sender.Tag.Text) { [Windows.Forms.Clipboard]::SetText($sender.Tag.Text) } } catch { $status.Text='Appunti occupati. Selezionare e copiare il codice.' } })
+    $instructions=New-Object Windows.Forms.TextBox; $instructions.Multiline=$true; $instructions.ReadOnly=$true
+    $instructions.SetBounds(18,125,580,80); $instructions.Text=[string]$Notice.Message
+    $open=New-Object Windows.Forms.Button; $open.Text='Apri browser'; $open.SetBounds(18,220,190,32)
+    $open.Add_Click({ try { Open-ExplorerGraphBrowser } catch { $status.Text='Aprire https://microsoft.com/devicelogin nel browser.' } })
+    $cancel=New-Object Windows.Forms.Button; $cancel.Text='Annulla accesso'; $cancel.SetBounds(405,220,190,32)
+    $cancel.Add_Click({ Stop-ExplorerSearch; Close-ExplorerGraphLogin })
+    $dialog.Controls.AddRange(@($intro,$codeBox,$copy,$instructions,$open,$cancel))
+    $dialog.Add_FormClosing({ if (-not $script:ClosingGraphLogin) { Stop-ExplorerSearch } })
+    $script:GraphLoginWindow=$dialog; $dialog.Show($form)
+    try { Open-ExplorerGraphBrowser } catch { $instructions.AppendText([Environment]::NewLine+'Aprire manualmente https://microsoft.com/devicelogin.') }
+    $script:StageMessage='Completa l''accesso Microsoft Graph nel browser.'
+}
+
 function Show-SelectedComputer {
     if ($grid.SelectedRows.Count -eq 0 -or $null -eq $grid.SelectedRows[0].Tag) { $details.Clear(); return }
     $computer = $grid.SelectedRows[0].Tag
@@ -491,6 +531,7 @@ $form.AcceptButton = $searchButton
 $script:Worker = [RunspaceFactory]::CreateRunspace()
 $script:Worker.ApartmentState = 'STA'; $script:Worker.ThreadOptions = 'ReuseThread'; $script:Worker.Open()
 $script:Pipeline = $null; $script:Invocation = $null; $script:Queue = $null
+$script:GraphLoginWindow=$null; $script:ClosingGraphLogin=$false
 $script:Latest = $null; $script:GlpiCredentials = $null; $script:CloseRequested = $false
 $script:Operation = 'Search'; $script:Busy = $false; $script:RenderingGrid = $false; $script:RemovalNeedsRefresh = $false
 $script:RemovalCancellation = $null; $script:LastQuery = ''
@@ -591,6 +632,9 @@ $timer.Add_Tick({
     try {
         $update = $null; $latestSearchUpdate = $null
         while ($script:Queue.TryDequeue([ref]$update)) {
+            $kindProperty=$update.PSObject.Properties['Kind']
+            if ($null -ne $kindProperty -and $kindProperty.Value -eq 'GraphLogin') { Show-ExplorerGraphLogin $update; continue }
+            if ($null -ne $kindProperty -and $kindProperty.Value -eq 'GraphLoginComplete') { Close-ExplorerGraphLogin; continue }
             if ($script:Operation -eq 'Search') { $latestSearchUpdate = $update }
             else {
                 $script:StageMessage = $update.Message
@@ -637,6 +681,7 @@ $timer.Add_Tick({
             if (-not $script:Stopping) { [void][Windows.Forms.MessageBox]::Show($form, $message, 'Computer Explorer', 'OK', 'Error') }
         }
         finally {
+            Close-ExplorerGraphLogin
             $timer.Stop(); $script:Pipeline.Dispose(); $script:Pipeline = $null; $script:Invocation = $null
             if ($null -ne $script:RemovalCancellation) { $script:RemovalCancellation.Dispose(); $script:RemovalCancellation = $null }
             Set-SearchBusy $false
@@ -669,6 +714,7 @@ $form.Add_FormClosing({
 })
 try { [void]$form.ShowDialog() }
 finally {
+    Close-ExplorerGraphLogin
     $timer.Dispose()
     if ($null -ne $script:Pipeline) { $script:Pipeline.Stop(); $script:Pipeline.Dispose() }
     $script:Worker.Close(); $script:Worker.Dispose()

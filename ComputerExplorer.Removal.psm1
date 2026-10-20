@@ -13,10 +13,10 @@ function Get-RemovalValue {
 }
 
 function Initialize-RemovalSources {
-    param([string[]]$Sources)
+    param([string[]]$Sources,$ProgressQueue)
     if ($Sources -contains 'AD') { Import-Module ActiveDirectory -ErrorAction Stop }
     $cloud = @($Sources | Where-Object { $_ -in @('Entra', 'Intune') })
-    if ($cloud.Count -gt 0) { Connect-ExplorerGraph -Sources $cloud -ForRemoval }
+    if ($cloud.Count -gt 0) { Connect-ExplorerGraph -Sources $cloud -ForRemoval -ProgressQueue $ProgressQueue }
 }
 
 function Get-RemovalContextKey {
@@ -124,7 +124,7 @@ function New-ExplorerRemovalPlan {
     $controllers = @()
     if ($null -ne $controllersProperty) { $controllers = @($controllersProperty.Value | ForEach-Object { ([string]$_).Trim() } | Sort-Object -Unique) }
     if ($selectedSources -contains 'AD' -and ($controllers.Count -eq 0 -or $controllers -contains '')) { throw 'Domain Controller non configurati correttamente.' }
-    Initialize-RemovalSources $selectedSources
+    Initialize-RemovalSources $selectedSources $ProgressQueue
     $contextKey = Get-RemovalContextKey $selectedSources
     $entries = New-Object 'System.Collections.Generic.List[object]'
     foreach ($name in $namesToRead) {
@@ -223,7 +223,7 @@ function Invoke-ExplorerRemovalPlan {
     $plan = $script:RemovalPlans[$PlanId]
     $script:RemovalPlans.Remove($PlanId)
     if (([datetimeoffset]::UtcNow - $plan.CreatedAtUtc).TotalMinutes -gt 5) { throw 'Anteprima scaduta. Ripetere la verifica.' }
-    Initialize-RemovalSources $plan.Sources
+    Initialize-RemovalSources $plan.Sources $ProgressQueue
     if ((Get-RemovalContextKey $plan.Sources) -ne $plan.ContextKey) { throw 'Account o tenant Graph cambiato. Ripetere la verifica.' }
     $results = New-Object 'System.Collections.Generic.List[object]'
     $writesAttempted = $false

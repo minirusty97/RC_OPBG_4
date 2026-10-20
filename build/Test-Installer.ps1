@@ -3,7 +3,8 @@
 param(
     [Parameter(Mandatory=$true)][string]$SetupPath,
     [Parameter(Mandatory=$true)][string]$BaselineSetupPath,
-    [Parameter(Mandatory=$true)][string]$PreviousSetupPath
+    [Parameter(Mandatory=$true)][string]$PreviousSetupPath,
+    [Parameter(Mandatory=$true)][string]$OtaPreviousSetupPath
 )
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version 2.0
@@ -130,6 +131,29 @@ try{
     'PASS: clean setup uses only Assistente IT names, new default directories, manifest and shortcuts.'
     Invoke-TestUninstall $defaultInstall
     if(-not(Test-Path -LiteralPath (Join-Path $dataRoot 'Config/.env'))){throw 'Clean uninstall removed personal data.'}
+    Remove-Item -LiteralPath $dataRoot -Recurse -Force
+    if(Test-Path -LiteralPath $defaultInstall){Remove-Item -LiteralPath $defaultInstall -Recurse -Force}
+    $otaTarget=Join-Path $temporary 'OTA install with spaces'
+    Invoke-TestSetup $OtaPreviousSetupPath -Directory $otaTarget
+    Assert-InstalledApplication $otaTarget
+    $project=Split-Path $PSScriptRoot -Parent
+    Import-Module (Join-Path $project 'AssistenteIT/AssistenteIT.Core.psm1') -Force
+    Import-Module (Join-Path $project 'AssistenteIT/AssistenteIT.Update.psm1') -Force
+    $personal=Get-AssistenteITPaths
+    Save-AssistenteITSettings -Paths $personal -DomainControllers @('dc.example.invalid') -GlpiBaseUri 'https://glpi.example.invalid/apirest.php' -GlpiEnabled $true -UserToken 'ota-synthetic-user' -AppToken 'ota-synthetic-app'
+    $encrypted=Join-Path $personal.ConfigDirectory 'glpi-credentials.dpapi.json'
+    $configHash=(Get-FileHash -LiteralPath $personal.ConfigPath).Hash; $secretHash=(Get-FileHash -LiteralPath $encrypted).Hash
+    $candidate=Get-Content -LiteralPath (Join-Path $project 'assistente-it.json') -Raw | ConvertFrom-Json
+    $staged=Join-Path $temporary ('Assistente-IT-Setup-'+$candidate.Version+'.exe')
+    Copy-Item -LiteralPath $SetupPath -Destination $staged
+    $receipt=Join-Path $temporary 'ota-plan.json'
+    [ordered]@{SchemaVersion=1;Version=$candidate.Version;SetupName=[IO.Path]::GetFileName($staged);Size=(Get-Item $staged).Length;SHA256=(Get-FileHash $staged -Algorithm SHA256).Hash} | ConvertTo-Json | Set-Content -LiteralPath $receipt -Encoding UTF8
+    $result=Invoke-AssistenteITUpdateInstall -PlanPath $receipt -InstallRoot (Join-Path $otaTarget 'app')
+    Assert-InstalledApplication $otaTarget
+    if ($result.Version -ne $candidate.Version -or (Get-FileHash $personal.ConfigPath).Hash -ne $configHash -or (Get-FileHash $encrypted).Hash -ne $secretHash) { throw 'Real OTA upgrade lost personal configuration or encrypted credentials.' }
+    'PASS: OTA installer upgrades published 1.0.7 at its registered custom path and preserves configuration plus DPAPI bytes.'
+    Invoke-TestUninstall $otaTarget
+
 }
 finally{
     foreach($key in @($uninstallKey,$legacyKey)){

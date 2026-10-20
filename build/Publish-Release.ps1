@@ -12,9 +12,16 @@ $tag='v'+$version
 $notes=Join-Path $root ('docs/releases/'+$version+'.md')
 $setup=Join-Path $AssetDirectory ('Assistente-IT-Setup-'+$version+'.exe')
 $checksum=Join-Path $AssetDirectory ('Assistente-IT-'+$version+'-SHA256.txt')
-foreach($path in @($notes,$setup,$checksum)){if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw ('File di rilascio assente: '+[IO.Path]::GetFileName($path))}}
+$feedPath=Join-Path $AssetDirectory 'update.json'
+foreach($path in @($notes,$setup,$checksum,$feedPath)){if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw ('File di rilascio assente: '+[IO.Path]::GetFileName($path))}}
 $expected=(([IO.File]::ReadAllText((Resolve-Path $checksum).ProviderPath)).Trim() -split '\s+')[0]
 if((Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash -ne $expected){throw 'Checksum del setup non valido.'}
+$feed=Get-Content -LiteralPath $feedPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$prefix='https://github.com/'+$env:GITHUB_REPOSITORY+'/releases/download/'+$tag+'/'
+if ($feed.SchemaVersion -ne 1 -or $feed.Product -cne $manifest.Product -or $feed.Repository -cne $env:GITHUB_REPOSITORY -or
+    $feed.Channel -cne 'stable' -or $feed.Version -cne $version -or $feed.SetupName -cne [IO.Path]::GetFileName($setup) -or
+    $feed.SetupUri -cne ($prefix+[IO.Path]::GetFileName($setup)) -or $feed.ChecksumUri -cne ($prefix+[IO.Path]::GetFileName($checksum)) -or
+    $feed.SHA256 -ine $expected -or $feed.Size -ne (Get-Item -LiteralPath $setup).Length) { throw 'Manifest aggiornamenti incoerente con gli asset verificati.' }
 $api='https://api.github.com/repos/'+$env:GITHUB_REPOSITORY
 $headers=@{Authorization=('Bearer '+$env:GH_TOKEN);Accept='application/vnd.github+json'}
 function Get-ReleaseResource {
@@ -32,11 +39,11 @@ if($null -ne $reference){
 }
 if($null -ne $existing -and $existing.target_commitish -ne $env:GITHUB_SHA){throw 'La bozza esistente appartiene a un altro commit.'}
 if($null -eq $existing){
-    & gh release create $tag $setup $checksum --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --draft --title ($manifest.Product+' '+$version) --notes-file $notes
+    & gh release create $tag $setup $checksum $feedPath --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --draft --title ($manifest.Product+' '+$version) --notes-file $notes
     if($LASTEXITCODE -ne 0){throw 'Creazione della release non riuscita.'}
 }
 else {
-    & gh release upload $tag $setup $checksum --repo $env:GITHUB_REPOSITORY --clobber
+    & gh release upload $tag $setup $checksum $feedPath --repo $env:GITHUB_REPOSITORY --clobber
     if($LASTEXITCODE -ne 0){throw 'Caricamento degli asset non riuscito.'}
 }
 & gh release edit $tag --repo $env:GITHUB_REPOSITORY --draft=false --latest
