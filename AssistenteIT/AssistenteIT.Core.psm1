@@ -138,6 +138,7 @@ function Get-AssistenteITModuleStartInfo {
     $info.FileName = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'WindowsPowerShell/v1.0/powershell.exe'
     $info.Arguments = '-NoLogo -NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}" -ModuleId "{1}" -ConfigPath "{2}" -EnvPath "{3}"' -f $runner, $ModuleId, $Paths.ConfigPath, $Paths.EnvPath
     $info.WorkingDirectory = $InstallRoot; $info.UseShellExecute = $false; $info.CreateNoWindow = $true
+    $info.WindowStyle = [Diagnostics.ProcessWindowStyle]::Hidden
     $info.EnvironmentVariables['PSModulePath'] = (Join-Path $InstallRoot 'Dependencies') + [IO.Path]::PathSeparator + $env:PSModulePath
     return $info
 }
