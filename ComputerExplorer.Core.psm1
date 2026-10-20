@@ -69,13 +69,17 @@ function Connect-ExplorerGraph {
         $capture=$null; $authWindow=$null; $loginError=$null
         if ($null -ne $ProgressQueue) {
             if (-not ('AssistenteIT.GraphLoginBridge' -as [type])) { Add-Type -Path (Join-Path $PSScriptRoot 'Graph.LoginBridge.cs') -ErrorAction Stop }
-            $capture=[AssistenteIT.GraphLoginBridge]::Capture($ProgressQueue)
             $ProgressQueue.Enqueue([pscustomobject]@{Kind='GraphLoginStarting';Message='Apertura dell''accesso interattivo Microsoft. Completa il login nella finestra Microsoft.';Code=''})
         }
         try {
             # Observe success, information and warning streams, plus the SDK's
             # Console.WriteLine fallback. The UI is already open while networking waits.
-            if ($null -ne $ProgressQueue) { $authWindow=[AssistenteIT.GraphAuthConsole]::Open() }
+            if ($null -ne $ProgressQueue) {
+                # The native owner is required by the compiled SDK cmdlet.
+                # A caller-provided wrapper owns its authentication UI itself.
+                if ((Get-Command Connect-MgGraph -ErrorAction Stop).CommandType -eq 'Cmdlet') { $authWindow=[AssistenteIT.GraphAuthConsole]::Open() }
+                $capture=[AssistenteIT.GraphLoginBridge]::Capture($ProgressQueue)
+            }
             Connect-MgGraph @arguments 6>&1 3>&1 | ForEach-Object {
                 $message=[string]$_
                 if ($null -ne $capture) { [void]$capture.TryPublish($message) }

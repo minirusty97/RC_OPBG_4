@@ -104,7 +104,7 @@ namespace AssistenteIT
             scope.wasVisible = scope.handle != IntPtr.Zero && IsWindowVisible(scope.handle);
             if (scope.handle == IntPtr.Zero)
             {
-                if (!AllocConsole()) throw new InvalidOperationException("Impossibile creare la finestra per l'accesso Microsoft. Chiudere e riaprire Assistente IT.");
+                if (!AllocConsole()) throw new InvalidOperationException("Impossibile creare la finestra per l'accesso Microsoft (Windows " + Marshal.GetLastWin32Error() + "). Chiudere e riaprire Assistente IT.");
                 scope.handle = GetConsoleWindow();
                 SetConsoleTitle("Accesso Microsoft - Assistente IT");
             }
