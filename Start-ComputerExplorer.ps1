@@ -229,28 +229,44 @@ function Open-ExplorerGraphBrowser {
 
 function Show-ExplorerGraphLogin {
     param($Notice)
-    Close-ExplorerGraphLogin
-    $dialog=New-Object Windows.Forms.Form; $dialog.Icon=$form.Icon
-    $dialog.Text='Accesso Microsoft Graph'; $dialog.ClientSize=New-Object Drawing.Size(620,270)
-    $dialog.StartPosition='CenterParent'; $dialog.FormBorderStyle='FixedDialog'; $dialog.MaximizeBox=$false; $dialog.MinimizeBox=$false
-    $intro=New-Object Windows.Forms.Label; $intro.SetBounds(18,15,580,60)
-    $intro.Text='Completa l''accesso nella pagina Microsoft aperta nel browser. Inserisci questo codice quando richiesto:'
-    $codeBox=New-Object Windows.Forms.TextBox; $codeBox.ReadOnly=$true; $codeBox.SetBounds(18,80,350,35)
-    $codeBox.Font=New-Object Drawing.Font('Consolas',16); $codeBox.Text=[string]$Notice.Code
-    $copy=New-Object Windows.Forms.Button; $copy.Text='Copia codice'; $copy.SetBounds(385,80,210,35)
-    $copy.Tag=$codeBox
-    $copy.Add_Click({ param($sender,$eventArgs); try { if ($sender.Tag.Text) { [Windows.Forms.Clipboard]::SetText($sender.Tag.Text) } } catch { $status.Text='Appunti occupati. Selezionare e copiare il codice.' } })
-    $instructions=New-Object Windows.Forms.TextBox; $instructions.Multiline=$true; $instructions.ReadOnly=$true
-    $instructions.SetBounds(18,125,580,80); $instructions.Text=[string]$Notice.Message
-    $open=New-Object Windows.Forms.Button; $open.Text='Apri browser'; $open.SetBounds(18,220,190,32)
-    $open.Add_Click({ try { Open-ExplorerGraphBrowser } catch { $status.Text='Aprire https://microsoft.com/devicelogin nel browser.' } })
-    $cancel=New-Object Windows.Forms.Button; $cancel.Text='Annulla accesso'; $cancel.SetBounds(405,220,190,32)
-    $cancel.Add_Click({ Stop-ExplorerSearch; Close-ExplorerGraphLogin })
-    $dialog.Controls.AddRange(@($intro,$codeBox,$copy,$instructions,$open,$cancel))
-    $dialog.Add_FormClosing({ if (-not $script:ClosingGraphLogin) { Stop-ExplorerSearch } })
-    $script:GraphLoginWindow=$dialog; $dialog.Show($form)
-    try { Open-ExplorerGraphBrowser } catch { $instructions.AppendText([Environment]::NewLine+'Aprire manualmente https://microsoft.com/devicelogin.') }
-    $script:StageMessage='Completa l''accesso Microsoft Graph nel browser.'
+    $hasCode=-not [string]::IsNullOrWhiteSpace([string]$Notice.Code)
+    if ($null -eq $script:GraphLoginWindow) {
+        $dialog=New-Object Windows.Forms.Form; $dialog.Icon=$form.Icon
+        $dialog.Text='Accesso Microsoft Graph'; $dialog.ClientSize=New-Object Drawing.Size(620,270)
+        $dialog.StartPosition='CenterParent'; $dialog.FormBorderStyle='FixedDialog'; $dialog.MaximizeBox=$false; $dialog.MinimizeBox=$false
+        $intro=New-Object Windows.Forms.Label; $intro.Name='GraphIntro'; $intro.SetBounds(18,15,580,60)
+        $codeBox=New-Object Windows.Forms.TextBox; $codeBox.Name='GraphCode'; $codeBox.ReadOnly=$true; $codeBox.SetBounds(18,80,350,35)
+        $codeBox.Font=New-Object Drawing.Font('Consolas',16)
+        $copy=New-Object Windows.Forms.Button; $copy.Name='GraphCopy'; $copy.Text='Copia codice'; $copy.SetBounds(385,80,210,35)
+        $copy.Tag=$codeBox
+        $copy.Add_Click({ param($sender,$eventArgs); try { if ($sender.Tag.Text) { [Windows.Forms.Clipboard]::SetText($sender.Tag.Text) } } catch { $status.Text='Appunti occupati. Selezionare e copiare il codice.' } })
+        $instructions=New-Object Windows.Forms.TextBox; $instructions.Name='GraphInstructions'; $instructions.Multiline=$true; $instructions.ReadOnly=$true
+        $instructions.SetBounds(18,125,580,80)
+        $open=New-Object Windows.Forms.Button; $open.Name='GraphOpen'; $open.Text='Apri browser'; $open.SetBounds(18,220,190,32)
+        $open.Add_Click({ try { Open-ExplorerGraphBrowser } catch { $status.Text='Aprire https://microsoft.com/devicelogin nel browser.' } })
+        $cancel=New-Object Windows.Forms.Button; $cancel.Text='Annulla accesso'; $cancel.SetBounds(405,220,190,32)
+        $cancel.Add_Click({ Stop-ExplorerSearch; Close-ExplorerGraphLogin })
+        $dialog.Controls.AddRange(@($intro,$codeBox,$copy,$instructions,$open,$cancel))
+        $dialog.Add_FormClosing({ if (-not $script:ClosingGraphLogin) { Stop-ExplorerSearch } })
+        $script:GraphLoginWindow=$dialog
+        $dialog.Show($form); $dialog.BringToFront(); [void]$dialog.Activate()
+    }
+    $dialog=$script:GraphLoginWindow
+    $previousCode=$dialog.Controls['GraphCode'].Text
+    $dialog.Controls['GraphCode'].Text=[string]$Notice.Code
+    $dialog.Controls['GraphCopy'].Enabled=$hasCode; $dialog.Controls['GraphOpen'].Enabled=$hasCode
+    $dialog.Controls['GraphInstructions'].Text=[string]$Notice.Message
+    if ($hasCode) {
+        $dialog.Controls['GraphIntro'].Text='Completa l''accesso nella pagina Microsoft aperta nel browser. Inserisci questo codice quando richiesto:'
+        if ($previousCode -ne [string]$Notice.Code) {
+            try { Open-ExplorerGraphBrowser } catch { $dialog.Controls['GraphInstructions'].AppendText([Environment]::NewLine+'Aprire manualmente https://microsoft.com/devicelogin.') }
+        }
+        $script:StageMessage='Completa l''accesso Microsoft Graph nel browser.'
+    }
+    else {
+        $dialog.Controls['GraphIntro'].Text='Completa l''accesso nella finestra Microsoft in apertura. Se viene richiesto un codice dispositivo, comparira qui. Puoi annullare l''operazione.'
+        $script:StageMessage=[string]$Notice.Message
+    }
 }
 
 function Show-SelectedComputer {
@@ -633,8 +649,15 @@ $timer.Add_Tick({
         $update = $null; $latestSearchUpdate = $null
         while ($script:Queue.TryDequeue([ref]$update)) {
             $kindProperty=$update.PSObject.Properties['Kind']
-            if ($null -ne $kindProperty -and $kindProperty.Value -eq 'GraphLogin') { Show-ExplorerGraphLogin $update; continue }
-            if ($null -ne $kindProperty -and $kindProperty.Value -eq 'GraphLoginComplete') { Close-ExplorerGraphLogin; continue }
+            if ($null -ne $kindProperty -and $kindProperty.Value -in @('GraphLoginStarting','GraphLogin')) { Show-ExplorerGraphLogin $update; continue }
+            if ($null -ne $kindProperty -and $kindProperty.Value -eq 'GraphLoginComplete') {
+                Close-ExplorerGraphLogin
+                $errorProperty=$update.PSObject.Properties['Error']
+                if ($null -ne $errorProperty -and $errorProperty.Value -and -not $script:Stopping) {
+                    [void][Windows.Forms.MessageBox]::Show($form,[string]$errorProperty.Value,'Accesso Microsoft Graph non riuscito','OK','Error')
+                }
+                continue
+            }
             if ($script:Operation -eq 'Search') { $latestSearchUpdate = $update }
             else {
                 $script:StageMessage = $update.Message

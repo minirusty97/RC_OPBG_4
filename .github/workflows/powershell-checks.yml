@@ -52,6 +52,8 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $current = & ./build/Build-AssistenteIT.ps1
+          $sdkPath = Join-Path $PWD ('output/assistente-it/dependency-cache/Microsoft.Graph.Authentication/' + $current.GraphVersion + '/Microsoft.Graph.Authentication.psd1')
+          & ./build/Test-GraphAuthenticationHost.ps1 -GraphModulePath $sdkPath
           $baselineDirectory = Join-Path $PWD 'output/assistente-it/baseline'
           [void][IO.Directory]::CreateDirectory($baselineDirectory)
           $baselineSetup = ''
