@@ -105,14 +105,15 @@ $form = New-Object Windows.Forms.Form
 $applicationIcon = New-Object Drawing.Icon((Join-Path $PSScriptRoot 'assets/AssistenteIT.ico'))
 $form.Icon = $applicationIcon
 $form.Text = '{0} - {1}' -f $manifest.Product, $manifest.Version
-$form.Size = New-Object Drawing.Size(790, 585); $form.MinimumSize=New-Object Drawing.Size(660, 440)
+$form.Size = New-Object Drawing.Size(790, 650); $form.MinimumSize=New-Object Drawing.Size(660, 535)
 $form.StartPosition='CenterScreen'; $form.Font=New-Object Drawing.Font('Segoe UI', 10)
 $layout = New-Object Windows.Forms.TableLayoutPanel
-$layout.Dock='Fill'; $layout.Padding=New-Object Windows.Forms.Padding(20); $layout.ColumnCount=1; $layout.RowCount=4
+$layout.Dock='Fill'; $layout.Padding=New-Object Windows.Forms.Padding(20); $layout.ColumnCount=1; $layout.RowCount=5
 [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 75)))
 [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent', 100)))
 [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 48)))
-[void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 90)))
+[void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 95)))
+[void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 60)))
 $heading = New-Object Windows.Forms.Label; $heading.Dock='Fill'
 $heading.Text = $manifest.Product + "`r`nScegli il modulo da aprire. Configura GLPI e i DC da Impostazioni."
 $heading.Font = New-Object Drawing.Font('Segoe UI', 12)
@@ -150,11 +151,24 @@ $installUpdateButton.Add_Click({
     }
 })
 $toolbar.Controls.AddRange(@($settingsButton,$dataButton,$releaseButton,$installUpdateButton))
-$status = New-Object Windows.Forms.Label; $status.Dock='Fill'
-$graphText='disponibile'; if (-not $prerequisites.GraphAvailable) { $graphText='mancante' }
-$adText='disponibile'; if (-not $prerequisites.ActiveDirectoryAvailable) { $adText='RSAT mancante (AD non disponibile)' }
-$status.Text = 'Graph: {0} | ActiveDirectory: {1}' -f $graphText, $adText
-$layout.Controls.Add($heading,0,0); $layout.Controls.Add($modulePanel,0,1); $layout.Controls.Add($toolbar,0,2); $layout.Controls.Add($status,0,3)
+$components = New-Object Windows.Forms.GroupBox; $components.Text='Componenti aggiuntivi'; $components.Dock='Fill'
+$componentRows=New-Object Windows.Forms.TableLayoutPanel
+$componentRows.Dock='Fill'; $componentRows.Padding=New-Object Windows.Forms.Padding(10,3,10,6)
+$componentRows.ColumnCount=1; $componentRows.RowCount=2
+[void]$componentRows.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent',50)))
+[void]$componentRows.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent',50)))
+$graphStatus=New-Object Windows.Forms.Label; $graphStatus.Dock='Fill'; $graphStatus.TextAlign='MiddleLeft'
+$graphStatus.Text='Microsoft Graph: disponibile'; $graphStatus.ForeColor=[Drawing.Color]::DarkGreen
+if (-not $prerequisites.GraphAvailable) { $graphStatus.Text='Microsoft Graph: componente mancante'; $graphStatus.ForeColor=[Drawing.Color]::DarkOrange }
+$adStatus=New-Object Windows.Forms.Label; $adStatus.Dock='Fill'; $adStatus.TextAlign='MiddleLeft'
+$adStatus.Text='Active Directory (RSAT): disponibile'; $adStatus.ForeColor=[Drawing.Color]::DarkGreen
+if (-not $prerequisites.ActiveDirectoryAvailable) { $adStatus.Text='Active Directory (RSAT): componente mancante'; $adStatus.ForeColor=[Drawing.Color]::DarkOrange }
+$componentRows.Controls.Add($graphStatus,0,0); $componentRows.Controls.Add($adStatus,0,1)
+$components.Controls.Add($componentRows)
+$status = New-Object Windows.Forms.Label; $status.Dock='Fill'; $status.Padding=New-Object Windows.Forms.Padding(0,8,0,0)
+$status.Text='Aggiornamenti: in attesa del controllo.'
+$layout.Controls.Add($heading,0,0); $layout.Controls.Add($modulePanel,0,1); $layout.Controls.Add($toolbar,0,2)
+$layout.Controls.Add($components,0,3); $layout.Controls.Add($status,0,4)
 $form.Controls.Add($layout)
 $updateTimer=New-Object Windows.Forms.Timer; $updateTimer.Interval=250
 $updateTimer.Add_Tick({
