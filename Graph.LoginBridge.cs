@@ -90,6 +90,8 @@ namespace AssistenteIT
     {
         [DllImport("kernel32.dll")] private static extern IntPtr GetConsoleWindow();
         [DllImport("kernel32.dll", SetLastError = true)] private static extern bool AllocConsole();
+        [DllImport("kernel32.dll")] private static extern uint GetConsoleCP();
+        [DllImport("kernel32.dll", SetLastError = true)] private static extern bool FreeConsole();
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] private static extern bool SetConsoleTitle(string title);
         [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr handle);
         [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr handle, int command);
@@ -104,6 +106,9 @@ namespace AssistenteIT
             scope.wasVisible = scope.handle != IntPtr.Zero && IsWindowVisible(scope.handle);
             if (scope.handle == IntPtr.Zero)
             {
+                // CREATE_NO_WINDOW attaches a windowless console. Detach it
+                // before allocating a visible owner; otherwise AllocConsole fails.
+                if (GetConsoleCP() != 0 && !FreeConsole()) throw new InvalidOperationException("Impossibile preparare la finestra Microsoft (Windows " + Marshal.GetLastWin32Error() + ").");
                 if (!AllocConsole()) throw new InvalidOperationException("Impossibile creare la finestra per l'accesso Microsoft (Windows " + Marshal.GetLastWin32Error() + "). Chiudere e riaprire Assistente IT.");
                 scope.handle = GetConsoleWindow();
                 SetConsoleTitle("Accesso Microsoft - Assistente IT");
