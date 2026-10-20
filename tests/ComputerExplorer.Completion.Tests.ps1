@@ -29,6 +29,7 @@ function Show-ExplorerSnapshot {
         if (-not $script:Invocation.AsyncWaitHandle.WaitOne(5000)) { throw 'Worker did not finish during partial rendering.' }
     }
 }
+function Close-ExplorerGraphLogin {}
 function Stop-ExplorerSearch { throw ('Unexpected UI failure: ' + $status.Text) }
 
 function Start-TestOperation {

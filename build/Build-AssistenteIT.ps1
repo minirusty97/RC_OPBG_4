@@ -38,6 +38,7 @@ try {
     $files = @(
         'Start-AssistenteIT.ps1', 'assistente-it.json', 'AssistenteIT/AssistenteIT.Core.psm1', 'AssistenteIT/Invoke-Module.ps1',
         'AssistenteIT/LegacyMigration.ps1', 'AssistenteIT/Import-UserData.ps1',
+        'AssistenteIT/AssistenteIT.Update.psm1', 'AssistenteIT/Install-Update.ps1',
         'Start-ComputerExplorer.ps1', 'ComputerExplorer.Core.psm1', 'ComputerExplorer.Parallel.psm1', 'ComputerExplorer.Removal.psm1',
         'GLPI.Inventory.psm1', 'Glpi.Credentials.ps1', 'Test-AdLookup.ps1', 'computer-explorer.config.example.json', '.env.example',
         'docs/Installazione-AssistenteIT.md', 'docs/Third-Party-Notices.txt', 'assets/AssistenteIT.ico'
@@ -69,6 +70,15 @@ try {
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $setup)) { throw 'Creazione dell''installer non riuscita.' }
     $checksum = Join-Path $OutputDirectory ('Assistente-IT-' + $Version + '-SHA256.txt')
     [IO.File]::WriteAllText($checksum, ((Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash + ' *' + [IO.Path]::GetFileName($setup) + "`r`n"), (New-Object Text.UTF8Encoding($false)))
-    [pscustomobject]@{Version=$Version; SetupPath=$setup; ChecksumPath=$checksum; GraphVersion=$manifest.GraphVersion}
+    $feedPath=Join-Path $OutputDirectory 'update.json'
+    $prefix='https://github.com/minirusty97/RC_OPBG_4/releases/download/v'+$Version+'/'
+    $notesPath=Join-Path $root ('docs/releases/'+$Version+'.md')
+    $notes='Nuova versione Assistente IT.'
+    if (Test-Path -LiteralPath $notesPath) { $notes=[IO.File]::ReadAllText($notesPath,[Text.Encoding]::UTF8) }
+    [ordered]@{SchemaVersion=1;Product='Assistente IT';Repository='minirusty97/RC_OPBG_4';Channel='stable';Version=$Version
+        SetupName=[IO.Path]::GetFileName($setup);SetupUri=($prefix+[IO.Path]::GetFileName($setup));ChecksumUri=($prefix+[IO.Path]::GetFileName($checksum))
+        Size=(Get-Item -LiteralPath $setup).Length;SHA256=(Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash;Notes=$notes
+    } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $feedPath -Encoding UTF8
+    [pscustomobject]@{Version=$Version; SetupPath=$setup; ChecksumPath=$checksum; UpdateManifestPath=$feedPath; GraphVersion=$manifest.GraphVersion}
 }
 finally { if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force } }

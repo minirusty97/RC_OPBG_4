@@ -12,6 +12,12 @@ if ($position -lt 0) { throw 'UI entry point not found.' }
 $probePath = Join-Path $root ('ui-smoke-' + [guid]::NewGuid().ToString('N') + '.local.ps1')
 $probe = @'
 try {
+    $script:LoginBrowserOpens=0; $script:LoginCodeSeen=''
+    function Open-ExplorerGraphBrowser {
+        $script:LoginBrowserOpens++
+        $script:LoginCodeSeen=@($script:GraphLoginWindow.Controls | Where-Object { $_ -is [Windows.Forms.TextBox] -and $_.Text -eq 'ABCD12345' }).Count
+        @($script:GraphLoginWindow.Controls | Where-Object { $_.Text -eq 'Copia codice' })[0].PerformClick()
+    }
     $form.CreateControl()
     $form.PerformLayout()
     if (-not $grid.MultiSelect -or $grid.SelectionMode -ne 'FullRowSelect') { throw 'Grid is not configured for multiple complete rows.' }
@@ -81,6 +87,7 @@ try {
     $grid.SelectAll()
     $script:Queue = New-Object 'System.Collections.Concurrent.ConcurrentQueue[object]'
     $script:Queue.Enqueue([pscustomobject]@{Rows=$rows;Message='In corso: GLPI';Complete=$false;Sources=$snapshot.Sources})
+    $script:Queue.Enqueue([pscustomobject]@{Kind='GraphLogin';Code='ABCD12345';Message='Use https://microsoft.com/devicelogin with code ABCD12345.'})
     $snapshot.Message = 'Ricerca completata'
     $script:Pipeline = [PowerShell]::Create(); $script:Pipeline.Runspace = $script:Worker
     [void]$script:Pipeline.AddScript({param($FinalSnapshot) return $FinalSnapshot}.ToString()).AddArgument($snapshot)
@@ -92,6 +99,8 @@ try {
     if (-not $script:Latest.Complete -or $script:Busy -or $script:RemovalNeedsRefresh -or -not $deleteButton.Enabled) { throw 'Native timer left a finished search blocked.' }
     if ($counterLabel.Text -ne 'Risultati: 2 | Selezionati: 2' -or $status.Text -notlike 'Ricerca completata*') { throw 'Native completion lost selection or final status.' }
     'PASS: native timer applies the returned final snapshot and enables deletion of selected rows.'
+    if ($script:LoginBrowserOpens -ne 1 -or $script:LoginCodeSeen -ne 1 -or $null -ne $script:GraphLoginWindow -or [Windows.Forms.Clipboard]::GetText() -ne 'ABCD12345') { throw 'Device login was hidden, not copyable, duplicated or left open after completion.' }
+    'PASS: the real UI timer shows a copyable Graph code, requests the external browser and closes the login window on completion.'
 
     $snapshot.Complete=$false
     $snapshot.Sources[0].State='In attesa'
@@ -118,6 +127,7 @@ try {
 
 }
 finally {
+    Close-ExplorerGraphLogin
     $timer.Dispose()
     if ($null -ne $script:Pipeline) { $script:Pipeline.Stop(); $script:Pipeline.Dispose() }
     $script:Worker.Close(); $script:Worker.Dispose()

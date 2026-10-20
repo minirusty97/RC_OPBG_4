@@ -8,6 +8,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [Windows.Forms.Application]::EnableVisualStyles()
 Import-Module (Join-Path $PSScriptRoot 'AssistenteIT/AssistenteIT.Core.psm1') -ErrorAction Stop
+Import-Module (Join-Path $PSScriptRoot 'AssistenteIT/AssistenteIT.Update.psm1') -ErrorAction Stop
 Enable-AssistenteITDependencies $PSScriptRoot
 $manifest = Read-AssistenteITManifest $PSScriptRoot
 $activity = Open-AssistenteITActivity
@@ -50,18 +51,68 @@ function Show-AssistenteITSettings {
     finally { $userBox.Clear(); $appBox.Clear(); $dialog.Dispose() }
 }
 
+$script:UpdateWorker=$null; $script:UpdatePipeline=$null; $script:UpdateInvocation=$null
+$script:UpdateInfo=$null; $script:DownloadedUpdate=$null; $script:UpdateOperation=''
+$script:UpdateQueue=New-Object 'System.Collections.Concurrent.ConcurrentQueue[object]'
+$script:ModuleProcesses=New-Object 'System.Collections.Generic.List[object]'
+
+function Get-AssistenteITOpenModules {
+    $running=0
+    foreach ($process in @($script:ModuleProcesses.ToArray())) {
+        if ($process.HasExited) { $process.Dispose(); [void]$script:ModuleProcesses.Remove($process) }
+        else { $running++ }
+    }
+    return $running
+}
+
+function Install-AssistenteITDownloadedUpdate {
+    if ($null -eq $script:DownloadedUpdate) { return }
+    if ((Get-AssistenteITOpenModules) -gt 0) {
+        $status.Text='Aggiornamento scaricato. Chiudi i moduli aperti e premi Installa.'
+        $installUpdateButton.Text='Installa'; return
+    }
+    try {
+        Start-AssistenteITUpdateHandoff -PlanPath $script:DownloadedUpdate.PlanPath -InstallRoot $PSScriptRoot
+        $form.Close()
+    }
+    catch { $status.Text=$_.Exception.Message; $installUpdateButton.Enabled=$true }
+}
+
+function Start-AssistenteITUpdateOperation {
+    param([ValidateSet('Check','Download')][string]$Operation)
+    if ($null -ne $script:UpdatePipeline) { return }
+    $script:UpdateOperation=$Operation
+    $releaseButton.Enabled=$false; $installUpdateButton.Enabled=$false
+    if ($Operation -eq 'Check') { $status.Text='Controllo aggiornamenti su GitHub...'; $script:DownloadedUpdate=$null; $script:UpdateInfo=$null; $installUpdateButton.Visible=$false }
+    else { $status.Text='Download aggiornamento '+$script:UpdateInfo.Version+'...' }
+    if ($null -eq $script:UpdateWorker) {
+        $script:UpdateWorker=[RunspaceFactory]::CreateRunspace(); $script:UpdateWorker.ApartmentState='STA'
+        $script:UpdateWorker.ThreadOptions='ReuseThread'; $script:UpdateWorker.Open()
+    }
+    $script:UpdatePipeline=[PowerShell]::Create(); $script:UpdatePipeline.Runspace=$script:UpdateWorker
+    $code={
+        param($Module,$Operation,$Version,$Update,$Directory,$Queue)
+        $ErrorActionPreference='Stop'
+        Import-Module $Module -ErrorAction Stop
+        if ($Operation -eq 'Check') { Get-AssistenteITUpdate -CurrentVersion $Version }
+        else { Save-AssistenteITUpdate -Update $Update -CacheDirectory $Directory -ProgressQueue $Queue }
+    }
+    [void]$script:UpdatePipeline.AddScript($code.ToString()).AddArgument((Join-Path $PSScriptRoot 'AssistenteIT/AssistenteIT.Update.psm1')).AddArgument($Operation).AddArgument($manifest.Version).AddArgument($script:UpdateInfo).AddArgument((Join-Path $paths.DataRoot 'Updates')).AddArgument($script:UpdateQueue)
+    $script:UpdateInvocation=$script:UpdatePipeline.BeginInvoke(); $updateTimer.Start()
+}
+
 $form = New-Object Windows.Forms.Form
 $applicationIcon = New-Object Drawing.Icon((Join-Path $PSScriptRoot 'assets/AssistenteIT.ico'))
 $form.Icon = $applicationIcon
 $form.Text = '{0} - {1}' -f $manifest.Product, $manifest.Version
-$form.Size = New-Object Drawing.Size(790, 550); $form.MinimumSize=New-Object Drawing.Size(660, 440)
+$form.Size = New-Object Drawing.Size(790, 585); $form.MinimumSize=New-Object Drawing.Size(660, 440)
 $form.StartPosition='CenterScreen'; $form.Font=New-Object Drawing.Font('Segoe UI', 10)
 $layout = New-Object Windows.Forms.TableLayoutPanel
 $layout.Dock='Fill'; $layout.Padding=New-Object Windows.Forms.Padding(20); $layout.ColumnCount=1; $layout.RowCount=4
 [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 75)))
 [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent', 100)))
 [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 48)))
-[void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 58)))
+[void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 90)))
 $heading = New-Object Windows.Forms.Label; $heading.Dock='Fill'
 $heading.Text = $manifest.Product + "`r`nScegli il modulo da aprire. Configura GLPI e i DC da Impostazioni."
 $heading.Font = New-Object Drawing.Font('Segoe UI', 12)
@@ -74,7 +125,7 @@ foreach ($module in $manifest.Modules) {
         param($sender, $eventArgs)
         try {
             $info = Get-AssistenteITModuleStartInfo -InstallRoot $PSScriptRoot -ModuleId ([string]$sender.Tag) -Paths $paths
-            [void][Diagnostics.Process]::Start($info)
+            [void]$script:ModuleProcesses.Add([Diagnostics.Process]::Start($info))
         }
         catch { [void][Windows.Forms.MessageBox]::Show($form, $_.Exception.Message, 'Avvio modulo', 'OK', 'Error') }
     })
@@ -83,17 +134,57 @@ foreach ($module in $manifest.Modules) {
 $toolbar = New-Object Windows.Forms.FlowLayoutPanel; $toolbar.Dock='Fill'; $toolbar.WrapContents=$false
 $settingsButton = New-Object Windows.Forms.Button; $settingsButton.Text='Impostazioni'; $settingsButton.Size=New-Object Drawing.Size(135, 34)
 $dataButton = New-Object Windows.Forms.Button; $dataButton.Text='Cartella dati'; $dataButton.Size=New-Object Drawing.Size(135, 34)
-$releaseButton = New-Object Windows.Forms.Button; $releaseButton.Text='Release su GitHub'; $releaseButton.Size=New-Object Drawing.Size(165, 34)
+$releaseButton = New-Object Windows.Forms.Button; $releaseButton.Text='Aggiornamenti'; $releaseButton.Size=New-Object Drawing.Size(160, 34)
+$installUpdateButton=New-Object Windows.Forms.Button; $installUpdateButton.Text='Aggiorna'; $installUpdateButton.Size=New-Object Drawing.Size(105,34); $installUpdateButton.Visible=$false
 $settingsButton.Add_Click({ try { Show-AssistenteITSettings } catch { [void][Windows.Forms.MessageBox]::Show($form, $_.Exception.Message, 'Impostazioni', 'OK', 'Error') } })
 $dataButton.Add_Click({ [void][Diagnostics.Process]::Start('explorer.exe', ('"' + $paths.DataRoot + '"')) })
-$releaseButton.Add_Click({ $info=New-Object Diagnostics.ProcessStartInfo; $info.FileName=$manifest.ReleasesUrl; $info.UseShellExecute=$true; [void][Diagnostics.Process]::Start($info) })
-$toolbar.Controls.AddRange(@($settingsButton,$dataButton,$releaseButton))
+$releaseButton.Add_Click({ try { Start-AssistenteITUpdateOperation Check } catch { $status.Text=$_.Exception.Message; $releaseButton.Enabled=$true } })
+$installUpdateButton.Add_Click({
+    if ($null -ne $script:DownloadedUpdate) { Install-AssistenteITDownloadedUpdate; return }
+    if ($null -eq $script:UpdateInfo -or -not $script:UpdateInfo.Available) { return }
+    $notes=[string]$script:UpdateInfo.Notes
+    if ($notes.Length -gt 1400) { $notes=$notes.Substring(0,1400)+'...' }
+    $message='Versione installata: '+$manifest.Version+[Environment]::NewLine+'Nuova versione: '+$script:UpdateInfo.Version+[Environment]::NewLine+[Environment]::NewLine+$notes+[Environment]::NewLine+[Environment]::NewLine+'Scaricare e installare? La finestra si chiudera per completare l''aggiornamento; i moduli aperti devono essere chiusi prima dell''installazione.'
+    if ([Windows.Forms.MessageBox]::Show($form,$message,'Aggiorna Assistente IT','YesNo','Question') -eq 'Yes') {
+        try { Start-AssistenteITUpdateOperation Download } catch { $status.Text=$_.Exception.Message; $releaseButton.Enabled=$true; $installUpdateButton.Enabled=$true }
+    }
+})
+$toolbar.Controls.AddRange(@($settingsButton,$dataButton,$releaseButton,$installUpdateButton))
 $status = New-Object Windows.Forms.Label; $status.Dock='Fill'
 $graphText='disponibile'; if (-not $prerequisites.GraphAvailable) { $graphText='mancante' }
 $adText='disponibile'; if (-not $prerequisites.ActiveDirectoryAvailable) { $adText='RSAT mancante (AD non disponibile)' }
 $status.Text = 'Graph: {0} | ActiveDirectory: {1}' -f $graphText, $adText
 $layout.Controls.Add($heading,0,0); $layout.Controls.Add($modulePanel,0,1); $layout.Controls.Add($toolbar,0,2); $layout.Controls.Add($status,0,3)
 $form.Controls.Add($layout)
+$updateTimer=New-Object Windows.Forms.Timer; $updateTimer.Interval=250
+$updateTimer.Add_Tick({
+    $progress=$null
+    while ($script:UpdateQueue.TryDequeue([ref]$progress)) {
+        $status.Text='Download aggiornamento: {0:N1} MB' -f ($progress.Bytes/1MB)
+    }
+    if ($null -eq $script:UpdateInvocation -or -not $script:UpdateInvocation.IsCompleted) { return }
+    $operation=$script:UpdateOperation; $success=$false
+    try {
+        $output=@($script:UpdatePipeline.EndInvoke($script:UpdateInvocation))
+        if ($script:UpdatePipeline.Streams.Error.Count -gt 0) { throw $script:UpdatePipeline.Streams.Error[0] }
+        if ($output.Count -ne 1) { throw 'Risposta aggiornamento incompleta.' }
+        if ($operation -eq 'Check') {
+            $script:UpdateInfo=$output[0]; $installUpdateButton.Visible=$script:UpdateInfo.Available
+            $installUpdateButton.Text='Aggiorna'
+            if ($script:UpdateInfo.Available) { $status.Text='Disponibile Assistente IT '+$script:UpdateInfo.Version+'. Premi Aggiorna per installare.' }
+            else { $status.Text='Assistente IT e aggiornato (versione '+$manifest.Version+').' }
+        }
+        else { $script:DownloadedUpdate=$output[0]; $installUpdateButton.Text='Installa'; $status.Text='Download verificato. Preparazione installazione...' }
+        $success=$true
+    }
+    catch { $status.Text='Aggiornamento: '+$_.Exception.Message }
+    finally {
+        $updateTimer.Stop(); $script:UpdatePipeline.Dispose(); $script:UpdatePipeline=$null; $script:UpdateInvocation=$null
+        $releaseButton.Enabled=$true; $installUpdateButton.Enabled=$null -ne $script:UpdateInfo -and $script:UpdateInfo.Available
+    }
+    if ($success -and $operation -eq 'Download') { Install-AssistenteITDownloadedUpdate }
+})
+$form.Add_Shown({ if (-not $SmokeTestOutput) { try { Start-AssistenteITUpdateOperation Check } catch { $status.Text=$_.Exception.Message; $releaseButton.Enabled=$true } } })
 try {
     if ($SmokeTestOutput) {
         $form.CreateControl(); $form.PerformLayout()
@@ -101,4 +192,10 @@ try {
     }
     else { [void]$form.ShowDialog() }
 }
-finally { $form.Dispose(); $applicationIcon.Dispose(); $activity.Dispose() }
+finally {
+    $updateTimer.Stop(); $updateTimer.Dispose()
+    if ($null -ne $script:UpdatePipeline) { $script:UpdatePipeline.Stop(); $script:UpdatePipeline.Dispose() }
+    if ($null -ne $script:UpdateWorker) { $script:UpdateWorker.Close(); $script:UpdateWorker.Dispose() }
+    foreach ($process in $script:ModuleProcesses) { $process.Dispose() }
+    $form.Dispose(); $applicationIcon.Dispose(); $activity.Dispose()
+}

@@ -13,7 +13,7 @@ function Get-ExplorerReadWorkerScript {
         $ErrorActionPreference = 'Stop'
         Import-Module $CorePath -ErrorAction Stop
         if ($Job.Kind -eq 'GraphAuth') {
-            Connect-ExplorerGraph -Sources $Job.CloudSources
+            Connect-ExplorerGraph -Sources $Job.CloudSources -ProgressQueue $Job.AuthQueue
             return [pscustomobject]@{ State='OK'; Error=$null }
         }
         $arguments = @{ Source=$Job.Kind; NameFragment=$Fragment; ConfigPath=$ConfigPath; Configuration=$Configuration; CloudCache=$Cache
@@ -93,7 +93,7 @@ function Invoke-ComputerExplorerParallelSearch {
     $jobs=New-Object 'System.Collections.Generic.List[object]'
     # Servizi indipendenti subito; il solo login Graph precede le due letture cloud.
     if ($enabled -contains 'GLPI') { [void]$jobs.Add([pscustomobject]@{Kind='GLPI'}) }
-    if ($cloud.Count -gt 0) { [void]$jobs.Add([pscustomobject]@{Kind='GraphAuth';CloudSources=$cloud}) }
+    if ($cloud.Count -gt 0) { [void]$jobs.Add([pscustomobject]@{Kind='GraphAuth';CloudSources=$cloud;AuthQueue=$ProgressQueue}) }
     # One AD runspace and one queued DC at a time, independent of cloud/GLPI.
     $adPending=New-Object 'System.Collections.Generic.Queue[string]'
     if ($sources.AD.State -eq 'In attesa') {
@@ -142,6 +142,7 @@ function Invoke-ComputerExplorerParallelSearch {
                 catch { $result=New-ParallelSource $job.Kind 'Errore' $_.Exception.Message }
                 finally { $task.Pipeline.Dispose(); [void]$tasks.Remove($task) }
                 if ($job.Kind -eq 'GraphAuth') {
+                    if ($null -ne $ProgressQueue) { $ProgressQueue.Enqueue([pscustomobject]@{Kind='GraphLoginComplete';Message='Accesso Graph concluso.'}) }
                     if ($result.State -eq 'OK') {
                         foreach ($name in $cloud) { $sources[$name].Progress='Lettura'; [void]$tasks.Add((Start-ExplorerReadTask -Job ([pscustomobject]@{Kind=$name}) @arguments)) }
                     }

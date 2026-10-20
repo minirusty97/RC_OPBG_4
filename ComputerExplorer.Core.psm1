@@ -33,7 +33,7 @@ function Read-ExplorerConfiguration {
 
 function Connect-ExplorerGraph {
     [CmdletBinding()]
-    param([string[]]$Sources, [switch]$ForRemoval)
+    param([string[]]$Sources, [switch]$ForRemoval, $ProgressQueue)
     try { Import-Module Microsoft.Graph.Authentication -ErrorAction Stop }
     catch { throw ('Modulo Microsoft.Graph.Authentication non caricabile. Verificare il modulo nella stessa versione di PowerShell usata per avviare la console. Dettaglio: ' + $_.Exception.Message) }
     $context = Get-MgContext -ErrorAction SilentlyContinue
@@ -57,14 +57,30 @@ function Connect-ExplorerGraph {
     if ($null -eq $context -or $required.Count -gt 0) {
         # Mantiene gli ambiti già autorizzati dall'utente nel tool di rimozione.
         $loginScopes = @(@($scopes) + @($required.ToArray()) | Sort-Object -Unique)
-        $arguments = @{ Scopes = $loginScopes; ContextScope = 'Process'; NoWelcome = $true; ErrorAction = 'Stop' }
+        $arguments = @{ Scopes = $loginScopes; ContextScope = 'Process'; NoWelcome = $true; UseDeviceAuthentication = $true; ErrorAction = 'Stop' }
         if ($null -ne $context) {
             foreach ($key in @('TenantId', 'ClientId')) {
                 $value = [string](Get-ExplorerValue $context $key)
                 if (-not [string]::IsNullOrWhiteSpace($value)) { $arguments[$key] = $value }
             }
         }
-        Connect-MgGraph @arguments | Out-Null
+        # SDK 2.41.1 emits the device-code message on the success stream while
+        # authentication is still pending. Forward it immediately, never wait for EndInvoke.
+        Connect-MgGraph @arguments | ForEach-Object {
+            if ($_ -is [string] -and $_ -match 'https://(?:www\.)?microsoft\.com/devicelogin') {
+                $message=[string]$_; $code=''
+                if ($message -match '(?i)(?:code|codice)\s+([A-Z0-9-]{6,20})\b') { $code=$Matches[1].ToUpperInvariant() }
+                $notice=[pscustomobject]@{Kind='GraphLogin';Message=$message;Code=$code;Uri='https://microsoft.com/devicelogin'}
+                if ($null -ne $ProgressQueue) { $ProgressQueue.Enqueue($notice) }
+                else {
+                    Write-Host $message
+                    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+                        try { $browser=New-Object Diagnostics.ProcessStartInfo; $browser.FileName=$notice.Uri; $browser.UseShellExecute=$true; [void][Diagnostics.Process]::Start($browser) }
+                        catch { Write-Warning 'Aprire https://microsoft.com/devicelogin e usare il codice mostrato.' }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -429,7 +445,7 @@ function Invoke-ComputerExplorerSearch {
     Send-ExplorerUpdate $sources $controllers 'Graph: verifica sessione e accesso.' $ProgressQueue
     $graphError = $null
     if ($cloudSources.Count -gt 0) {
-        try { Connect-ExplorerGraph -Sources $cloudSources }
+        try { Connect-ExplorerGraph -Sources $cloudSources -ProgressQueue $ProgressQueue }
         catch { $graphError = $_.Exception.Message }
     }
     foreach ($name in @('Entra', 'Intune', 'GLPI') | Where-Object { $EnabledSources -contains $_ }) {
