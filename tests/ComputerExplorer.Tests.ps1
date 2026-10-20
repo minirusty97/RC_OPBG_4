@@ -11,7 +11,7 @@ try {
         function script:Get-MgContext { [CmdletBinding()]param() return $script:Context }
         function script:Connect-MgGraph {
             [CmdletBinding()]param([string[]]$Scopes, [string]$ContextScope, [switch]$NoWelcome, [switch]$UseDeviceAuthentication, [string]$TenantId, [string]$ClientId)
-            $script:Fixture.Logins += @([pscustomobject]@{Scopes=$Scopes;TenantId=$TenantId;ClientId=$ClientId;DeviceCode=[bool]$UseDeviceAuthentication})
+            $script:Fixture.Logins += @([pscustomobject]@{Scopes=$Scopes;TenantId=$TenantId;ClientId=$ClientId;DeviceCode=[bool]$UseDeviceAuthentication;ContextScope=$ContextScope})
         }
         function script:Import-Module {
             [CmdletBinding()]param([string]$Name)
@@ -54,7 +54,7 @@ try {
         Connect-ExplorerGraph -Sources Entra,Intune
         $login=$script:Fixture.Logins[0]
         if ($login.Scopes -notcontains 'Directory.Read.All' -or $login.Scopes -notcontains 'DeviceManagementManagedDevices.ReadWrite.All' -or
-            $login.TenantId -ne 'tenant-a' -or $login.ClientId -ne 'client-a') { throw 'Missing Intune scope or login identity lost.' }
+            $login.TenantId -ne 'tenant-a' -or $login.ClientId -ne 'client-a' -or $login.DeviceCode -or $login.ContextScope -ne 'CurrentUser') { throw 'Missing Intune scope or login identity lost.' }
         'PASS: Intune consent retains existing scopes, tenant and client.'
         $script:Context.Scopes=@('Directory.AccessAsUser.All','DeviceManagementManagedDevices.ReadWrite.All')
         $script:Context.AuthType='AppOnly'

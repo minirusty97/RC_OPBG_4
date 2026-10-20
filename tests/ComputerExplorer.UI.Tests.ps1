@@ -15,6 +15,7 @@ try {
     $script:LoginBrowserOpens=0; $script:LoginCodeSeen=''
     function Open-ExplorerGraphBrowser {
         $script:LoginBrowserOpens++
+        if (-not [object]::ReferenceEquals($script:WaitingLoginWindow,$script:GraphLoginWindow)) { throw "Login recreated the waiting window when its code arrived." }
         $script:LoginCodeSeen=@($script:GraphLoginWindow.Controls | Where-Object { $_ -is [Windows.Forms.TextBox] -and $_.Text -eq 'ABCD12345' }).Count
         @($script:GraphLoginWindow.Controls | Where-Object { $_.Text -eq 'Copia codice' })[0].PerformClick()
     }
@@ -81,6 +82,11 @@ try {
     $grid.ClearSelection(); Update-ExplorerCounters
     if ($counterLabel.Text -ne 'Risultati: 2 | Selezionati: 0') { throw 'Cleared selection counter incorrect.' }
     'PASS: busy/stale views cannot start another deletion.'
+
+    Show-ExplorerGraphLogin ([pscustomobject]@{Kind='GraphLoginStarting';Code='';Message='Richiesta del codice in corso...'})
+    $script:WaitingLoginWindow=$script:GraphLoginWindow
+    if (-not $script:WaitingLoginWindow.Visible -or $script:LoginBrowserOpens -ne 0 -or $script:WaitingLoginWindow.Controls['GraphCopy'].Enabled -or $script:WaitingLoginWindow.Controls['GraphOpen'].Enabled) { throw 'Login window was hidden while Microsoft was preparing the code.' }
+    'PASS: Graph login is visible before the Microsoft code is received, with copy/browser disabled until ready.'
 
     # The final result is returned by the real worker but absent from the
     # progress queue, as when completion races with a partial redraw.

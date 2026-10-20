@@ -55,31 +55,45 @@ function Connect-ExplorerGraph {
         $_ -in $intuneScopes
     }).Count -eq 0) { [void]$required.Add('DeviceManagementManagedDevices.ReadWrite.All') }
     if ($null -eq $context -or $required.Count -gt 0) {
+        # CurrentUser uses the SDK secure cache so separate suite processes
+        # can silently reuse sign-in. Interactive/WAM matches the legacy tool.
         # Mantiene gli ambiti già autorizzati dall'utente nel tool di rimozione.
         $loginScopes = @(@($scopes) + @($required.ToArray()) | Sort-Object -Unique)
-        $arguments = @{ Scopes = $loginScopes; ContextScope = 'Process'; NoWelcome = $true; UseDeviceAuthentication = $true; ErrorAction = 'Stop' }
+        $arguments = @{ Scopes = $loginScopes; ContextScope = 'CurrentUser'; NoWelcome = $true; ErrorAction = 'Stop' }
         if ($null -ne $context) {
             foreach ($key in @('TenantId', 'ClientId')) {
                 $value = [string](Get-ExplorerValue $context $key)
                 if (-not [string]::IsNullOrWhiteSpace($value)) { $arguments[$key] = $value }
             }
         }
-        # SDK 2.41.1 emits the device-code message on the success stream while
-        # authentication is still pending. Forward it immediately, never wait for EndInvoke.
-        Connect-MgGraph @arguments | ForEach-Object {
-            if ($_ -is [string] -and $_ -match 'https://(?:www\.)?microsoft\.com/devicelogin') {
-                $message=[string]$_; $code=''
-                if ($message -match '(?i)(?:code|codice)\s+([A-Z0-9-]{6,20})\b') { $code=$Matches[1].ToUpperInvariant() }
-                $notice=[pscustomobject]@{Kind='GraphLogin';Message=$message;Code=$code;Uri='https://microsoft.com/devicelogin'}
-                if ($null -ne $ProgressQueue) { $ProgressQueue.Enqueue($notice) }
-                else {
+        $capture=$null; $authWindow=$null; $loginError=$null
+        if ($null -ne $ProgressQueue) {
+            if (-not ('AssistenteIT.GraphLoginBridge' -as [type])) { Add-Type -Path (Join-Path $PSScriptRoot 'Graph.LoginBridge.cs') -ErrorAction Stop }
+            $capture=[AssistenteIT.GraphLoginBridge]::Capture($ProgressQueue)
+            $ProgressQueue.Enqueue([pscustomobject]@{Kind='GraphLoginStarting';Message='Apertura dell''accesso interattivo Microsoft. Completa il login nella finestra Microsoft.';Code=''})
+        }
+        try {
+            # Observe success, information and warning streams, plus the SDK's
+            # Console.WriteLine fallback. The UI is already open while networking waits.
+            if ($null -ne $ProgressQueue) { $authWindow=[AssistenteIT.GraphAuthConsole]::Open() }
+            Connect-MgGraph @arguments 6>&1 3>&1 | ForEach-Object {
+                $message=[string]$_
+                if ($null -ne $capture) { [void]$capture.TryPublish($message) }
+                elseif ($message -match 'https://(?:www\.)?microsoft\.com/devicelogin') {
                     Write-Host $message
                     if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
-                        try { $browser=New-Object Diagnostics.ProcessStartInfo; $browser.FileName=$notice.Uri; $browser.UseShellExecute=$true; [void][Diagnostics.Process]::Start($browser) }
+                        try { $browser=New-Object Diagnostics.ProcessStartInfo; $browser.FileName='https://microsoft.com/devicelogin'; $browser.UseShellExecute=$true; [void][Diagnostics.Process]::Start($browser) }
                         catch { Write-Warning 'Aprire https://microsoft.com/devicelogin e usare il codice mostrato.' }
                     }
                 }
+                if ($_ -is [Management.Automation.WarningRecord]) { Write-Warning $_.Message }
             }
+        }
+        catch { $loginError=$_.Exception.Message; throw }
+        finally {
+            if ($null -ne $authWindow) { $authWindow.Dispose() }
+            if ($null -ne $capture) { $capture.Dispose() }
+            if ($null -ne $ProgressQueue) { $ProgressQueue.Enqueue([pscustomobject]@{Kind='GraphLoginComplete';Message='Accesso Graph concluso.';Error=$loginError}) }
         }
     }
 }

@@ -142,7 +142,6 @@ function Invoke-ComputerExplorerParallelSearch {
                 catch { $result=New-ParallelSource $job.Kind 'Errore' $_.Exception.Message }
                 finally { $task.Pipeline.Dispose(); [void]$tasks.Remove($task) }
                 if ($job.Kind -eq 'GraphAuth') {
-                    if ($null -ne $ProgressQueue) { $ProgressQueue.Enqueue([pscustomobject]@{Kind='GraphLoginComplete';Message='Accesso Graph concluso.'}) }
                     if ($result.State -eq 'OK') {
                         foreach ($name in $cloud) { $sources[$name].Progress='Lettura'; [void]$tasks.Add((Start-ExplorerReadTask -Job ([pscustomobject]@{Kind=$name}) @arguments)) }
                     }

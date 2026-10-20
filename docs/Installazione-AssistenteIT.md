@@ -99,3 +99,9 @@ Alla prima ricerca GLPI o al salvataggio delle impostazioni, i token presenti ne
 Le caselle vuote nelle impostazioni conservano i token esistenti; Token GLPI in Computer Explorer salva ora le nuove credenziali cifrate. Ogni collega configura i propri token, evitando di copiare questo archivio su un altro account o PC. L’archivio resta fuori da Git e dal pacchetto di installazione.
 
 La migrazione interessa solo il .env del percorso attivo. Copie precedenti nel checkout, backup e Importazione-precedente non vengono eliminate automaticamente. La rimozione del testo non è una cancellazione sicura dei supporti: se i token sono stati esposti, revocarli e generarne di nuovi. DPAPI protegge il salvataggio su disco; l’app deve poterli usare durante le richieste API e non protegge da codice eseguito con il medesimo account.
+
+## Accesso Microsoft Graph dalla versione 1.0.10
+
+Assistente IT usa Windows PowerShell 5.1 a 64 bit e il modulo Graph incluso nell’installer. Il login usa il flusso interattivo Microsoft/WAM e la cache `CurrentUser` gestita dal modulo Microsoft, così la sessione può essere riutilizzata alle aperture successive. I criteri del tenant possono comunque richiedere una nuova autenticazione.
+
+Consenso amministrativo e autenticazione sono distinti: cambiare versione di PowerShell non concede permessi. Il programma mantiene la stessa app Graph predefinita e gli stessi permessi del vecchio script. Se compare “approvazione amministratore richiesta”, verificare account, tenant, app e permessi mostrati nella pagina Microsoft.
