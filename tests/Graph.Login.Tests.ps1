@@ -51,7 +51,14 @@ foreach ($channel in @('Console','Success','Information','Warning','Cancel')) {
             }
             Start-Sleep -Milliseconds 20
         }
-        if ($null -eq $found -or $found.Code -ne 'ABCD12345' -or $found.Uri -ne 'https://microsoft.com/devicelogin' -or $operation.IsCompleted) { throw ('Graph instructions hidden while login is pending: '+$channel+'; '+(($ps.Streams.Error | ForEach-Object {$_.ToString()}) -join ' | ')) }
+        if ($null -eq $found -or $found.Code -ne 'ABCD12345' -or $found.Uri -ne 'https://microsoft.com/devicelogin' -or $operation.IsCompleted) {
+            $detail='state='+$ps.InvocationStateInfo.State+'; reason='+$ps.InvocationStateInfo.Reason+'; started='+$started+'; found='+($null -ne $found)
+            if ($operation.IsCompleted) {
+                try { $premature=@($ps.EndInvoke($operation));$detail+='; output='+($premature|Out-String) }
+                catch { $detail+='; EndInvoke='+$_.Exception.ToString() }
+            }
+            throw ('Graph instructions hidden while login is pending: '+$channel+'; '+$detail+'; '+(($ps.Streams.Error | ForEach-Object {$_.ToString()}) -join ' | '))
+        }
         if (-not $started) { throw 'UI receives no authentication-start notice before waiting on Microsoft.' }
         ('PASS: Graph '+$channel+' instructions reach the UI before authentication completes, including a visible start state.')
         if ($channel -eq 'Cancel') {
