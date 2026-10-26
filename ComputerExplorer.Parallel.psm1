@@ -62,7 +62,8 @@ function Send-ParallelSnapshot {
                 CurrentTarget=$(if ($null -ne $_.PSObject.Properties['CurrentTarget']) { $_.CurrentTarget } else { '' }) }
         })
     }
-    if ($Complete -and $snapshot.Rows.Count -eq 0 -and @($snapshot.Sources | Where-Object { $_.State -eq 'Errore' }).Count -eq 0) {
+    if ($Complete -and $snapshot.Rows.Count -eq 0 -and @($snapshot.Sources | Where-Object { $_.State -eq 'Errore' }).Count -eq 0 -and
+        @($snapshot.Sources | Where-Object { $_.State -eq 'OK' }).Count -gt 0) {
         $snapshot.Message+=' Nessun dispositivo trovato.'
     }
     if ($null -ne $Queue) { $Queue.Enqueue($snapshot) }

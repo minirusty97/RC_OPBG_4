@@ -192,7 +192,7 @@ try {
     'PASS: the real timer releases selected results when every source terminates, including a source with errors.'
 
     $snapshot.Rows=@();$snapshot.Message='Ricerca completata. Nessun dispositivo trovato.'
-    foreach ($source in $snapshot.Sources) { $source.State='OK';$source.Count=0;$source.Error=$null;$source.Progress='' }
+    foreach ($source in $snapshot.Sources) { $source.State='OK';$source.Count=0;$source.Error=$null;$source | Add-Member -NotePropertyName Progress -NotePropertyValue '' -Force }
     $script:Queue=New-Object 'System.Collections.Concurrent.ConcurrentQueue[object]'
     $script:Pipeline=[PowerShell]::Create();$script:Pipeline.Runspace=$script:Worker
     [void]$script:Pipeline.AddScript({param($FinalSnapshot) return $FinalSnapshot}.ToString()).AddArgument($snapshot)
