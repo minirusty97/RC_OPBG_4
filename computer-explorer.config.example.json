@@ -6,6 +6,13 @@
     "srvDCPA1.opbg.dom",
     "srvDCSM1.opbg.dom"
   ],
+  "Graph": {
+    "AuthenticationMode": "Interactive",
+    "TenantId": "",
+    "ClientId": "",
+    "CertificateThumbprint": "",
+    "CertificateStore": "CurrentUser"
+  },
   "Search": {
     "Mode": "Contains",
     "MinimumCharacters": 2,

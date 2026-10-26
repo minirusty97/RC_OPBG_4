@@ -13,7 +13,7 @@ function Get-ExplorerReadWorkerScript {
         $ErrorActionPreference = 'Stop'
         Import-Module $CorePath -ErrorAction Stop
         if ($Job.Kind -eq 'GraphAuth') {
-            Connect-ExplorerGraph -Sources $Job.CloudSources -ProgressQueue $Job.AuthQueue
+            Connect-ExplorerGraph -Sources $Job.CloudSources -ProgressQueue $Job.AuthQueue -GraphAuthentication $Configuration.GraphAuthentication
             return [pscustomobject]@{ State='OK'; Error=$null }
         }
         $arguments = @{ Source=$Job.Kind; NameFragment=$Fragment; ConfigPath=$ConfigPath; Configuration=$Configuration; CloudCache=$Cache

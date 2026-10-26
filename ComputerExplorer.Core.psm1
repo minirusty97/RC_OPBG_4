@@ -1,6 +1,7 @@
 ﻿#requires -version 5.1
 Set-StrictMode -Version 2.0
 . (Join-Path $PSScriptRoot 'Glpi.Credentials.ps1')
+. (Join-Path $PSScriptRoot 'Graph.Authentication.ps1')
 $script:CloudCache = [hashtable]::Synchronized(@{})
 
 function Get-ExplorerValue {
@@ -30,15 +31,25 @@ function Read-ExplorerConfiguration {
     if ($cloudTimeout -lt 1 -or $cloudTimeout -gt 600) { throw 'Search.CloudReadTimeoutSeconds deve essere compreso fra 1 e 600.' }
     if ($minimum -lt 1 -or $minimum -gt 255) { throw 'Search.MinimumCharacters deve essere compreso fra 1 e 255.' }
     if ($cacheMinutes -lt 0 -or $cacheMinutes -gt 60) { throw 'Search.CloudCacheMinutes deve essere compreso fra 0 e 60.' }
-    [pscustomobject]@{ Settings = $config; MinimumCharacters = $minimum; CloudCacheMinutes = $cacheMinutes; CloudReadTimeoutSeconds = $cloudTimeout }
+    $graph=ConvertTo-ExplorerGraphAuthentication (Get-ExplorerValue $config 'Graph')
+    [pscustomobject]@{ GraphAuthentication=$graph; Settings = $config; MinimumCharacters = $minimum; CloudCacheMinutes = $cacheMinutes; CloudReadTimeoutSeconds = $cloudTimeout }
 }
 
 function Connect-ExplorerGraph {
     [CmdletBinding()]
-    param([string[]]$Sources, [switch]$ForRemoval, [switch]$ForBitLocker, $ProgressQueue)
+    param([string[]]$Sources, [switch]$ForRemoval, [switch]$ForBitLocker, $ProgressQueue, $GraphAuthentication)
     try { Import-Module Microsoft.Graph.Authentication -ErrorAction Stop }
     catch { throw ('Modulo Microsoft.Graph.Authentication non caricabile. Verificare il modulo nella stessa versione di PowerShell usata per avviare la console. Dettaglio: ' + $_.Exception.Message) }
     $context = Get-MgContext -ErrorAction SilentlyContinue
+    $authentication=ConvertTo-ExplorerGraphAuthentication $GraphAuthentication
+    if ($authentication.AuthenticationMode -eq 'Certificate') {
+        Connect-ExplorerGraphCertificate -Authentication $authentication -Context $context
+        return
+    }
+    if ($null -ne $GraphAuthentication -and $null -ne $context -and (Get-ExplorerValue $context 'AuthType') -eq 'AppOnly') {
+        Disconnect-MgGraph -ErrorAction Stop | Out-Null
+        $script:CloudCache.Clear();$context=$null
+    }
     if ($null -ne $context -and (Get-ExplorerValue $context 'Environment' 'Global') -ne 'Global') {
         throw 'Questa console usa graph.microsoft.com. La sessione Graph corrente appartiene a un cloud diverso.'
     }
@@ -471,7 +482,7 @@ function Invoke-ComputerExplorerSearch {
     Send-ExplorerUpdate $sources $controllers 'Graph: verifica sessione e accesso.' $ProgressQueue
     $graphError = $null
     if ($cloudSources.Count -gt 0) {
-        try { Connect-ExplorerGraph -Sources $cloudSources -ProgressQueue $ProgressQueue }
+        try { Connect-ExplorerGraph -Sources $cloudSources -ProgressQueue $ProgressQueue -GraphAuthentication $config.GraphAuthentication }
         catch { $graphError = $_.Exception.Message }
     }
     foreach ($name in @('Entra', 'Intune', 'GLPI') | Where-Object { $EnabledSources -contains $_ }) {
