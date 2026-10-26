@@ -1,6 +1,7 @@
 ﻿#requires -version 5.1
 Set-StrictMode -Version 2.0
 . (Join-Path $PSScriptRoot 'LegacyMigration.ps1')
+. (Join-Path (Split-Path $PSScriptRoot -Parent) 'Graph.Authentication.ps1')
 . (Join-Path (Split-Path $PSScriptRoot -Parent) 'Glpi.Credentials.ps1')
 
 function Read-AssistenteITManifest {
@@ -78,8 +79,10 @@ function Save-AssistenteITSettings {
         [Parameter(Mandatory=$true)]$Paths,
         [Parameter(Mandatory=$true)][string[]]$DomainControllers,
         [string]$GlpiBaseUri='', [bool]$GlpiEnabled, [bool]$UseAppToken=$true,
-        [string]$UserToken, [string]$AppToken
+        [string]$UserToken, [string]$AppToken, $GraphAuthentication
     )
+    $graph=$null
+    if ($PSBoundParameters.ContainsKey('GraphAuthentication')) { $graph=ConvertTo-ExplorerGraphAuthentication $GraphAuthentication }
     $controllers = @($DomainControllers | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
     if ($controllers.Count -eq 0 -or @($controllers | Where-Object { $_ -notmatch '^[a-zA-Z0-9][a-zA-Z0-9.-]*$' }).Count -gt 0) { throw 'Inserire almeno un DC valido, uno per riga.' }
     $uriText = $GlpiBaseUri.Trim().TrimEnd('/')
@@ -92,6 +95,7 @@ function Save-AssistenteITSettings {
         if ($null -ne $value -and $value.IndexOfAny([char[]]@([char]0,[char]10,[char]13)) -ge 0) { throw 'Il token deve occupare una sola riga.' }
     }
     $configuration = Get-Content -LiteralPath $Paths.ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($null -ne $graph) { $configuration | Add-Member -NotePropertyName Graph -NotePropertyValue $graph -Force }
     $configuration.DomainControllers = $controllers
     $configuration.Glpi.Enabled = $GlpiEnabled; $configuration.Glpi.BaseUri = $uriText; $configuration.Glpi.UseAppToken = $UseAppToken
     $user=$null; $app=$null
@@ -143,4 +147,4 @@ function Get-AssistenteITModuleStartInfo {
     return $info
 }
 
-Export-ModuleMember -Function Read-AssistenteITManifest, Get-AssistenteITPaths, Initialize-AssistenteIT, Save-AssistenteITSettings, Enable-AssistenteITDependencies, Get-AssistenteITPrerequisites, Open-AssistenteITActivity, Get-AssistenteITModuleStartInfo, Move-AssistenteITUserData
+Export-ModuleMember -Function ConvertTo-ExplorerGraphAuthentication, Read-AssistenteITManifest, Get-AssistenteITPaths, Initialize-AssistenteIT, Save-AssistenteITSettings, Enable-AssistenteITDependencies, Get-AssistenteITPrerequisites, Open-AssistenteITActivity, Get-AssistenteITModuleStartInfo, Move-AssistenteITUserData

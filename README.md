@@ -303,3 +303,7 @@ Se Intune non restituisce chiavi, anche per un problema di accesso, passa ad **A
 La finestra mostra le chiavi leggibili, l'origine, il seriale Intune disponibile e il Key ID, e permette la copia. Non archivia e non elimina nulla. **Leggi archivio** continua a consultare soltanto le Note GLPI gia salvate, utile dopo la cancellazione delle registrazioni.
 
 Anche il backup prima dell'eliminazione legge ora il cloud prima delle password AD e gestisce le risposte Graph dirette o contenute in `value`. Il backup conserva la verifica completa di tutte le origini selezionate: un errore su una di esse continua a bloccare l'eliminazione; il fallback della consultazione non aggira questo controllo. Le Note GLPI preesistenti restano inalterate.
+
+### Applicazione Graph con certificato (1.0.16)
+
+Impostazioni > Microsoft Graph permette di scegliere tra accesso interattivo e app dedicata con certificato Windows. Il sistemista fornisce Tenant ID, Client ID e certificato con chiave privata e autorizza i permessi applicativi. La modalita certificato non apre il login utente e verifica l’identita della sessione. Vedere la [procedura per il sistemista](docs/Autenticazione-Graph-Certificato.md).

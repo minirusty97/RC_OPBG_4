@@ -1,4 +1,4 @@
-#requires -version 5.1
+﻿#requires -version 5.1
 $ErrorActionPreference='Stop'
 $module=Import-Module (Join-Path $PSScriptRoot '../BitLocker.Archive.psm1') -Force -PassThru
 try {
@@ -46,7 +46,7 @@ try {
         'PASS: AD fallback reads only BitLocker children and can recover keys from a computer protected against deletion.'
 
         function script:Read-ExplorerConfiguration { param($ConfigPath) [pscustomobject]@{CloudReadTimeoutSeconds=2;Settings=[pscustomobject]@{DomainControllers=@('dc1.example.invalid','dc2.example.invalid')}} }
-        function script:Connect-ExplorerGraph { [CmdletBinding()]param($Sources,[switch]$ForBitLocker,$ProgressQueue) if ($Sources -ne 'Intune' -or -not $ForBitLocker) { throw 'Wrong key-read consent.' } }
+        function script:Connect-ExplorerGraph { [CmdletBinding()]param($Sources,[switch]$ForBitLocker,$ProgressQueue,$GraphAuthentication) if ($Sources -ne 'Intune' -or -not $ForBitLocker) { throw 'Wrong key-read consent.' } }
         function script:Read-BlLiveKeySource {
             param($Source,$Name,$DomainController,$TimeoutSeconds)
             [void]$script:Lookup.Reads.Add($Source+':'+$DomainController)

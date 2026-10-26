@@ -14,10 +14,10 @@ function Get-RemovalValue {
 }
 
 function Initialize-RemovalSources {
-    param([string[]]$Sources,$ProgressQueue,[switch]$ArchiveOnly)
+    param([string[]]$Sources,$ProgressQueue,[switch]$ArchiveOnly,$GraphAuthentication)
     if ($Sources -contains 'AD') { Import-Module ActiveDirectory -ErrorAction Stop }
     $cloud = @($Sources | Where-Object { $_ -in @('Entra', 'Intune') })
-    if ($cloud.Count -gt 0) { Connect-ExplorerGraph -Sources $cloud -ForRemoval:(-not $ArchiveOnly) -ForBitLocker -ProgressQueue $ProgressQueue }
+    if ($cloud.Count -gt 0) { Connect-ExplorerGraph -Sources $cloud -ForRemoval:(-not $ArchiveOnly) -ForBitLocker -ProgressQueue $ProgressQueue -GraphAuthentication $GraphAuthentication }
 }
 
 function Get-RemovalContextKey {
@@ -212,7 +212,7 @@ function New-ExplorerRemovalPlan {
     $controllers = @()
     if ($null -ne $controllersProperty) { $controllers = @($controllersProperty.Value | ForEach-Object { ([string]$_).Trim() } | Sort-Object -Unique) }
     if ($selectedSources -contains 'AD' -and ($controllers.Count -eq 0 -or $controllers -contains '')) { throw 'Domain Controller non configurati correttamente.' }
-    Initialize-RemovalSources $selectedSources $ProgressQueue -ArchiveOnly:$ArchiveOnly
+    Initialize-RemovalSources $selectedSources $ProgressQueue -ArchiveOnly:$ArchiveOnly -GraphAuthentication $config.GraphAuthentication
     $contextKey = Get-RemovalContextKey $selectedSources
     $entries = New-Object 'System.Collections.Generic.List[object]'
     foreach ($name in $namesToRead) {
@@ -230,7 +230,7 @@ function New-ExplorerRemovalPlan {
     $created = [datetimeoffset]::UtcNow
     $script:RemovalPlans[$planId] = [pscustomobject]@{
         Id = $planId; CreatedAtUtc = $created; Sources = $selectedSources; Controllers = $controllers
-        ContextKey = $contextKey; Entries = $entries.ToArray(); ArchiveOnly=[bool]$ArchiveOnly; GlpiSettings=(Get-RemovalValue $config.Settings 'Glpi'); Credentials=$GlpiCredentials
+        ContextKey = $contextKey; Entries = $entries.ToArray(); ArchiveOnly=[bool]$ArchiveOnly; GraphAuthentication=$config.GraphAuthentication; GlpiSettings=(Get-RemovalValue $config.Settings 'Glpi'); Credentials=$GlpiCredentials
     }
     # La vista passata alla UI non contiene gli oggetti interni del piano.
     $view = @($entries | ForEach-Object {
@@ -339,7 +339,7 @@ function Invoke-ExplorerRemovalPlan {
     $plan = $script:RemovalPlans[$PlanId]
     $script:RemovalPlans.Remove($PlanId)
     if (([datetimeoffset]::UtcNow - $plan.CreatedAtUtc).TotalMinutes -gt 5) { throw 'Anteprima scaduta. Ripetere la verifica.' }
-    Initialize-RemovalSources $plan.Sources $ProgressQueue -ArchiveOnly:$plan.ArchiveOnly
+    Initialize-RemovalSources $plan.Sources $ProgressQueue -ArchiveOnly:$plan.ArchiveOnly -GraphAuthentication $plan.GraphAuthentication
     if ((Get-RemovalContextKey $plan.Sources) -ne $plan.ContextKey) { throw 'Account o tenant Graph cambiato. Ripetere la verifica.' }
     $results = New-Object 'System.Collections.Generic.List[object]'
     $writesAttempted = $false; $archived=0

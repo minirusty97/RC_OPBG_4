@@ -19,7 +19,7 @@ function Show-AssistenteITSettings {
     $settings = Get-Content -LiteralPath $paths.ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
     $dialog = New-Object Windows.Forms.Form
     $dialog.Icon = $form.Icon
-    $dialog.Text = 'Impostazioni - ' + $manifest.Product; $dialog.ClientSize = New-Object Drawing.Size(630, 520)
+    $dialog.Text = 'Impostazioni - ' + $manifest.Product; $dialog.ClientSize = New-Object Drawing.Size(630, 590)
     $dialog.StartPosition = 'CenterParent'; $dialog.FormBorderStyle='FixedDialog'; $dialog.MaximizeBox=$false; $dialog.MinimizeBox=$false
     $dialog.Font = $form.Font
     $dcLabel = New-Object Windows.Forms.Label; $dcLabel.Text='Domain Controller, uno per riga'; $dcLabel.SetBounds(18, 16, 580, 24)
@@ -34,17 +34,44 @@ function Show-AssistenteITSettings {
     $appLabel = New-Object Windows.Forms.Label; $appLabel.Text='App token GLPI'; $appLabel.SetBounds(18, 348, 145, 24)
     $appBox = New-Object Windows.Forms.TextBox; $appBox.UseSystemPasswordChar=$true; $appBox.SetBounds(170, 345, 438, 25)
     $hint = New-Object Windows.Forms.Label; $hint.Text='Lascia vuoti i token per conservare quelli salvati. I token sono cifrati da Windows per il tuo account su questo PC.'; $hint.SetBounds(18, 393, 590, 42)
-    $save = New-Object Windows.Forms.Button; $save.Text='Salva'; $save.SetBounds(388, 463, 105, 32)
-    $cancel = New-Object Windows.Forms.Button; $cancel.Text='Annulla'; $cancel.DialogResult='Cancel'; $cancel.SetBounds(503, 463, 105, 32)
+    $graphProperty=$settings.PSObject.Properties['Graph']
+    $graphSettings=$null;if ($null -ne $graphProperty) { $graphSettings=$graphProperty.Value }
+    $graph=ConvertTo-ExplorerGraphAuthentication $graphSettings
+    $settingsTabs=New-Object Windows.Forms.TabControl;$settingsTabs.SetBounds(4,10,622,515)
+    $generalPage=New-Object Windows.Forms.TabPage;$generalPage.Text='GLPI / AD'
+    $graphPage=New-Object Windows.Forms.TabPage;$graphPage.Text='Microsoft Graph'
+    $settingsTabs.TabPages.AddRange(@($generalPage,$graphPage))
+    $modeLabel=New-Object Windows.Forms.Label;$modeLabel.Text='Autenticazione Microsoft Graph';$modeLabel.SetBounds(18,18,550,24)
+    $modeBox=New-Object Windows.Forms.ComboBox;$modeBox.Name='GraphAuthenticationMode';$modeBox.DropDownStyle='DropDownList';$modeBox.SetBounds(18,44,550,25)
+    [void]$modeBox.Items.Add('Accesso utente (interattivo)');[void]$modeBox.Items.Add('Applicazione con certificato')
+    $modeBox.SelectedIndex=0;if ($graph.AuthenticationMode -eq 'Certificate') { $modeBox.SelectedIndex=1 }
+    $tenantLabel=New-Object Windows.Forms.Label;$tenantLabel.Text='Directory (Tenant) ID';$tenantLabel.SetBounds(18,88,550,24)
+    $tenantBox=New-Object Windows.Forms.TextBox;$tenantBox.Name='GraphTenantId';$tenantBox.Text=$graph.TenantId;$tenantBox.SetBounds(18,112,550,25)
+    $clientLabel=New-Object Windows.Forms.Label;$clientLabel.Text='Application (Client) ID';$clientLabel.SetBounds(18,150,550,24)
+    $clientBox=New-Object Windows.Forms.TextBox;$clientBox.Name='GraphClientId';$clientBox.Text=$graph.ClientId;$clientBox.SetBounds(18,174,550,25)
+    $thumbLabel=New-Object Windows.Forms.Label;$thumbLabel.Text='Impronta del certificato (Thumbprint)';$thumbLabel.SetBounds(18,212,550,24)
+    $thumbBox=New-Object Windows.Forms.TextBox;$thumbBox.Name='GraphCertificateThumbprint';$thumbBox.Text=$graph.CertificateThumbprint;$thumbBox.SetBounds(18,236,550,25)
+    $storeLabel=New-Object Windows.Forms.Label;$storeLabel.Text='Archivio certificati di Windows';$storeLabel.SetBounds(18,274,550,24)
+    $storeBox=New-Object Windows.Forms.ComboBox;$storeBox.Name='GraphCertificateStore';$storeBox.DropDownStyle='DropDownList';$storeBox.SetBounds(18,298,550,25)
+    [void]$storeBox.Items.Add('Utente corrente - Personale');[void]$storeBox.Items.Add('Computer locale - Personale')
+    $storeBox.SelectedIndex=0;if ($graph.CertificateStore -eq 'LocalMachine') { $storeBox.SelectedIndex=1 }
+    $graphHint=New-Object Windows.Forms.Label;$graphHint.Text='Il sistemista deve autorizzare l''applicazione e i permessi in Entra ID. Il certificato con chiave privata deve essere installato nello store selezionato. Qui viene salvata solo l''impronta. Tenant, Client ID e certificato vengono usati in modalita Applicazione con certificato.';$graphHint.SetBounds(18,340,550,104)
+    $graphPage.Controls.AddRange(@($modeLabel,$modeBox,$tenantLabel,$tenantBox,$clientLabel,$clientBox,$thumbLabel,$thumbBox,$storeLabel,$storeBox,$graphHint))
+    $save = New-Object Windows.Forms.Button; $save.Name='SaveSettings';$save.Text='Salva'; $save.SetBounds(388, 540, 105, 32)
+    $cancel = New-Object Windows.Forms.Button; $cancel.Text='Annulla'; $cancel.DialogResult='Cancel'; $cancel.SetBounds(503, 540, 105, 32)
     $dialog.AcceptButton=$save; $dialog.CancelButton=$cancel
     $save.Add_Click({
         try {
-            Save-AssistenteITSettings -Paths $paths -DomainControllers $dcBox.Lines -GlpiBaseUri $urlBox.Text -GlpiEnabled $glpiCheck.Checked -UseAppToken $appCheck.Checked -UserToken $userBox.Text -AppToken $appBox.Text
+            $mode='Interactive';if ($modeBox.SelectedIndex -eq 1) { $mode='Certificate' }
+            $store='CurrentUser';if ($storeBox.SelectedIndex -eq 1) { $store='LocalMachine' }
+            $graphAuthentication=[pscustomobject]@{AuthenticationMode=$mode;TenantId=$tenantBox.Text;ClientId=$clientBox.Text;CertificateThumbprint=$thumbBox.Text;CertificateStore=$store}
+            Save-AssistenteITSettings -GraphAuthentication $graphAuthentication -Paths $paths -DomainControllers $dcBox.Lines -GlpiBaseUri $urlBox.Text -GlpiEnabled $glpiCheck.Checked -UseAppToken $appCheck.Checked -UserToken $userBox.Text -AppToken $appBox.Text
             $dialog.DialogResult='OK'; $dialog.Close()
         }
         catch { [void][Windows.Forms.MessageBox]::Show($dialog, $_.Exception.Message, 'Impostazioni', 'OK', 'Error') }
     })
-    $dialog.Controls.AddRange(@($dcLabel,$dcBox,$glpiCheck,$urlLabel,$urlBox,$appCheck,$userLabel,$userBox,$appLabel,$appBox,$hint,$save,$cancel))
+    $generalPage.Controls.AddRange(@($dcLabel,$dcBox,$glpiCheck,$urlLabel,$urlBox,$appCheck,$userLabel,$userBox,$appLabel,$appBox,$hint))
+    $dialog.Controls.AddRange(@($settingsTabs,$save,$cancel))
     try {
         if ($dialog.ShowDialog($form) -eq 'OK') { $status.Text='Impostazioni salvate. Saranno usate alla prossima apertura del modulo.' }
     }
