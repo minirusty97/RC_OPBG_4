@@ -166,3 +166,23 @@ L'abbinamento richiede una sola scheda GLPI attiva con il nome esatto e un seria
 Prima della prima scrittura vengono ricontrollati identita, scheda GLPI e chiavi. Prima di ogni eliminazione viene ricontrollato che le chiavi dell'origine siano coperte dal backup verificato. Le API non offrono una transazione distribuita: cambiamenti concorrenti dopo l'ultima lettura possono causare un'operazione parziale, riportata negli esiti.
 
 I test usano AD, Graph e GLPI simulati e la GUI reale su Windows. Non vengono lette chiavi aziendali nei test. La prima prova su GLPI reale va fatta tramite **Archivia BitLocker**, controllando la nuova nota e l'integrita di quelle precedenti, prima di usare l'eliminazione.
+
+### Attese cloud e nomi assenti (1.0.14)
+
+Una ricerca senza corrispondenze termina con zero risultati e il messaggio **Nessun dispositivo trovato** quando tutte le fonti selezionate hanno risposto correttamente. Il nome non viene cercato nel cestino Entra: la ricerca riguarda le registrazioni attive.
+
+Il footer Entra/Intune mostra la pagina in lettura e il numero di record gia letti. `Search.CloudReadTimeoutSeconds` limita ogni lettore cloud a **90 secondi** per impostazione predefinita; accetta 1–600 e viene applicato anche ai JSON locali che non contengono ancora la voce. Il conteggio parte dopo l'autenticazione Graph, all'avvio del lettore. Il limite riguarda la ricerca nella finestra, non la preparazione o l'esecuzione delle eliminazioni.
+
+Al limite il coordinatore richiede l'arresto del lettore, ne attende la chiusura e conclude la fonte con un errore esplicito. La fonte resta non verificabile, senza essere interpretata come dispositivo assente; i risultati delle altre fonti restano disponibili. La relativa cache viene invalidata e una nuova ricerca puo essere eseguita con **Rileggi cloud**. Nessun inventario parziale viene pubblicato come completo.
+
+L'inventario completo e il filtro locale sul frammento restano necessari per mantenere le corrispondenze in mezzo al nome. Lo screenshot con Entra in attesa non consente da solo di distinguere una pagina lenta, un retry Graph o un problema di rete: avanzamento e timeout rendono il caso riconoscibile senza lasciare un'attesa senza limite.
+
+### Ricerca diretta delle chiavi BitLocker
+
+**Cerca chiavi** consulta prima **Intune** usando il nome esatto del PC o la riga selezionata. Ricava `azureADDeviceId` dal dispositivo gestito e legge le chiavi BitLocker cloud associate: non usa il managedDeviceId come Device ID e non attende l'inventario completo Entra. Le chiavi visibili in Intune sono conservate in Entra ID; restano necessari consenso `BitlockerKey.Read.All` e un ruolo adeguato. La funzione puo essere avviata anche con zero righe nella griglia, inserendo il nome esatto, e non richiede token GLPI.
+
+Se Intune non restituisce chiavi, anche per un problema di accesso, passa ad **AD** nell'ordine dei DC configurati e si ferma al primo DC che recupera chiavi. La finestra riporta separatamente gli esiti: un errore cloud non viene presentato come assenza di chiavi. La consultazione AD funziona anche sui computer protetti dall'eliminazione accidentale, dato che non li modifica. Le letture hanno un limite di attesa e possono essere interrotte.
+
+La finestra mostra le chiavi leggibili, l'origine, il seriale Intune disponibile e il Key ID, e permette la copia. Non archivia e non elimina nulla. **Leggi archivio** continua a consultare soltanto le Note GLPI gia salvate, utile dopo la cancellazione delle registrazioni.
+
+Anche il backup prima dell'eliminazione legge ora il cloud prima delle password AD e gestisce le risposte Graph dirette o contenute in `value`. Il backup conserva la verifica completa di tutte le origini selezionate: un errore su una di esse continua a bloccare l'eliminazione; il fallback della consultazione non aggira questo controllo. Le Note GLPI preesistenti restano inalterate.

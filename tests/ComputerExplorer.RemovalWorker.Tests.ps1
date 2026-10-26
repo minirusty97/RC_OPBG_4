@@ -46,5 +46,16 @@ try {
     }
     finally { $pipeline.Dispose() }
     'PASS: production preview worker preserves selected names, sources and configuration without invoking removal.'
+    $lookupModule=Join-Path $directory 'BitLocker.Archive.psm1'
+    [IO.File]::WriteAllText($lookupModule, 'function Find-ExplorerBitLockerKeys { param($Name,$ConfigPath,$ProgressQueue) [pscustomobject]@{Name=$Name;ConfigPath=$ConfigPath;Records=@();Live=$true} }; Export-ModuleMember -Function Find-ExplorerBitLockerKeys', (New-Object Text.UTF8Encoding($true)))
+    $pipeline=[PowerShell]::Create()
+    try {
+        [void]$pipeline.AddScript($workerSource).AddArgument($modulePath).AddArgument('ReadKeys').AddArgument(@('PC-TEST')).AddArgument(@()).AddArgument('synthetic.json').AddArgument('').AddArgument($null).AddArgument($null).AddArgument($false)
+        $output=@($pipeline.Invoke())
+        if ($pipeline.HadErrors -or $output.Count -ne 1 -or $output[0].Name -ne 'PC-TEST' -or $output[0].ConfigPath -ne 'synthetic.json' -or -not $output[0].Live) { throw 'Live-key worker did not import the lookup module or preserve the full computer name.' }
+    }
+    finally { $pipeline.Dispose() }
+    'PASS: the production live-key worker imports its lookup module and passes the full name without GLPI credentials or removal.'
+
 }
 finally { Remove-Item -LiteralPath $directory -Recurse -Force -ErrorAction SilentlyContinue }

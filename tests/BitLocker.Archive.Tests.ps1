@@ -7,19 +7,20 @@ try {
     & $module {
         function New-TestBlId { param([int]$Number) return ('{0:x8}-0000-4000-8000-000000000001' -f $Number) }
         function New-TestBlKey { param([int]$Number=1) return (@(1..8 | ForEach-Object { '{0:d6}' -f ($Number*11) }) -join '-') }
-        $script:BlFixture=@{Mode='';Lookups=0}
+        $script:BlFixture=@{Mode='';Lookups=0;Order=(New-Object 'Collections.Generic.List[string]')}
         $key1=New-TestBlId 71; $key2=New-TestBlId 72; $key3=New-TestBlId 73; $device=New-TestBlId 41
         $root=New-TestBlId 11; $child=New-TestBlId 21; $volume=New-TestBlId 81
         $script:BlFixture.Ad=[pscustomobject]@{ObjectGUID=$child;DistinguishedName='CN=Recovery,CN=PC-ONE,OU=Lab,DC=example,DC=invalid';'msFVE-RecoveryPassword'=(New-TestBlKey);'msFVE-RecoveryGuid'=([guid]$key1).ToByteArray();'msFVE-VolumeGuid'=([guid]$volume).ToByteArray();whenCreated='2026-10-01T10:00:00Z'}
         function script:Get-ADObject {
             [CmdletBinding()]param($Server,$Identity,$Properties)
+            [void]$script:BlFixture.Order.Add('AD')
             if ($script:BlFixture.Mode -eq 'AdDenied') { throw 'Synthetic AD read denied.' }
             if ($script:BlFixture.Mode -eq 'AdMissingPassword') { return [pscustomobject]@{ObjectGUID=$Identity;DistinguishedName=$script:BlFixture.Ad.DistinguishedName} }
             return $script:BlFixture.Ad
         }
         function script:Get-ExplorerGraphCollection {
             param($Uri,$ResourcePath)
-            $script:BlFixture.Lookups++
+            $script:BlFixture.Lookups++;[void]$script:BlFixture.Order.Add('Intune')
             if ($ResourcePath -ne '/v1.0/informationProtection/bitlocker/recoveryKeys' -or $Uri -notlike '*deviceId*') { throw 'Incorrect BitLocker endpoint or unfiltered tenant read.' }
             if ($script:BlFixture.Mode -eq 'GraphDenied') { throw 'Synthetic Graph 403.' }
             $device=New-TestBlId 41
@@ -33,13 +34,22 @@ try {
             $id=New-TestBlId 71; $number=1
             if ($Uri -like ('*/'+(New-TestBlId 73)+'?*')) { $id=New-TestBlId 73; $number=3 }
             if ($script:BlFixture.Mode -eq 'ConflictingPassword') { $number=9 }
-            [pscustomobject]@{id=$id;deviceId=(New-TestBlId 41);key=(New-TestBlKey $number);createdDateTime='2026-10-01T10:00:00Z';volumeType='operatingSystemVolume'}
+            $secret=[pscustomobject]@{id=$id;deviceId=(New-TestBlId 41);key=(New-TestBlKey $number);createdDateTime='2026-10-01T10:00:00Z';volumeType='operatingSystemVolume'}
+            if ($script:BlFixture.Mode -eq 'WrappedSecret') { return [pscustomobject]@{value=$secret} }
+            return $secret
         }
         $ad=[pscustomobject]@{Source='AD';Name='PC-ONE';Id=$root;DomainController='dc1.example.invalid';AdChildren=@([pscustomobject]@{Id=$child;DistinguishedName=$script:BlFixture.Ad.DistinguishedName;ObjectClass='msFVE-RecoveryInformation'})}
         $targets=@($ad,$ad,[pscustomobject]@{Source='Entra';LinkId=$device},[pscustomobject]@{Source='Intune';LinkId=$device})
         $keys=@(Get-ExplorerBitLockerKeys $targets)
         if ($keys.Count -ne 2 -or $script:BlFixture.Lookups -ne 1 -or @($keys | Where-Object { $_.KeyId -eq $key1 -and $_.Origins.Count -eq 2 }).Count -ne 1) { throw 'Replicated AD/cloud keys were not deduplicated without loss.' }
         'PASS: AD recovery GUIDs and cloud device IDs collect all selected keys, deduplicate replicas and merge identical AD/Entra keys.'
+        if ($script:BlFixture.Order[0] -ne 'Intune' -or @($keys | Where-Object { $_.Origins -contains ('Intune:'+$device) }).Count -ne 2) { throw 'BitLocker lookup did not prefer Intune/cloud before AD.' }
+        $script:BlFixture.Mode='WrappedSecret'
+        $wrapped=@(Get-ExplorerBitLockerKeys -Targets @([pscustomobject]@{Source='Intune';LinkId=$device}))
+        if ($wrapped.Count -ne 2 -or @($wrapped | Where-Object { $_.Password -eq (New-TestBlKey) }).Count -ne 1) { throw 'Documented Graph value envelope lost the recovery password.' }
+        $script:BlFixture.Mode=''
+        'PASS: Intune/cloud keys are read before AD and both direct and value-wrapped Graph secret responses are validated.'
+
         foreach ($mode in @('AdDenied','AdMissingPassword','GraphDenied','ForeignDevice','MissingCloudPassword','ConflictingPassword')) {
             $script:BlFixture.Mode=$mode; $rejected=$false
             try { [void](Get-ExplorerBitLockerKeys $targets) } catch { $rejected=$true; if ($_.Exception.Message -like ('*'+(New-TestBlKey)+'*')) { throw 'Recovery password leaked into a failure message.' } }

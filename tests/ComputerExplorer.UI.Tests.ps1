@@ -191,6 +191,70 @@ try {
     if ($script:Busy -or -not $deleteButton.Enabled -or $script:RemovalNeedsRefresh -or $sourceStatusLabels.AD.BackColor -ne [Drawing.Color]::Honeydew -or $sourceStatusLabels.GLPI.BackColor -ne [Drawing.Color]::MistyRose) { throw 'A terminal source error kept completed results blocked or cleared source colors.' }
     'PASS: the real timer releases selected results when every source terminates, including a source with errors.'
 
+    $snapshot.Rows=@();$snapshot.Message='Ricerca completata. Nessun dispositivo trovato.'
+    foreach ($source in $snapshot.Sources) { $source.State='OK';$source.Count=0;$source.Error=$null;$source | Add-Member -NotePropertyName Progress -NotePropertyValue '' -Force }
+    $script:Queue=New-Object 'System.Collections.Concurrent.ConcurrentQueue[object]'
+    $script:Pipeline=[PowerShell]::Create();$script:Pipeline.Runspace=$script:Worker
+    [void]$script:Pipeline.AddScript({param($FinalSnapshot) return $FinalSnapshot}.ToString()).AddArgument($snapshot)
+    Set-SearchBusy $true
+    $script:Invocation=$script:Pipeline.BeginInvoke()
+    if (-not $script:Invocation.AsyncWaitHandle.WaitOne(5000)) { throw 'Zero-result native UI fixture timed out.' }
+    [void]$tickMethod.Invoke($timer,[object[]]@([EventArgs]::Empty))
+    if ($script:Busy -or $grid.Rows.Count -ne 0 -or $counterLabel.Text -ne 'Risultati: 0 | Selezionati: 0' -or -not $searchButton.Enabled -or $cancelButton.Enabled -or $deleteButton.Enabled -or $archiveButton.Enabled -or $readArchiveButton.Enabled -or @($sourceStatusLabels.Values | Where-Object { $_.BackColor -ne [Drawing.Color]::Honeydew }).Count -gt 0) { throw 'A completed zero-result search left the native UI pending or actionable.' }
+    'PASS: a zero-result search clears the native grid, completes every source and releases the search controls.'
+    Update-ExplorerSourceStatus @([pscustomobject]@{Name='Entra';State='In attesa';Progress='Pagina 2, 999 record letti';Error=$null})
+    if ($sourceStatusLabels.Entra.Text -notlike '*Pagina 2, 999*' -or $sourceStatusLabels.Entra.BackColor -ne [Drawing.Color]::LightGoldenrodYellow) { throw 'Cloud page progress is missing from the native footer.' }
+    'PASS: the native footer identifies the active cloud page and record count.'
+    $script:LiveRequest=$null;$script:LiveRequests=0
+    function Start-RemovalOperation { param($Operation,$Names) $script:LiveRequest=[pscustomobject]@{Operation=$Operation;Names=$Names};$script:LiveRequests++ }
+    $form.Show();[Windows.Forms.Application]::DoEvents()
+    $nameBox.Text='PC-EXACT-NO-RESULTS'
+    $findKeysButton.PerformClick()
+    if ($script:LiveRequests -ne 1 -or $script:LiveRequest.Operation -ne 'ReadKeys' -or $script:LiveRequest.Names[0] -ne 'PC-EXACT-NO-RESULTS') { throw ('Direct lookup did not start: count='+$script:LiveRequests+'; enabled='+$findKeysButton.Enabled+'; busy='+$script:Busy+'; request='+($script:LiveRequest | ConvertTo-Json -Compress)) }
+    Set-SearchBusy $true
+    if ($findKeysButton.Enabled) { throw 'Live-key lookup can overlap an active operation.' }
+    Set-SearchBusy $false
+    'PASS: Cerca chiavi can search an exact typed name with zero grid results and remains disabled while busy.'
+    function Test-LiveKeyDialog {
+        param([bool]$HasKey)
+        $script:LiveDialogError='';$script:LiveDialogSeen=$false;$script:LiveDialogHasKey=$HasKey
+        $script:LiveDialogPassword=(@(1..8 | ForEach-Object { '000011' }) -join '-')
+        $script:LiveDialogTimer=New-Object Windows.Forms.Timer;$script:LiveDialogTimer.Interval=50
+        $script:LiveDialogTimer.Add_Tick({
+            $window=@([Windows.Forms.Application]::OpenForms | Where-Object Text -eq 'Ricerca chiavi BitLocker - Intune / AD' | Select-Object -First 1)
+            if ($window.Count -eq 0) { return }
+            $dialog=$window[0];$script:LiveDialogSeen=$true
+            try {
+                $panel=@($dialog.Controls | Where-Object { $_ -is [Windows.Forms.TableLayoutPanel] })[0]
+                $table=@($panel.Controls | Where-Object { $_ -is [Windows.Forms.DataGridView] })[0]
+                $secret=@($panel.Controls | Where-Object { $_ -is [Windows.Forms.TextBox] -and -not $_.Multiline })[0]
+                $info=@($panel.Controls | Where-Object { $_ -is [Windows.Forms.TextBox] -and $_.Multiline })[0]
+                if ($script:LiveDialogHasKey) {
+                    if ($table.Rows.Count -ne 1 -or $secret.Text -cne $script:LiveDialogPassword -or $info.Text -notlike '*Intune: OK*') { throw 'Live recovery key or source metadata is not visible.' }
+                    $buttons=@($panel.Controls | Where-Object { $_ -is [Windows.Forms.FlowLayoutPanel] })[0]
+                    @($buttons.Controls | Where-Object Text -eq 'Copia chiave')[0].PerformClick()
+                    if ([Windows.Forms.Clipboard]::GetText() -cne $script:LiveDialogPassword) { throw 'Live recovery key was not copied.' }
+                }
+                elseif ($table.Rows.Count -ne 0 -or $secret.Text -or $info.Text -notlike '*Nessuna chiave recuperata*') { throw 'Zero-key dialog did not explain the empty outcome.' }
+            }
+            catch { $script:LiveDialogError=$_.Exception.Message }
+            finally { $script:LiveDialogTimer.Stop();$dialog.Close() }
+        })
+        $record=[pscustomobject]@{KeyId='33333333-3333-4333-8333-333333333333';Password=$script:LiveDialogPassword;Serial='SYNTHETIC';Volume='operatingSystemVolume';Origins=@('Intune');CreatedAt='2026-10-26';ArchivedAtUtc=''}
+        $records=@();if ($HasKey) { $records=@($record) }
+        try {
+            $script:LiveDialogTimer.Start()
+            Show-ArchivedBitLockerKeys ([pscustomobject]@{Name='PC-UI';Live=$true;Records=$records;Sources=@([pscustomobject]@{Name='Intune';State='OK';Count=$records.Count;Error=''})})
+            if (-not $script:LiveDialogSeen -or $script:LiveDialogError) { throw ('Live-key native dialog failed: '+$script:LiveDialogError) }
+        }
+        finally { $script:LiveDialogTimer.Stop();$script:LiveDialogTimer.Dispose() }
+    }
+    Test-LiveKeyDialog $true
+    Test-LiveKeyDialog $false
+    'PASS: native live-key dialog displays and copies a recovery key and explains an empty result.'
+
+
+
 }
 finally {
     Close-ExplorerGraphLogin

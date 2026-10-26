@@ -26,9 +26,11 @@ function Read-ExplorerConfiguration {
     $search = Get-ExplorerValue $config 'Search'
     $minimum = [int](Get-ExplorerValue $search 'MinimumCharacters' 2)
     $cacheMinutes = [int](Get-ExplorerValue $search 'CloudCacheMinutes' 5)
+    $cloudTimeout = [int](Get-ExplorerValue $search 'CloudReadTimeoutSeconds' 90)
+    if ($cloudTimeout -lt 1 -or $cloudTimeout -gt 600) { throw 'Search.CloudReadTimeoutSeconds deve essere compreso fra 1 e 600.' }
     if ($minimum -lt 1 -or $minimum -gt 255) { throw 'Search.MinimumCharacters deve essere compreso fra 1 e 255.' }
     if ($cacheMinutes -lt 0 -or $cacheMinutes -gt 60) { throw 'Search.CloudCacheMinutes deve essere compreso fra 0 e 60.' }
-    [pscustomobject]@{ Settings = $config; MinimumCharacters = $minimum; CloudCacheMinutes = $cacheMinutes }
+    [pscustomobject]@{ Settings = $config; MinimumCharacters = $minimum; CloudCacheMinutes = $cacheMinutes; CloudReadTimeoutSeconds = $cloudTimeout }
 }
 
 function Connect-ExplorerGraph {
@@ -104,10 +106,11 @@ function Connect-ExplorerGraph {
 }
 
 function Get-ExplorerGraphCollection {
-    param([string]$Uri, [string]$ResourcePath)
+    param([string]$Uri, [string]$ResourcePath, $ProgressQueue, [string]$Source)
     $visited = @{}
     $records = @{}
     $next = $Uri
+    $pageNumber = 0
     while (-not [string]::IsNullOrWhiteSpace($next)) {
         $parsed = $null
         if (-not [Uri]::TryCreate($next, [UriKind]::Absolute, [ref]$parsed) -or
@@ -118,6 +121,10 @@ function Get-ExplorerGraphCollection {
         }
         if ($visited.ContainsKey($next)) { throw 'Graph ha ripetuto una pagina: raccolta incompleta.' }
         $visited[$next] = $true
+        $pageNumber++
+        if ($null -ne $ProgressQueue) {
+            $ProgressQueue.Enqueue([pscustomobject]@{Source=$Source; Progress=('Pagina {0}, {1} record letti' -f $pageNumber,$records.Count)})
+        }
         $page = Invoke-MgGraphRequest -Method GET -Uri $next -OutputType PSObject -ErrorAction Stop
         $values = Get-ExplorerValue $page 'value'
         if ($null -eq $values -or -not ($values -is [Array] -or $values -is [System.Collections.IList])) {
@@ -149,7 +156,7 @@ function Get-ExplorerCloudInventory {
     param(
         [ValidateSet('Entra', 'Intune')][string]$Source,
         [ValidateRange(0, 60)][int]$CacheMinutes = 5,
-        [switch]$ForceRefresh,
+        [switch]$ForceRefresh, $ProgressQueue,
         [System.Collections.IDictionary]$Cache = $script:CloudCache
     )
     $context = Get-MgContext -ErrorAction Stop
@@ -173,7 +180,7 @@ function Get-ExplorerCloudInventory {
             $path = '/v1.0/deviceManagement/managedDevices'
             $uri = 'https://graph.microsoft.com/v1.0/deviceManagement/managedDevices?$select=id,deviceName,azureADDeviceId,operatingSystem,serialNumber,userPrincipalName,lastSyncDateTime,complianceState&$top=100'
         }
-        $raw = @(Get-ExplorerGraphCollection -Uri $uri -ResourcePath $path)
+        $raw = @(Get-ExplorerGraphCollection -Uri $uri -ResourcePath $path -ProgressQueue $ProgressQueue -Source $Source)
         $items = New-Object 'System.Collections.Generic.List[object]'
         foreach ($record in $raw) {
             if ($Source -eq 'Entra') {
@@ -388,7 +395,7 @@ function Read-ExplorerSource {
         [string]$DomainController,
         [System.Collections.IDictionary]$CloudCache = $script:CloudCache,
         [Security.SecureString]$GlpiUserToken, [Security.SecureString]$GlpiAppToken,
-        [switch]$ForceCloudRefresh
+        [switch]$ForceCloudRefresh, $ProgressQueue
     )
     $result = New-ExplorerSource $Source
     try {
@@ -405,7 +412,7 @@ function Read-ExplorerSource {
         elseif ($Source -in @('Entra', 'Intune')) {
             # Il coordinatore autentica una sola volta prima di avviare i lettori.
             Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
-            $inventory = Get-ExplorerCloudInventory -Source $Source -CacheMinutes $Configuration.CloudCacheMinutes -ForceRefresh:$ForceCloudRefresh -Cache $CloudCache
+            $inventory = Get-ExplorerCloudInventory -Source $Source -CacheMinutes $Configuration.CloudCacheMinutes -ForceRefresh:$ForceCloudRefresh -Cache $CloudCache -ProgressQueue $ProgressQueue
             $result.Records = @($inventory.Records | Where-Object { $_.Name.IndexOf($NameFragment, [StringComparison]::OrdinalIgnoreCase) -ge 0 })
             $result.CheckedAtUtc = $inventory.CheckedAtUtc; $result.FromCache = $inventory.FromCache; $result.State = 'OK'
         }

@@ -10,6 +10,7 @@
     "Mode": "Contains",
     "MinimumCharacters": 2,
     "CloudCacheMinutes": 5,
+    "CloudReadTimeoutSeconds": 90,
     "RefreshBeforeDelete": true
   },
   "Glpi": {

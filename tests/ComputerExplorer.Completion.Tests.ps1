@@ -70,8 +70,9 @@ function Assert-CompletedView {
 $grid = [pscustomobject]@{ Rows=@('PC-TEST'); SelectedRows=@([pscustomobject]@{Tag=[pscustomobject]@{Name='PC-TEST'}}) }
 $counterLabel = [pscustomobject]@{Text=''}; $status = [pscustomobject]@{Text=''}
 $deleteButton = [pscustomobject]@{Enabled=$false}; $searchButton = [pscustomobject]@{Enabled=$true}
+$findKeysButton=[pscustomobject]@{Enabled=$false};$config=[pscustomobject]@{MinimumCharacters=2}
 $archiveButton=[pscustomobject]@{Enabled=$false}; $readArchiveButton=[pscustomobject]@{Enabled=$false}
-$nameBox = [pscustomobject]@{Enabled=$true}; $tokensButton = [pscustomobject]@{Enabled=$true}
+$nameBox = [pscustomobject]@{Enabled=$true;Text='PC-TEST'}; $tokensButton = [pscustomobject]@{Enabled=$true}
 $forceRefresh = [pscustomobject]@{Enabled=$true}; $cancelButton = [pscustomobject]@{Enabled=$false}
 $sourceChecks = [ordered]@{AD=[pscustomobject]@{Enabled=$true}}
 $timer = [pscustomobject]@{Enabled=$true}

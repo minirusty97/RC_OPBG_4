@@ -74,9 +74,13 @@ try {
         if ($bitlockerLogin.Scopes -notcontains 'BitlockerKey.Read.All' -or $bitlockerLogin.Scopes -notcontains 'Directory.AccessAsUser.All' -or $bitlockerLogin.Scopes -notcontains 'DeviceManagementManagedDevices.ReadWrite.All' -or $bitlockerLogin.ClientId -ne 'client-a' -or $bitlockerLogin.TenantId -ne 'tenant-a' -or $bitlockerLogin.ContextScope -ne 'CurrentUser') { throw 'BitLocker scope or existing session identity was lost.' }
         'PASS: BitLocker backup requests its explicit key-read permission while retaining scopes, tenant, application and CurrentUser interactive authentication.'
 
-        $first=Get-ExplorerCloudInventory -Source Entra
+        $pages=New-Object 'System.Collections.Concurrent.ConcurrentQueue[object]'
+        $first=Get-ExplorerCloudInventory -Source Entra -ProgressQueue $pages
         if ($first.Records.Count -ne 2 -or $first.FromCache -or $script:Fixture.Calls.Count -ne 2) { throw 'Pages not fully collected or duplicate not removed.' }
         'PASS: Graph pagination, distinct IDs and optional nextLink.'
+        $notices=@($pages.ToArray())
+        if ($notices.Count -ne 2 -or $notices[0].Source -ne 'Entra' -or $notices[0].Progress -notlike 'Pagina 1, 0*' -or $notices[1].Progress -notlike 'Pagina 2, 1*') { throw 'Cloud page progress is incomplete or emits inventory records.' }
+        'PASS: cloud pagination reports its source, page number and completed record count.'
         $cached=Get-ExplorerCloudInventory -Source Entra
         if (-not $cached.FromCache -or $script:Fixture.Calls.Count -ne 2 -or $cached.CheckedAtUtc -ne $first.CheckedAtUtc) { throw 'Cache timestamp or reuse incorrect.' }
         'PASS: complete cache reused with original timestamp.'
@@ -190,6 +194,24 @@ try {
             $contains=@($search.Rows | Where-Object { $_.Name -eq 'PA-PORT-001' })[0]
             if ($contains.ADColor -ne 'Grigio' -or $contains.Entra -ne '1' -or $contains.Intune -ne '1' -or $contains.GLPI -ne '?') { throw 'Contains result or excluded source incorrect.' }
             'PASS: orchestration emits immutable snapshots and finds a fragment in the middle of the name.'
+            $missing=Invoke-ComputerExplorerSearch -NameFragment 'PC-DELETED-NOT-FOUND' -ConfigPath $path -EnabledSources Entra,Intune
+            if (-not $missing.Complete -or $missing.Rows.Count -ne 0 -or @($missing.Sources | Where-Object { $_.Name -in @('Entra','Intune') -and ($_.State -ne 'OK' -or $_.Count -ne 0) }).Count -ne 0) { throw 'A name absent from a populated cloud inventory did not complete with zero matches.' }
+            $script:Fixture.Mode='Empty'
+            $missing=Invoke-ComputerExplorerSearch -NameFragment 'PC-DELETED-NOT-FOUND' -ConfigPath $path -EnabledSources Entra -ForceCloudRefresh
+            $entra=@($missing.Sources | Where-Object { $_.Name -eq 'Entra' })[0]
+            if (-not $missing.Complete -or $missing.Rows.Count -ne 0 -or $entra.State -ne 'OK' -or $entra.Count -ne 0) { throw 'An empty successful Graph response did not complete with zero matches.' }
+            $script:Fixture.Mode='Normal'
+            'PASS: absent names and empty Graph collections terminate successfully with zero matches.'
+            $settings=Read-ExplorerConfiguration $path
+            if ($settings.CloudReadTimeoutSeconds -ne 90) { throw 'Existing configuration did not inherit the cloud deadline.' }
+            foreach ($limit in @(0,601)) {
+                @{Search=@{CloudReadTimeoutSeconds=$limit}} | ConvertTo-Json | Set-Content $path -Encoding UTF8
+                $invalid=$false; try { $null=Read-ExplorerConfiguration $path } catch { $invalid=$true }
+                if (-not $invalid) { throw 'Invalid cloud deadline was accepted.' }
+            }
+            @{DomainControllers=$controllers;Search=@{MinimumCharacters=2;CloudCacheMinutes=5;CloudReadTimeoutSeconds=120};Glpi=@{Enabled=$false}} | ConvertTo-Json -Depth 4 | Set-Content $path -Encoding UTF8
+            if ((Read-ExplorerConfiguration $path).CloudReadTimeoutSeconds -ne 120) { throw 'Custom cloud deadline was ignored.' }
+            'PASS: cloud deadlines default for existing configurations and validate custom values.'
             $rejected=$false
             try { Invoke-ComputerExplorerSearch -NameFragment 'P' -ConfigPath $path -EnabledSources Entra | Out-Null }
             catch { $rejected=$true }

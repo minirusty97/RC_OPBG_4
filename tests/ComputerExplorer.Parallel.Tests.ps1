@@ -11,7 +11,7 @@ function New-TestState {
         Exited=(New-Object 'System.Collections.Concurrent.ConcurrentQueue[string]'); Started=(New-Object Threading.CountdownEvent(4))
         Kinds=(New-Object 'System.Collections.Concurrent.ConcurrentDictionary[string,bool]')
         AdEvents=(New-Object 'System.Collections.Concurrent.ConcurrentQueue[string]'); AdRunspaces=(New-Object 'System.Collections.Concurrent.ConcurrentQueue[string]')
-        AdGates=@{}; PendingDC=''; FailedSource=''
+        AdGates=@{}; PendingDC=''; FailedSource=''; EmptySources=@(); ProgressSource='' 
         Gates=@{}; AuthFailure=$false; FailedDC='' }
     foreach($name in @('AD','Entra','Intune','GLPI')) {
         $state.Gates[$name]=New-Object Threading.ManualResetEventSlim((-not $Blocked))
@@ -33,6 +33,9 @@ $worker={
         $state.AdRunspaces.Enqueue([string][Runspace]::DefaultRunspace.InstanceId)
     }
     try {
+        if ($Job.Kind -eq $state.ProgressSource) {
+            $Job.ReadProgress.Enqueue([pscustomobject]@{Source=$Job.Kind;Progress='Pagina 2, 999 record letti'})
+        }
         while(-not $state.Gates[$Job.Kind].IsSet){Start-Sleep -Milliseconds 20}
         if($Job.Kind -eq 'AD' -and $state.AdGates.ContainsKey($Job.DomainController)){
             while(-not $state.AdGates[$Job.DomainController].IsSet){Start-Sleep -Milliseconds 20}
@@ -59,6 +62,7 @@ $worker={
         }
         else {$result.Records=@([pscustomobject]@{Name=$name;GlpiId=1;State='Assegnato';SerialNumber='SYNTHETIC';LastInventory='2026-10-15 09:00:00'})}
         if($Job.Kind -eq 'AD' -and $Job.DomainController -eq $state.PendingDC){$result.State='In attesa'}
+        if ($state.EmptySources -contains $Job.Kind) { $result.Records=@() }
         return $result
     }
     finally{
@@ -219,6 +223,59 @@ try {
         'PASS: errors in all four sources still produce a final completed search with no fabricated results.'
     }
     finally{Close-TestSearch $task;Close-TestState $cache}
+
+    $cache=New-TestState;$cache.State.EmptySources=@('AD','Entra','Intune','GLPI');$task=$null
+    try {
+        $task=Start-TestSearch $cache (New-Object 'System.Collections.Concurrent.ConcurrentQueue[object]')
+        if (-not $task.Operation.AsyncWaitHandle.WaitOne(10000)) { throw 'No-match search remained pending.' }
+        $result=Complete-TestSearch $task
+        if ($result.Rows.Count -ne 0 -or @($result.Sources | Where-Object { $_.State -ne 'OK' -or $_.Count -ne 0 }).Count -ne 0 -or $result.Message -notlike '*Nessun dispositivo trovato*') { throw 'No-match search did not finish successfully for all sources.' }
+        'PASS: a deleted or nonexistent name completes all sources with zero matches and a clear final message.'
+    }
+    finally{Close-TestSearch $task;Close-TestState $cache}
+
+    $cache=New-TestState;$cache.State.ProgressSource='Entra';$cache.State.Gates.Entra.Reset();$task=$null
+    try {
+        $queue=New-Object 'System.Collections.Concurrent.ConcurrentQueue[object]'
+        $task=Start-TestSearch $cache $queue
+        $found=$false;$deadline=[datetime]::UtcNow.AddSeconds(10)
+        while ([datetime]::UtcNow -lt $deadline) {
+            $snapshot=$null
+            while ($queue.TryDequeue([ref]$snapshot)) {
+                $entra=@($snapshot.Sources | Where-Object { $_.Name -eq 'Entra' })[0]
+                if ($entra.State -eq 'In attesa' -and $entra.Progress -eq 'Pagina 2, 999 record letti') { $found=$true }
+            }
+            if ($found) { break };Start-Sleep -Milliseconds 20
+        }
+        if (-not $found -or $task.Operation.IsCompleted) { throw 'A running cloud page was not published while independent sources completed.' }
+        $cache.State.Gates.Entra.Set();$null=Complete-TestSearch $task
+        'PASS: actual reader page notifications reach search snapshots while Entra is still reading.'
+    }
+    finally{Close-TestSearch $task;Close-TestState $cache}
+
+    @{DomainControllers=@(1..5|ForEach-Object{"dc$_.example.invalid"});Search=@{MinimumCharacters=2;CloudCacheMinutes=5;CloudReadTimeoutSeconds=1};Glpi=@{Enabled=$false}}|ConvertTo-Json -Depth 4|Set-Content $configPath -Encoding UTF8
+    foreach ($blocked in @('Entra','Intune')) {
+        $cache=New-TestState;$cache.State.Gates[$blocked].Reset();$task=$null
+        $cache['tenant|'+$blocked]=[pscustomobject]@{Records=@('stale')}
+        try {
+            $queue=New-Object 'System.Collections.Concurrent.ConcurrentQueue[object]'
+            $task=Start-TestSearch $cache $queue
+            if (-not $task.Operation.AsyncWaitHandle.WaitOne(10000)) { throw ('Cloud deadline failed to terminate '+$blocked) }
+            $result=Complete-TestSearch $task
+            $source=@($result.Sources | Where-Object { $_.Name -eq $blocked })[0]
+            if ($source.State -ne 'Errore' -or $source.Error -notlike '*Tempo massimo*1 s*' -or @($result.Sources | Where-Object { $_.State -eq 'OK' }).Count -ne 3 -or $cache.State.Exited.Count -ne 8 -or $cache.ContainsKey('tenant|'+$blocked)) { throw 'Cloud timeout fabricated absence, left a reader alive, kept stale data or lost independent results.' }
+            $row=$result.Rows[0]
+            if ($row.$blocked -ne '?' -or $row.($blocked+'Color') -ne 'Grigio') { throw 'Cloud timeout was shown as device absence.' }
+            $cache.State.Gates[$blocked].Set()
+            Close-TestSearch $task;$task=$null
+            $task=Start-TestSearch $cache $queue
+            $retried=Complete-TestSearch $task
+            if (@($retried.Sources | Where-Object { $_.State -ne 'OK' }).Count -ne 0) { throw 'A cloud timeout prevented the next search from succeeding.' }
+            ('PASS: {0} deadline stops its reader, invalidates its cache, preserves other results and permits a new search.' -f $blocked)
+        }
+        finally{Close-TestSearch $task;Close-TestState $cache}
+    }
+    @{DomainControllers=@(1..5|ForEach-Object{"dc$_.example.invalid"});Search=@{MinimumCharacters=2;CloudCacheMinutes=5};Glpi=@{Enabled=$false}}|ConvertTo-Json -Depth 4|Set-Content $configPath -Encoding UTF8
 
     $module=Import-Module $ModulePath -Force -PassThru
     $result=Invoke-ComputerExplorerParallelSearch -NameFragment 'PC-' -ConfigPath $configPath -EnabledSources GLPI
