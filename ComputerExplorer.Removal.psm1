@@ -1,6 +1,7 @@
 ﻿#requires -version 5.1
 Set-StrictMode -Version 2.0
 Import-Module (Join-Path $PSScriptRoot 'ComputerExplorer.Core.psm1') -ErrorAction Stop
+Import-Module (Join-Path $PSScriptRoot 'BitLocker.Archive.psm1') -ErrorAction Stop
 $script:RemovalPlans = @{}
 
 function Get-RemovalValue {
@@ -13,10 +14,10 @@ function Get-RemovalValue {
 }
 
 function Initialize-RemovalSources {
-    param([string[]]$Sources,$ProgressQueue)
+    param([string[]]$Sources,$ProgressQueue,[switch]$ArchiveOnly)
     if ($Sources -contains 'AD') { Import-Module ActiveDirectory -ErrorAction Stop }
     $cloud = @($Sources | Where-Object { $_ -in @('Entra', 'Intune') })
-    if ($cloud.Count -gt 0) { Connect-ExplorerGraph -Sources $cloud -ForRemoval -ProgressQueue $ProgressQueue }
+    if ($cloud.Count -gt 0) { Connect-ExplorerGraph -Sources $cloud -ForRemoval:(-not $ArchiveOnly) -ForBitLocker -ProgressQueue $ProgressQueue }
 }
 
 function Get-RemovalContextKey {
@@ -170,12 +171,32 @@ function Send-RemovalProgress {
     if ($null -ne $Queue) { $Queue.Enqueue([pscustomobject]@{ Kind = 'RemovalProgress'; Message = $Message; Result = $Result }) }
 }
 
+function Get-RemovalBitLockerPreview {
+    param([string]$Name,$Targets,$Settings,$Credentials)
+    Get-ExplorerBitLockerPreview -Name $Name -Targets $Targets -Settings $Settings -UserToken (Get-RemovalValue $Credentials 'User') -AppToken (Get-RemovalValue $Credentials 'App')
+}
+
+function Save-RemovalBitLockerBackup {
+    param($Preview,$Targets,$Plan,$ProgressQueue)
+    Save-ExplorerBitLockerArchive -Preview $Preview -Targets $Targets -Settings $Plan.GlpiSettings -UserToken (Get-RemovalValue $Plan.Credentials 'User') -AppToken (Get-RemovalValue $Plan.Credentials 'App') -ProgressQueue $ProgressQueue
+}
+
+function Test-RemovalBitLockerCoverage {
+    param($Target,$Receipt)
+    foreach ($key in @(Get-ExplorerBitLockerKeys -Targets @($Target))) {
+        $saved=@($Receipt.Keys | Where-Object { $_.KeyId -eq $key.KeyId -and $_.Fingerprint -eq $key.Fingerprint })
+        if ($saved.Count -ne 1) { throw 'Una chiave BitLocker non e coperta dal backup verificato. Ripetere archiviazione e anteprima.' }
+    }
+}
+
 function New-ExplorerRemovalPlan {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string[]]$Names,
         [Parameter(Mandatory = $true)][ValidateSet('AD', 'Entra', 'Intune')][string[]]$Sources,
         [Parameter(Mandatory = $true)][string]$ConfigPath,
+        $GlpiCredentials,
+        [switch]$ArchiveOnly,
         $ProgressQueue
     )
     $script:RemovalPlans.Clear()
@@ -191,33 +212,36 @@ function New-ExplorerRemovalPlan {
     $controllers = @()
     if ($null -ne $controllersProperty) { $controllers = @($controllersProperty.Value | ForEach-Object { ([string]$_).Trim() } | Sort-Object -Unique) }
     if ($selectedSources -contains 'AD' -and ($controllers.Count -eq 0 -or $controllers -contains '')) { throw 'Domain Controller non configurati correttamente.' }
-    Initialize-RemovalSources $selectedSources $ProgressQueue
+    Initialize-RemovalSources $selectedSources $ProgressQueue -ArchiveOnly:$ArchiveOnly
     $contextKey = Get-RemovalContextKey $selectedSources
     $entries = New-Object 'System.Collections.Generic.List[object]'
     foreach ($name in $namesToRead) {
         Send-RemovalProgress $ProgressQueue ("Verifica oggetti: $name")
-        $targets = @(); $errorText = $null
-        try { $targets = @(Get-RemovalTargets -Name $name -Sources $selectedSources -Controllers $controllers) }
+        $targets = @(); $errorText = $null; $backup=$null
+        try {
+            $targets = @(Get-RemovalTargets -Name $name -Sources $selectedSources -Controllers $controllers)
+            if ($targets.Count -gt 0) { $backup=Get-RemovalBitLockerPreview -Name $name -Targets $targets -Settings (Get-RemovalValue $config.Settings 'Glpi') -Credentials $GlpiCredentials }
+        }
         catch { $errorText = $_.Exception.Message }
-        [void]$entries.Add([pscustomobject]@{ Name = $name; Targets = $targets; Error = $errorText })
+        [void]$entries.Add([pscustomobject]@{ Name = $name; Targets = $targets; Error = $errorText; Backup=$backup })
     }
     if ((Get-RemovalContextKey $selectedSources) -ne $contextKey) { throw 'La sessione Graph è cambiata durante la verifica. Ripetere la preparazione.' }
     $planId = [guid]::NewGuid().ToString()
     $created = [datetimeoffset]::UtcNow
     $script:RemovalPlans[$planId] = [pscustomobject]@{
         Id = $planId; CreatedAtUtc = $created; Sources = $selectedSources; Controllers = $controllers
-        ContextKey = $contextKey; Entries = $entries.ToArray()
+        ContextKey = $contextKey; Entries = $entries.ToArray(); ArchiveOnly=[bool]$ArchiveOnly; GlpiSettings=(Get-RemovalValue $config.Settings 'Glpi'); Credentials=$GlpiCredentials
     }
     # La vista passata alla UI non contiene gli oggetti interni del piano.
     $view = @($entries | ForEach-Object {
-        [pscustomobject]@{ Name = $_.Name; Error = $_.Error; Targets = @($_.Targets | ForEach-Object {
+        [pscustomobject]@{ Name = $_.Name; Error = $_.Error; Backup=$_.Backup | Select-Object ComputerId,Name,Serial,EntityId,RequiresMappingConfirmation,@{Name='KeyCount';Expression={$_.Keys.Count}},@{Name='Keys';Expression={@($_.Keys | Select-Object KeyId,Volume,CreatedAt,@{Name='Origins';Expression={@($_.Origins | ForEach-Object {[string]$_})}})}}; Targets = @($_.Targets | ForEach-Object {
             $copy = $_ | Select-Object Source, Name, Id, DomainController, DistinguishedName, LinkId, SerialNumber, OperatingSystem
             $children = @((Get-RemovalValue $_ 'AdChildren' @()) | ForEach-Object { $_ | Select-Object Id, DistinguishedName, ObjectClass })
             $copy | Add-Member -NotePropertyName AdChildren -NotePropertyValue $children
             $copy
         }) }
     })
-    [pscustomobject]@{ PlanId = $planId; CreatedAtUtc = $created; Sources = $selectedSources.Clone(); Entries = $view }
+    [pscustomobject]@{ PlanId = $planId; CreatedAtUtc = $created; Sources = $selectedSources.Clone(); Entries = $view; ArchiveOnly=[bool]$ArchiveOnly }
 }
 
 function Test-RemovalNotFound {
@@ -308,26 +332,28 @@ function Invoke-ExplorerRemovalPlan {
         [Parameter(Mandatory = $true)][string]$PlanId,
         $ProgressQueue,
         [Threading.CancellationTokenSource]$Cancellation,
-        [switch]$IncludeAdChildren
+        [switch]$IncludeAdChildren,
+        [switch]$ConfirmGlpiMapping
     )
     if (-not $script:RemovalPlans.ContainsKey($PlanId)) { throw 'Anteprima non valida o già utilizzata. Ripetere la verifica.' }
     $plan = $script:RemovalPlans[$PlanId]
     $script:RemovalPlans.Remove($PlanId)
     if (([datetimeoffset]::UtcNow - $plan.CreatedAtUtc).TotalMinutes -gt 5) { throw 'Anteprima scaduta. Ripetere la verifica.' }
-    Initialize-RemovalSources $plan.Sources $ProgressQueue
+    Initialize-RemovalSources $plan.Sources $ProgressQueue -ArchiveOnly:$plan.ArchiveOnly
     if ((Get-RemovalContextKey $plan.Sources) -ne $plan.ContextKey) { throw 'Account o tenant Graph cambiato. Ripetere la verifica.' }
     $results = New-Object 'System.Collections.Generic.List[object]'
-    $writesAttempted = $false
+    $writesAttempted = $false; $archived=0
     $order = @{ Intune = 0; AD = 1; Entra = 2 }
     try {
         foreach ($entry in $plan.Entries) {
             $reason = $entry.Error
             $state = 'Bloccato'
             if ($null -ne $Cancellation -and $Cancellation.IsCancellationRequested) { $reason = 'Interruzione richiesta prima di questo computer.'; $state = 'Annullato' }
-            if ([string]::IsNullOrWhiteSpace($reason) -and -not $IncludeAdChildren -and
+            if ([string]::IsNullOrWhiteSpace($reason) -and -not $IncludeAdChildren -and -not $plan.ArchiveOnly -and
                 @($entry.Targets | Where-Object { $_.Source -eq 'AD' -and $_.AdChildren.Count -gt 0 }).Count -gt 0) {
                 $reason = 'Il computer contiene oggetti figli AD. Confermare esplicitamente la loro eliminazione nell''anteprima, incluse eventuali informazioni di recupero BitLocker.'
             }
+            if ([string]::IsNullOrWhiteSpace($reason) -and $null -ne $entry.Backup -and $entry.Backup.RequiresMappingConfirmation -and -not $ConfirmGlpiMapping) { $reason='Confermare esplicitamente l''abbinamento alla scheda GLPI: le fonti selezionate non consentono un confronto completo dei seriali.' }
             if ([string]::IsNullOrWhiteSpace($reason)) {
                 try {
                     if ((Get-RemovalContextKey $plan.Sources) -ne $plan.ContextKey) { throw 'Sessione Graph cambiata.' }
@@ -350,6 +376,10 @@ function Invoke-ExplorerRemovalPlan {
                             foreach ($child in $target.AdChildren) { [void](Read-RemovalAdChildById $child $target) }
                         }
                     }
+                    if ($null -ne $entry.Backup) {
+                        $freshBackup=Get-RemovalBitLockerPreview -Name $entry.Name -Targets $current -Settings $plan.GlpiSettings -Credentials $plan.Credentials
+                        if (-not (Test-ExplorerBitLockerSnapshot $entry.Backup $freshBackup)) { throw 'Identita GLPI o chiavi BitLocker cambiate dopo l''anteprima.' }
+                    }
                     if ((Get-RemovalContextKey $plan.Sources) -ne $plan.ContextKey) { throw 'Sessione Graph cambiata durante la verifica.' }
                 }
                 catch { $reason = $_.Exception.Message }
@@ -364,6 +394,22 @@ function Invoke-ExplorerRemovalPlan {
                 [void]$results.Add($result); Send-RemovalProgress $ProgressQueue $entry.Name $result
                 continue
             }
+            if (-not $PSCmdlet.ShouldProcess(('GLPI: '+$entry.Name+' / '+$entry.Backup.ComputerId), 'Archivia e verifica le chiavi BitLocker')) {
+                foreach ($target in $entry.Targets) { [void]$results.Add((New-RemovalResult $entry.Name $target.Source $target.DomainController $target.Id 'Simulato' '')) }
+                continue
+            }
+            try {
+                $receipt=Save-RemovalBitLockerBackup -Preview $entry.Backup -Targets $current -Plan $plan -ProgressQueue $ProgressQueue
+                $archived+=$receipt.Count
+                $backupResult=New-RemovalResult $entry.Name 'BitLocker' ('GLPI '+$entry.Backup.ComputerId) '' 'Archiviato' ($receipt.Count.ToString()+' chiavi verificate')
+                [void]$results.Add($backupResult); Send-RemovalProgress $ProgressQueue $entry.Name $backupResult
+            }
+            catch {
+                $backupResult=New-RemovalResult $entry.Name 'BitLocker' '' '' 'Bloccato' $_.Exception.Message
+                [void]$results.Add($backupResult); Send-RemovalProgress $ProgressQueue $entry.Name $backupResult
+                continue
+            }
+            if ($plan.ArchiveOnly) { continue }
             $blocked = $false
             foreach ($target in @($entry.Targets | Sort-Object @{ Expression = { $order[$_.Source] } }, DomainController, Id)) {
                 $errorText = ''; $targetState = 'Eliminato'
@@ -374,6 +420,7 @@ function Invoke-ExplorerRemovalPlan {
                         if ($null -eq $live) { $targetState = 'Già assente' }
                         elseif (-not (Test-RemovalSameTarget $target $live)) { throw 'Identità, nome o piattaforma cambiati dopo la verifica.' }
                         elseif ($PSCmdlet.ShouldProcess(('{0}: {1} / {2} / {3}' -f $target.Source, $target.Name, $target.DomainController, $target.Id), 'Elimina registrazione')) {
+                            Test-RemovalBitLockerCoverage -Target $live -Receipt $receipt
                             $writesAttempted = $true
                             try { Remove-RemovalTarget -Target $target -Results $results -ProgressQueue $ProgressQueue }
                             catch { if (Test-RemovalNotFound $_) { $targetState = 'Già assente' } else { throw } }
@@ -389,7 +436,7 @@ function Invoke-ExplorerRemovalPlan {
     }
     finally { if ($writesAttempted) { Clear-ExplorerCloudCache } }
     [pscustomobject]@{
-        Results = $results.ToArray(); WritesAttempted = $writesAttempted
+        Results = $results.ToArray(); WritesAttempted = $writesAttempted; Archived=$archived; ArchiveOnly=$plan.ArchiveOnly
         Deleted = @($results | Where-Object { $_.State -eq 'Eliminato' }).Count
         Failed = @($results | Where-Object { $_.State -in @('Errore', 'Bloccato') }).Count
     }

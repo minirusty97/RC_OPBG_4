@@ -69,6 +69,11 @@ try {
         'PASS: removal requests the existing project write permissions when the session is read-only.'
         $script:Context.Scopes=@('Directory.AccessAsUser.All','DeviceManagementManagedDevices.ReadWrite.All')
 
+        Connect-ExplorerGraph -Sources Entra,Intune -ForBitLocker
+        $bitlockerLogin=$script:Fixture.Logins[-1]
+        if ($bitlockerLogin.Scopes -notcontains 'BitlockerKey.Read.All' -or $bitlockerLogin.Scopes -notcontains 'Directory.AccessAsUser.All' -or $bitlockerLogin.Scopes -notcontains 'DeviceManagementManagedDevices.ReadWrite.All' -or $bitlockerLogin.ClientId -ne 'client-a' -or $bitlockerLogin.TenantId -ne 'tenant-a' -or $bitlockerLogin.ContextScope -ne 'CurrentUser') { throw 'BitLocker scope or existing session identity was lost.' }
+        'PASS: BitLocker backup requests its explicit key-read permission while retaining scopes, tenant, application and CurrentUser interactive authentication.'
+
         $first=Get-ExplorerCloudInventory -Source Entra
         if ($first.Records.Count -ne 2 -or $first.FromCache -or $script:Fixture.Calls.Count -ne 2) { throw 'Pages not fully collected or duplicate not removed.' }
         'PASS: Graph pagination, distinct IDs and optional nextLink.'
