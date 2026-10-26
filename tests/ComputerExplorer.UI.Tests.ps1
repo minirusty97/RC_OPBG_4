@@ -207,9 +207,10 @@ try {
     'PASS: the native footer identifies the active cloud page and record count.'
     $script:LiveRequest=$null;$script:LiveRequests=0
     function Start-RemovalOperation { param($Operation,$Names) $script:LiveRequest=[pscustomobject]@{Operation=$Operation;Names=$Names};$script:LiveRequests++ }
+    $form.Show();[Windows.Forms.Application]::DoEvents()
     $nameBox.Text='PC-EXACT-NO-RESULTS'
     $findKeysButton.PerformClick()
-    if ($script:LiveRequests -ne 1 -or $script:LiveRequest.Operation -ne 'ReadKeys' -or $script:LiveRequest.Names[0] -ne 'PC-EXACT-NO-RESULTS') { throw 'Direct lookup required an aggregate search result or GLPI.' }
+    if ($script:LiveRequests -ne 1 -or $script:LiveRequest.Operation -ne 'ReadKeys' -or $script:LiveRequest.Names[0] -ne 'PC-EXACT-NO-RESULTS') { throw ('Direct lookup did not start: count='+$script:LiveRequests+'; enabled='+$findKeysButton.Enabled+'; busy='+$script:Busy+'; request='+($script:LiveRequest | ConvertTo-Json -Compress)) }
     Set-SearchBusy $true
     if ($findKeysButton.Enabled) { throw 'Live-key lookup can overlap an active operation.' }
     Set-SearchBusy $false
