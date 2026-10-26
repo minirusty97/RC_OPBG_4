@@ -32,6 +32,21 @@ try {
         }
         function script:Initialize-RemovalSources { param([string[]]$Sources,$ProgressQueue) }
         function script:Get-RemovalContextKey { param([string[]]$Sources) return $script:Fixture.Context }
+        function script:Get-RemovalBitLockerPreview {
+            param($Name,$Targets,$Settings,$Credentials)
+            if ($script:Fixture.Mode -eq 'BackupPreviewFailure') { throw 'Synthetic backup preview failure.' }
+            [pscustomobject]@{ComputerId=900;Name=$Name;Serial='SYNTHETIC';EntityId=0;RequiresMappingConfirmation=($script:Fixture.Mode -eq 'MappingRequired');Keys=@()}
+        }
+        function script:Save-RemovalBitLockerBackup {
+            param($Preview,$Targets,$Plan,$Password,$ProgressQueue)
+            if ($script:Fixture.Mode -eq 'BackupSaveFailure') { throw 'Synthetic backup save failure.' }
+            if (@($script:Fixture.Writes | Where-Object Name -eq $Preview.Name).Count -ne 0) { throw 'Backup ran after deletion.' }
+            [pscustomobject]@{ComputerId=900;Count=0;Keys=@()}
+        }
+        function script:Test-RemovalBitLockerCoverage {
+            param($Target,$Receipt)
+            if ($script:Fixture.Mode -eq 'CoverageFailure') { throw 'Synthetic key not covered by backup.' }
+        }
         function script:Clear-ExplorerCloudCache { $script:Fixture.CacheCleared++ }
         function script:Throw-GraphMissing {
             $exception = New-Object Exception('Synthetic not found.')
@@ -273,6 +288,29 @@ try {
             if ($result.Deleted -ne 8 -or @($script:Fixture.Writes | Where-Object { $_.Id -eq (New-TestId 999) }).Count -gt 0) { throw 'External preview mutation retargeted deletion.' }
             'PASS: preview DTO mutation cannot alter cached target IDs.'
 
+
+            foreach ($mode in @('BackupPreviewFailure','BackupSaveFailure','CoverageFailure')) {
+                Reset-Fixture
+                if ($mode -eq 'BackupPreviewFailure') { $script:Fixture.Mode=$mode }
+                $plan=New-ExplorerRemovalPlan -Names PC-ONE -Sources AD,Entra,Intune -ConfigPath $configPath
+                $script:Fixture.Mode=$mode
+                $result=Invoke-ExplorerRemovalPlan -PlanId $plan.PlanId -Confirm:$false
+                if ($script:Fixture.Writes.Count -ne 0 -or $result.Failed -eq 0) { throw ('Failed BitLocker protection permitted deletion: '+$mode) }
+            }
+            'PASS: failed backup preview, failed verified save and uncovered keys block every origin before deletion.'
+            Reset-Fixture; $script:Fixture.Mode='MappingRequired'
+            $plan=New-ExplorerRemovalPlan -Names PC-ONE -Sources AD,Entra,Intune -ConfigPath $configPath
+            $result=Invoke-ExplorerRemovalPlan -PlanId $plan.PlanId -Confirm:$false
+            if ($script:Fixture.Writes.Count -ne 0 -or $result.Failed -ne 1) { throw 'Unconfirmed GLPI mapping permitted deletion.' }
+            $plan=New-ExplorerRemovalPlan -Names PC-ONE -Sources AD,Entra,Intune -ConfigPath $configPath
+            $result=Invoke-ExplorerRemovalPlan -PlanId $plan.PlanId -ConfirmGlpiMapping -Confirm:$false
+            if ($result.Failed -or $result.Deleted -ne 8) { throw 'Explicitly confirmed unchanged GLPI mapping did not work.' }
+            'PASS: name-only GLPI associations require an explicit confirmation enforced in the backend.'
+            Reset-Fixture
+            $plan=New-ExplorerRemovalPlan -Names PC-ONE -Sources AD,Entra,Intune -ConfigPath $configPath -ArchiveOnly
+            $result=Invoke-ExplorerRemovalPlan -PlanId $plan.PlanId -Confirm:$false
+            if ($script:Fixture.Writes.Count -ne 0 -or $result.Deleted -ne 0 -or $result.Failed -ne 0 -or -not $result.ArchiveOnly) { throw 'Archive-only operation removed a registration.' }
+            'PASS: archive-only plans save and verify backups without deleting AD/Intune/Entra records.'
 
             # Use one DC for subtree scenarios so duplicate replicas cannot hide wrong counts.
             @{DomainControllers=@('dc1.example.invalid');Search=@{MinimumCharacters=2}} | ConvertTo-Json -Depth 4 | Set-Content $configPath -Encoding UTF8

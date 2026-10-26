@@ -33,7 +33,7 @@ function Read-ExplorerConfiguration {
 
 function Connect-ExplorerGraph {
     [CmdletBinding()]
-    param([string[]]$Sources, [switch]$ForRemoval, $ProgressQueue)
+    param([string[]]$Sources, [switch]$ForRemoval, [switch]$ForBitLocker, $ProgressQueue)
     try { Import-Module Microsoft.Graph.Authentication -ErrorAction Stop }
     catch { throw ('Modulo Microsoft.Graph.Authentication non caricabile. Verificare il modulo nella stessa versione di PowerShell usata per avviare la console. Dettaglio: ' + $_.Exception.Message) }
     $context = Get-MgContext -ErrorAction SilentlyContinue
@@ -54,6 +54,7 @@ function Connect-ExplorerGraph {
     if ($Sources -contains 'Intune' -and @($scopes | Where-Object {
         $_ -in $intuneScopes
     }).Count -eq 0) { [void]$required.Add('DeviceManagementManagedDevices.ReadWrite.All') }
+    if ($ForBitLocker -and $scopes -notcontains 'BitlockerKey.Read.All') { [void]$required.Add('BitlockerKey.Read.All') }
     if ($null -eq $context -or $required.Count -gt 0) {
         # CurrentUser uses the SDK secure cache so separate suite processes
         # can silently reuse sign-in. Interactive/WAM matches the legacy tool.
