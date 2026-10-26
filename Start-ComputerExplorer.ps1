@@ -800,12 +800,12 @@ $timer.Add_Tick({
         $update = $null; $latestSearchUpdate = $null
         while ($script:Queue.TryDequeue([ref]$update)) {
             $kindProperty=$update.PSObject.Properties['Kind']
-            if ($null -ne $kindProperty -and $kindProperty.Value -in @('GraphLoginStarting','GraphLogin')) { Show-ExplorerGraphLogin $update; continue }
+            if ($null -ne $kindProperty -and $kindProperty.Value -in @('GraphLoginStarting','GraphLogin')) { if (-not $script:Stopping) { Show-ExplorerGraphLogin $update }; continue }
             if ($null -ne $kindProperty -and $kindProperty.Value -eq 'GraphLoginComplete') {
                 Close-ExplorerGraphLogin
                 $errorProperty=$update.PSObject.Properties['Error']
                 if ($null -ne $errorProperty -and $errorProperty.Value -and -not $script:Stopping) {
-                    [void][Windows.Forms.MessageBox]::Show($form,[string]$errorProperty.Value,'Accesso Microsoft Graph non riuscito','OK','Error')
+                    $script:StageMessage='Accesso Microsoft Graph annullato o non riuscito.'; $status.Text=$script:StageMessage
                 }
                 continue
             }
@@ -820,6 +820,8 @@ $timer.Add_Tick({
             $status.Text = '{0} | {1}s' -f $script:StageMessage, ([int]([datetime]::Now - $script:StartedAt).TotalSeconds)
             return
         }
+        # Stop before EndInvoke or any modal UI: modal dialogs pump timer messages.
+        $timer.Stop()
         $finishedOperation = $script:Operation
         $output = @(); $failed = $false
         try {
