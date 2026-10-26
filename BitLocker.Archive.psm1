@@ -52,6 +52,31 @@ function Get-ExplorerBitLockerKeys {
     [CmdletBinding()]
     param([object[]]$Targets)
     $keys=@{}
+    $deviceIds=@(@($Targets | Where-Object Source -eq 'Intune')+@($Targets | Where-Object Source -eq 'Entra') | ForEach-Object { ConvertTo-BlId $_.LinkId } | Select-Object -Unique)
+    foreach ($deviceId in $deviceIds) {
+        $path='/v1.0/informationProtection/bitlocker/recoveryKeys'
+        $uri='https://graph.microsoft.com'+$path+'?$filter='+[Uri]::EscapeDataString("deviceId eq '$deviceId'")
+        try {
+            $records=@(Get-ExplorerGraphCollection -Uri $uri -ResourcePath $path)
+            foreach ($record in $records) {
+                $keyId=ConvertTo-BlId $record.id
+                if ((ConvertTo-BlId $record.deviceId) -ne $deviceId) { throw 'Chiave Graph esterna al dispositivo richiesto.' }
+                $keyUri='https://graph.microsoft.com'+$path+'/'+$keyId+'?$select=id,deviceId,key,createdDateTime,volumeType'
+                $response=Invoke-MgGraphRequest -Method GET -Uri $keyUri -OutputType PSObject -Headers @{'User-Agent'='AssistenteIT-BitLocker'} -ErrorAction Stop
+                $secret=Get-BlValue $response 'value' $response
+                if ((ConvertTo-BlId $secret.id) -ne $keyId -or (ConvertTo-BlId $secret.deviceId) -ne $deviceId) { throw 'Identita della chiave Graph cambiata.' }
+                $key=ConvertTo-BlPassword (Get-BlValue $secret 'key')
+                $origin='Entra:'+ $deviceId
+                if (@($Targets | Where-Object { $_.Source -eq 'Intune' -and (ConvertTo-BlId $_.LinkId) -eq $deviceId }).Count -gt 0) { $origin='Intune:'+ $deviceId }
+                if ($keys.ContainsKey($keyId)) {
+                    if ($keys[$keyId].Password -cne $key) { throw 'Chiavi discordanti per lo stesso Recovery Key ID.' }
+                    $keys[$keyId].Origins=@(@($keys[$keyId].Origins)+$origin | Sort-Object -Unique)
+                }
+                else { $keys[$keyId]=[pscustomobject]@{KeyId=$keyId;Password=$key;Volume=[string](Get-BlValue $secret 'volumeType');CreatedAt=[string](Get-BlValue $secret 'createdDateTime');Origins=@($origin);Fingerprint=(Get-BlFingerprint $key)} }
+            }
+        }
+        catch { throw ('Lettura BitLocker da Entra ID non completata per Device ID '+$deviceId+'. Verificare accesso, BitlockerKey.Read.All e ruolo; nessuna eliminazione consentita.') }
+    }
     foreach ($target in @($Targets | Where-Object Source -eq 'AD')) {
         foreach ($child in @($target.AdChildren | Where-Object ObjectClass -eq 'msFVE-RecoveryInformation')) {
             try {
@@ -72,31 +97,120 @@ function Get-ExplorerBitLockerKeys {
             catch { throw ('Lettura della chiave BitLocker AD non completata per l''oggetto '+$child.Id+'. Verificare permessi e disponibilita sul DC; nessuna eliminazione consentita.') }
         }
     }
-    $deviceIds=@($Targets | Where-Object { $_.Source -in @('Entra','Intune') } | ForEach-Object { ConvertTo-BlId $_.LinkId } | Sort-Object -Unique)
-    foreach ($deviceId in $deviceIds) {
-        $path='/v1.0/informationProtection/bitlocker/recoveryKeys'
-        $uri='https://graph.microsoft.com'+$path+'?$filter='+[Uri]::EscapeDataString("deviceId eq '$deviceId'")
-        try {
-            $records=@(Get-ExplorerGraphCollection -Uri $uri -ResourcePath $path)
-            foreach ($record in $records) {
-                $keyId=ConvertTo-BlId $record.id
-                if ((ConvertTo-BlId $record.deviceId) -ne $deviceId) { throw 'Chiave Graph esterna al dispositivo richiesto.' }
-                $keyUri='https://graph.microsoft.com'+$path+'/'+$keyId+'?$select=id,deviceId,key,createdDateTime,volumeType'
-                $secret=Invoke-MgGraphRequest -Method GET -Uri $keyUri -OutputType PSObject -Headers @{'User-Agent'='AssistenteIT-BitLocker'} -ErrorAction Stop
-                if ((ConvertTo-BlId $secret.id) -ne $keyId -or (ConvertTo-BlId $secret.deviceId) -ne $deviceId) { throw 'Identita della chiave Graph cambiata.' }
-                $key=ConvertTo-BlPassword (Get-BlValue $secret 'key')
-                $origin='Entra:'+ $deviceId
-                if ($keys.ContainsKey($keyId)) {
-                    if ($keys[$keyId].Password -cne $key) { throw 'Chiavi discordanti per lo stesso Recovery Key ID.' }
-                    $keys[$keyId].Origins=@(@($keys[$keyId].Origins)+$origin | Sort-Object -Unique)
-                }
-                else { $keys[$keyId]=[pscustomobject]@{KeyId=$keyId;Password=$key;Volume=[string](Get-BlValue $secret 'volumeType');CreatedAt=[string](Get-BlValue $secret 'createdDateTime');Origins=@($origin);Fingerprint=(Get-BlFingerprint $key)} }
-            }
-        }
-        catch { throw ('Lettura BitLocker da Entra ID non completata per Device ID '+$deviceId+'. Verificare accesso, BitlockerKey.Read.All e ruolo; nessuna eliminazione consentita.') }
-    }
     return @($keys.Values | Sort-Object KeyId)
 }
+
+function Get-BlKeyLookupWorkerScript {
+    return {
+        param($ModulePath,$Source,$Name,$DomainController)
+        $ErrorActionPreference='Stop'
+        $module=Import-Module $ModulePath -PassThru -ErrorAction Stop
+        & $module { param($Source,$Name,$DomainController) Read-BlKeysBySource -Source $Source -Name $Name -DomainController $DomainController } $Source $Name $DomainController
+    }
+}
+
+function Read-BlLiveKeySource {
+    param([ValidateSet('Intune','AD')][string]$Source,[string]$Name,[string]$DomainController,[int]$TimeoutSeconds=90)
+    $pipeline=[PowerShell]::Create();$operation=$null;$stop=$null
+    try {
+        $body=Get-BlKeyLookupWorkerScript
+        [void]$pipeline.AddScript($body.ToString()).AddArgument((Join-Path $PSScriptRoot 'BitLocker.Archive.psm1')).AddArgument($Source).AddArgument($Name).AddArgument($DomainController)
+        $operation=$pipeline.BeginInvoke()
+        if (-not $operation.AsyncWaitHandle.WaitOne($TimeoutSeconds*1000)) {
+            $stop=$pipeline.BeginStop($null,$null);$pipeline.EndStop($stop)
+            throw ('Tempo massimo di lettura BitLocker da '+$Source+' superato ('+$TimeoutSeconds+' s).')
+        }
+        $records=@($pipeline.EndInvoke($operation))
+        if ($pipeline.Streams.Error.Count -gt 0) { throw $pipeline.Streams.Error[0] }
+        return $records
+    }
+    finally {
+        if ($null -ne $operation -and -not $operation.IsCompleted) {
+            try { $stop=$pipeline.BeginStop($null,$null);$pipeline.EndStop($stop) } catch { }
+        }
+        $pipeline.Dispose()
+    }
+}
+
+function Read-BlKeysBySource {
+    param([ValidateSet('Intune','AD')][string]$Source,[string]$Name,[string]$DomainController)
+    $targets=New-Object 'Collections.Generic.List[object]'
+    if ($Source -eq 'Intune') {
+        Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
+        $path='/v1.0/deviceManagement/managedDevices'
+        $filter=[Uri]::EscapeDataString("deviceName eq '"+$Name.Replace("'","''")+"'")
+        $uri='https://graph.microsoft.com'+$path+'?$filter='+$filter+'&$select=id,deviceName,azureADDeviceId,serialNumber,operatingSystem'
+        foreach ($record in @(Get-ExplorerGraphCollection -Uri $uri -ResourcePath $path)) {
+            if (-not [string]::Equals([string](Get-BlValue $record 'deviceName'),$Name,[StringComparison]::OrdinalIgnoreCase) -or
+                [string](Get-BlValue $record 'operatingSystem') -notlike 'Windows*') { continue }
+            [void]$targets.Add([pscustomobject]@{Source='Intune';Name=$Name;Id=(ConvertTo-BlId (Get-BlValue $record 'id'))
+                LinkId=(ConvertTo-BlId (Get-BlValue $record 'azureADDeviceId'));SerialNumber=[string](Get-BlValue $record 'serialNumber')})
+        }
+    }
+    else {
+        Import-Module ActiveDirectory -ErrorAction Stop
+        $escaped=$Name.Replace('\','\5c').Replace('*','\2a').Replace('(','\28').Replace(')','\29').Replace([string][char]0,'\00')
+        foreach ($computer in @(Get-ADComputer -Server $DomainController -LDAPFilter ('(name='+$escaped+')') -Properties @('ObjectGUID','DistinguishedName') -ErrorAction Stop)) {
+            if (-not [string]::Equals([string]$computer.Name,$Name,[StringComparison]::OrdinalIgnoreCase)) { throw 'Risposta AD estranea al nome richiesto.' }
+            $rootDn=[string]$computer.DistinguishedName
+            if (-not $rootDn) { throw 'Percorso AD del computer assente.' }
+            $children=New-Object 'Collections.Generic.List[object]'
+            foreach ($child in @(Get-ADObject -Server $DomainController -SearchBase $rootDn -SearchScope Subtree -LDAPFilter '(objectClass=msFVE-RecoveryInformation)' -Properties @('ObjectGUID') -ErrorAction Stop)) {
+                if ($child.ObjectClass -ne 'msFVE-RecoveryInformation' -or -not ([string]$child.DistinguishedName).EndsWith(','+$rootDn,[StringComparison]::OrdinalIgnoreCase)) { throw 'Oggetto BitLocker estraneo al computer AD richiesto.' }
+                [void]$children.Add([pscustomobject]@{Id=(ConvertTo-BlId $child.ObjectGUID);DistinguishedName=[string]$child.DistinguishedName;ObjectClass=[string]$child.ObjectClass})
+            }
+            [void]$targets.Add([pscustomobject]@{Source='AD';Name=$Name;Id=(ConvertTo-BlId $computer.ObjectGUID);DomainController=$DomainController;AdChildren=$children.ToArray()})
+        }
+    }
+    foreach ($key in @(Get-ExplorerBitLockerKeys -Targets $targets.ToArray())) {
+        $serials=@($targets | Where-Object { $_.Source -eq 'Intune' -and $key.Origins -contains ('Intune:'+ $_.LinkId) } | ForEach-Object { $_.SerialNumber } | Sort-Object -Unique)
+        [pscustomobject]@{Name=$Name;KeyId=$key.KeyId;Password=$key.Password;Volume=$key.Volume;Origins=$key.Origins;Serial=($serials -join ', ');CreatedAt=$key.CreatedAt;ArchivedAtUtc=''}
+    }
+}
+
+function Find-ExplorerBitLockerKeys {
+    [CmdletBinding()]
+    param([Parameter(Mandatory=$true)][string]$Name,[Parameter(Mandatory=$true)][string]$ConfigPath,$ProgressQueue)
+    $name=$Name.Trim()
+    if (-not $name -or $name.Length -gt 255) { throw 'Inserire il nome esatto del computer.' }
+    $config=Read-ExplorerConfiguration $ConfigPath
+    $sources=New-Object 'Collections.Generic.List[object]';$records=New-Object 'Collections.Generic.List[object]'
+    if ($null -ne $ProgressQueue) { $ProgressQueue.Enqueue([pscustomobject]@{Kind='RemovalProgress';Message='Ricerca chiavi BitLocker: dispositivo Intune e chiavi cloud...';Result=$null}) }
+    try {
+        Connect-ExplorerGraph -Sources Intune -ForBitLocker -ProgressQueue $ProgressQueue
+        $found=@(Read-BlLiveKeySource -Source Intune -Name $name -TimeoutSeconds $config.CloudReadTimeoutSeconds)
+        foreach ($record in $found) { [void]$records.Add($record) }
+        [void]$sources.Add([pscustomobject]@{Name='Intune';State='OK';Count=$found.Count;Error=''})
+    }
+    catch {
+        [void]$sources.Add([pscustomobject]@{Name='Intune';State='Errore';Count=0;Error='Lettura Intune/BitLocker non riuscita: verificare connessione, Azure AD Device ID, consenso BitlockerKey.Read.All e ruolo. Se la richiesta e scaduta, riprovare.'})
+    }
+    if ($records.Count -eq 0) {
+        $configuredControllers=Get-BlValue $config.Settings 'DomainControllers' @()
+        $controllers=@($configuredControllers | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ } | Select-Object -Unique)
+        foreach ($dc in $controllers) {
+            if ($null -ne $ProgressQueue) { $ProgressQueue.Enqueue([pscustomobject]@{Kind='RemovalProgress';Message=('Ricerca chiavi BitLocker: fallback AD su '+$dc+'...');Result=$null}) }
+            try {
+                $found=@(Read-BlLiveKeySource -Source AD -Name $name -DomainController $dc -TimeoutSeconds $config.CloudReadTimeoutSeconds)
+                foreach ($record in $found) { [void]$records.Add($record) }
+                [void]$sources.Add([pscustomobject]@{Name=('AD: '+$dc);State='OK';Count=$found.Count;Error=''})
+                if ($found.Count -gt 0) { break }
+            }
+            catch { [void]$sources.Add([pscustomobject]@{Name=('AD: '+$dc);State='Errore';Count=0;Error='Lettura AD non riuscita: verificare disponibilita del DC e permessi sulle informazioni di recupero.'}) }
+        }
+        if ($controllers.Count -eq 0) { [void]$sources.Add([pscustomobject]@{Name='AD';State='Errore';Count=0;Error='Nessun Domain Controller configurato per la ricerca di riserva.'}) }
+    }
+    $unique=@{}
+    foreach ($record in $records) {
+        if ($unique.ContainsKey($record.KeyId)) {
+            if ($unique[$record.KeyId].Password -cne $record.Password) { throw 'Fonti discordanti per lo stesso Key ID. Verificare le chiavi prima di usarle.' }
+            $unique[$record.KeyId].Origins=@(@($unique[$record.KeyId].Origins)+@($record.Origins) | Sort-Object -Unique)
+        }
+        else { $unique[$record.KeyId]=$record }
+    }
+    [pscustomobject]@{Name=$name;Records=@($unique.Values | Sort-Object KeyId);Sources=$sources.ToArray();Live=$true}
+}
+
 
 function Invoke-BlGlpiRequest {
     param($Session,[ValidateSet('GET','POST')][string]$Method,[string]$Path,$Body,[hashtable]$Query=@{})
@@ -285,4 +399,4 @@ function Read-ExplorerBitLockerArchive {
     return @($records.ToArray())
 }
 
-Export-ModuleMember -Function Get-ExplorerBitLockerKeys,Get-ExplorerBitLockerPreview,Test-ExplorerBitLockerSnapshot,Save-ExplorerBitLockerArchive,Read-ExplorerBitLockerArchive
+Export-ModuleMember -Function Find-ExplorerBitLockerKeys,Get-ExplorerBitLockerKeys,Get-ExplorerBitLockerPreview,Test-ExplorerBitLockerSnapshot,Save-ExplorerBitLockerArchive,Read-ExplorerBitLockerArchive

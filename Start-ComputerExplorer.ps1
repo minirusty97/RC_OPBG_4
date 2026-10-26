@@ -82,23 +82,33 @@ function Initialize-ArchiveUiCredentials {
 function Show-ArchivedBitLockerKeys {
     param($Result)
     $dialog=New-Object Windows.Forms.Form; $dialog.Icon=$form.Icon; $dialog.Text='Chiavi BitLocker archiviate su GLPI'
-    $dialog.ClientSize=New-Object Drawing.Size(1050,420); $dialog.StartPosition='CenterParent'
-    $panel=New-Object Windows.Forms.TableLayoutPanel; $panel.Dock='Fill'; $panel.RowCount=3; $panel.ColumnCount=1; $panel.Padding=New-Object Windows.Forms.Padding(10)
+    $live=[bool](Get-UiSetting $Result 'Live' $false)
+    if ($live) { $dialog.Text='Ricerca chiavi BitLocker - Intune / AD' }
+    $dialog.ClientSize=New-Object Drawing.Size(1050,510); $dialog.StartPosition='CenterParent'
+    $panel=New-Object Windows.Forms.TableLayoutPanel; $panel.Dock='Fill'; $panel.RowCount=4; $panel.ColumnCount=1; $panel.Padding=New-Object Windows.Forms.Padding(10)
+    [void]$panel.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',80)))
     [void]$panel.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent',100)))
     [void]$panel.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',45)))
     [void]$panel.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',40)))
+    $information=New-Object Windows.Forms.TextBox;$information.Dock='Fill';$information.Multiline=$true;$information.ReadOnly=$true;$information.ScrollBars='Vertical'
+    $information.Text='Archivio GLPI: '+$Result.Records.Count+' chiavi.'
+    if ($live) {
+        $information.Text=$Result.Name+' - '+$Result.Records.Count+' chiavi trovate.'+[Environment]::NewLine+(@($Result.Sources | ForEach-Object { $_.Name+': '+$_.State+' ('+$_.Count+' chiavi) '+$_.Error }) -join [Environment]::NewLine)
+        if ($Result.Records.Count -eq 0) { $information.Text+=[Environment]::NewLine+'Nessuna chiave recuperata. Verificare gli esiti delle fonti e, per i PC gia eliminati, consultare Leggi archivio.' }
+    }
     $table=New-Object Windows.Forms.DataGridView; $table.Dock='Fill'; $table.ReadOnly=$true; $table.AllowUserToAddRows=$false; $table.AllowUserToDeleteRows=$false; $table.RowHeadersVisible=$false
     $table.MultiSelect=$false; $table.SelectionMode='FullRowSelect'; $table.AllowUserToResizeRows=$false
     foreach ($column in @(@('Key ID',285),@('Seriale',150),@('Volume',150),@('Origine',270),@('Archiviata',175))) { $i=$table.Columns.Add($column[0],$column[0]); $table.Columns[$i].Width=$column[1] }
+    if ($live) { $table.Columns[4].HeaderText='Acquisita' }
     $secret=New-Object Windows.Forms.TextBox; $secret.Dock='Fill'; $secret.ReadOnly=$true; $secret.Font=New-Object Drawing.Font('Consolas',12)
-    foreach ($record in $Result.Records) { $i=$table.Rows.Add([object[]]@($record.KeyId,$record.Serial,$record.Volume,($record.Origins -join ', '),$record.ArchivedAtUtc)); $table.Rows[$i].Tag=$record }
+    foreach ($record in $Result.Records) { $i=$table.Rows.Add([object[]]@($record.KeyId,$record.Serial,$record.Volume,($record.Origins -join ', '),$(if ($live) { $record.CreatedAt } else { $record.ArchivedAtUtc }))); $table.Rows[$i].Tag=$record }
     $table.Tag=$secret
     $table.Add_SelectionChanged({param($sender,$eventArgs); $sender.Tag.Clear(); if ($sender.SelectedRows.Count -eq 1 -and $null -ne $sender.SelectedRows[0].Tag) { $sender.Tag.Text=$sender.SelectedRows[0].Tag.Password }})
     $buttons=New-Object Windows.Forms.FlowLayoutPanel; $buttons.Dock='Fill'
     $copy=New-Object Windows.Forms.Button; $copy.Text='Copia chiave'; $copy.Width=125; $copy.Tag=$secret
     $copy.Add_Click({param($sender,$eventArgs); if ($sender.Tag.Text) { try { [Windows.Forms.Clipboard]::SetText($sender.Tag.Text) } catch { [void][Windows.Forms.MessageBox]::Show('Appunti occupati. Riprovare.') } }})
     $close=New-Object Windows.Forms.Button; $close.Text='Chiudi'; $close.Width=100; $close.DialogResult='Cancel'
-    $buttons.Controls.AddRange(@($copy,$close)); $panel.Controls.Add($table,0,0); $panel.Controls.Add($secret,0,1); $panel.Controls.Add($buttons,0,2)
+    $buttons.Controls.AddRange(@($copy,$close)); $panel.Controls.Add($information,0,0); $panel.Controls.Add($table,0,1); $panel.Controls.Add($secret,0,2); $panel.Controls.Add($buttons,0,3)
     $dialog.Controls.Add($panel); $dialog.CancelButton=$close
     try {
         if ($table.Rows.Count) { $table.ClearSelection(); $table.Rows[0].Selected=$true }
@@ -131,6 +141,7 @@ function Update-ExplorerCounters {
     $deleteButton.Enabled = $conflicts -eq 0 -and $selected -gt 0 -and $complete -and -not $script:Busy -and -not $script:RemovalNeedsRefresh
     $archiveButton.Enabled=$deleteButton.Enabled
     $readArchiveButton.Enabled=$selected -eq 1 -and $complete -and -not $script:Busy
+    $findKeysButton.Enabled=-not $script:Busy -and ($selected -eq 1 -or $nameBox.Text.Trim().Length -ge $config.MinimumCharacters)
 }
 
 function Show-RemovalSources {
@@ -255,7 +266,7 @@ function Add-RemovalReportRow {
 }
 
 function Start-RemovalOperation {
-    param([ValidateSet('PrepareRemoval','Remove','PrepareArchive','Archive','ReadArchive')][string]$Operation, [string[]]$Names, [string[]]$Sources, [string]$PlanId, [switch]$IncludeAdChildren, [switch]$ConfirmGlpiMapping, [int]$ComputerId)
+    param([ValidateSet('PrepareRemoval','Remove','PrepareArchive','Archive','ReadArchive','ReadKeys')][string]$Operation, [string[]]$Names, [string[]]$Sources, [string]$PlanId, [switch]$IncludeAdChildren, [switch]$ConfirmGlpiMapping, [int]$ComputerId)
     try {
         $script:Operation = $Operation; $script:Stopping = $false
         $script:Queue = New-Object 'System.Collections.Concurrent.ConcurrentQueue[object]'
@@ -275,6 +286,10 @@ function Start-RemovalOperation {
                 if ($OperationName -eq 'PrepareArchive') { $arguments.ArchiveOnly=$true }
                 New-ExplorerRemovalPlan @arguments
             }
+            elseif ($OperationName -eq 'ReadKeys') {
+                Import-Module (Join-Path (Split-Path $ModulePath -Parent) 'BitLocker.Archive.psm1') -ErrorAction Stop
+                Find-ExplorerBitLockerKeys -Name $Names[0] -ConfigPath $ConfigFile -ProgressQueue $Queue
+            }
             elseif ($OperationName -eq 'ReadArchive') {
                 Import-Module (Join-Path (Split-Path $ModulePath -Parent) 'ComputerExplorer.Core.psm1') -ErrorAction Stop
                 Import-Module (Join-Path (Split-Path $ModulePath -Parent) 'BitLocker.Archive.psm1') -ErrorAction Stop
@@ -293,6 +308,7 @@ function Start-RemovalOperation {
         if ($Operation -eq 'Remove') { $script:StageMessage = 'Backup BitLocker, verifica e successiva eliminazione...' }
         elseif ($Operation -eq 'Archive') { $script:StageMessage='Archiviazione BitLocker su GLPI...' }
         elseif ($Operation -eq 'ReadArchive') { $script:StageMessage='Lettura archivio BitLocker da GLPI...' }
+        elseif ($Operation -eq 'ReadKeys') { $script:StageMessage='Ricerca chiavi BitLocker: prima Intune, poi AD...' }
         Set-SearchBusy $true
         $script:Invocation = $script:Pipeline.BeginInvoke(); $timer.Start()
     }
@@ -513,7 +529,8 @@ $searchButton = New-Object Windows.Forms.Button; $searchButton.Text = 'Cerca'; $
 $cancelButton = New-Object Windows.Forms.Button; $cancelButton.Text = 'Interrompi'; $cancelButton.Width = 95; $cancelButton.Enabled = $false
 $forceRefresh = New-Object Windows.Forms.CheckBox; $forceRefresh.Text = 'Rileggi cloud'; $forceRefresh.AutoSize = $true; $forceRefresh.Margin = New-Object Windows.Forms.Padding(15, 6, 4, 0)
 $tokensButton = New-Object Windows.Forms.Button; $tokensButton.Text = 'Token GLPI'; $tokensButton.Width = 100
-$toolbar.Controls.AddRange(@($nameLabel, $nameBox, $searchButton, $cancelButton, $forceRefresh, $tokensButton))
+$findKeysButton=New-Object Windows.Forms.Button;$findKeysButton.Text='Cerca chiavi';$findKeysButton.Width=110;$findKeysButton.Enabled=$false
+$toolbar.Controls.AddRange(@($nameLabel, $nameBox, $searchButton, $cancelButton, $forceRefresh, $tokensButton,$findKeysButton))
 $options = New-Object Windows.Forms.FlowLayoutPanel; $options.Dock = 'Fill'; $options.WrapContents = $false
 $sourceChecks = [ordered]@{}
 $glpiSettings = Get-UiSetting $config.Settings 'Glpi' $null
@@ -716,6 +733,19 @@ $searchButton.Add_Click({
         [void][Windows.Forms.MessageBox]::Show($form, $_.Exception.Message, 'Computer Explorer', 'OK', 'Error')
     }
 })
+$nameBox.Add_TextChanged({ if ($null -ne $script:Latest -or -not $script:Busy) { Update-ExplorerCounters } })
+$findKeysButton.Add_Click({
+    try {
+        if ($script:Busy) { return }
+        $selected=@($grid.SelectedRows | Where-Object { $null -ne $_.Tag })
+        if ($selected.Count -gt 1) { throw 'Selezionare un solo dispositivo per cercare le chiavi.' }
+        $exactName=$nameBox.Text.Trim()
+        if ($selected.Count -eq 1) { $exactName=[string]$selected[0].Tag.Name }
+        if ($exactName.Length -lt $config.MinimumCharacters) { throw 'Inserire il nome esatto del computer oppure selezionare una riga.' }
+        Start-RemovalOperation -Operation ReadKeys -Names @($exactName)
+    }
+    catch { [void][Windows.Forms.MessageBox]::Show($form,$_.Exception.Message,'Ricerca chiavi BitLocker','OK','Error') }
+})
 $tokensButton.Add_Click({
     try {
         $credentials = Read-GlpiCredentials ([bool](Get-UiSetting (Get-UiSetting (Read-ExplorerConfiguration $ConfigPath).Settings 'Glpi' $null) 'UseAppToken' $true))
@@ -837,6 +867,10 @@ $timer.Add_Tick({
                 $operation='Remove'; if ($finishedOperation -eq 'PrepareArchive') { $operation='Archive' }
                 Start-RemovalOperation -Operation $operation -PlanId $output[0].PlanId -IncludeAdChildren:$decision.IncludeAdChildren -ConfirmGlpiMapping:$decision.ConfirmGlpiMapping
             }
+        }
+        elseif ($finishedOperation -eq 'ReadKeys' -and -not $failed -and $output.Count -eq 1) {
+            $status.Text='Ricerca chiavi '+$output[0].Name+': '+$output[0].Records.Count+' chiavi. Esiti Intune/AD nella finestra.'
+            Show-ArchivedBitLockerKeys $output[0]
         }
         elseif ($finishedOperation -eq 'ReadArchive' -and -not $failed -and $output.Count -eq 1) {
             $status.Text='Archivio GLPI: '+$output[0].Records.Count+' chiavi.'
