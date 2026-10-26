@@ -11,10 +11,11 @@ try {
             $script:RemovalPlans.Clear()
             $script:Fixture = @{
                 Mode = ''; Context = 'tenant|account'; Writes = (New-Object 'System.Collections.Generic.List[object]')
+                Children = @(); ChildReads = (New-Object 'System.Collections.Generic.List[object]')
                 Reads = (New-Object 'System.Collections.Generic.List[object]'); CacheCleared = 0; Cancellation = $null
                 Ad = @(
-                    [pscustomobject]@{Name='PC-ONE';ObjectGUID=(New-TestId 11);DistinguishedName='CN=PC-ONE,OU=Lab,DC=example,DC=invalid'},
-                    [pscustomobject]@{Name='PC-TWO';ObjectGUID=(New-TestId 12);DistinguishedName='CN=PC-TWO,OU=Lab,DC=example,DC=invalid'}
+                    [pscustomobject]@{Name='PC-ONE';ObjectGUID=(New-TestId 11);DistinguishedName='CN=PC-ONE,OU=Lab,DC=example,DC=invalid';ObjectClass='computer';ProtectedFromAccidentalDeletion=$false},
+                    [pscustomobject]@{Name='PC-TWO';ObjectGUID=(New-TestId 12);DistinguishedName='CN=PC-TWO,OU=Lab,DC=example,DC=invalid';ObjectClass='computer';ProtectedFromAccidentalDeletion=$false}
                 )
                 Entra = @(
                     [pscustomobject]@{id=(New-TestId 21);displayName='PC-ONE';deviceId=(New-TestId 31)},
@@ -57,6 +58,56 @@ try {
             $name = $name.Replace('\2a','*').Replace('\28','(').Replace('\29',')').Replace('\00',[string][char]0).Replace('\5c','\')
             return @($script:Fixture.Ad | Where-Object { $_.Name -eq $name })
         }
+
+        function script:Set-TestAdChildren {
+            $dn=$script:Fixture.Ad[0].DistinguishedName
+            $script:Fixture.Children=@(
+                [pscustomobject]@{Name='Recovery';ObjectGUID=(New-TestId 61);DistinguishedName=('CN=Recovery,'+$dn);ObjectClass='msFVE-RecoveryInformation';ProtectedFromAccidentalDeletion=$false},
+                [pscustomobject]@{Name='Services';ObjectGUID=(New-TestId 62);DistinguishedName=('CN=Services,'+$dn);ObjectClass='container';ProtectedFromAccidentalDeletion=$false},
+                [pscustomobject]@{Name='Nested';ObjectGUID=(New-TestId 63);DistinguishedName=('CN=Nested,CN=Services,'+$dn);ObjectClass='serviceConnectionPoint';ProtectedFromAccidentalDeletion=$false}
+            )
+        }
+        function script:Get-ADObject {
+            [CmdletBinding()]
+            param([string]$Server,[string]$LDAPFilter,[string]$SearchBase,[string]$SearchScope,[guid]$Identity,[string[]]$Properties)
+            [void]$script:Fixture.ChildReads.Add([pscustomobject]@{Server=$Server;Base=$SearchBase;Scope=$SearchScope;Id=$Identity;Properties=$Properties})
+            if ($script:Fixture.Mode -eq 'ChildReadFailure') { throw 'Synthetic child enumeration failure.' }
+            if ($PSBoundParameters.ContainsKey('Identity')) {
+                $records=@($script:Fixture.Children | Where-Object { [guid]$_.ObjectGUID -eq $Identity })
+                if ($records.Count -eq 0 -or @($script:Fixture.Writes | Where-Object { $_.Source -eq 'AD (figlio)' -and $_.Id -eq $Identity.ToString() -and $_.Server -eq $Server }).Count -gt 0) {
+                    Write-Error -Message 'Synthetic AD child absent.' -ErrorId 'ADIdentityNotFoundException' -Category ObjectNotFound -ErrorAction Stop
+                }
+                $record=$records[0]
+                if ($script:Fixture.Mode -in @('MovedChildById','MovedChildOutsideSearch')) {
+                    return [pscustomobject]@{ObjectGUID=$record.ObjectGUID;DistinguishedName=('CN=Moved,'+$script:Fixture.Ad[1].DistinguishedName);ObjectClass=$record.ObjectClass;ProtectedFromAccidentalDeletion=$false}
+                }
+                if ($script:Fixture.Mode -eq 'ProtectedChildById') {
+                    return [pscustomobject]@{ObjectGUID=$record.ObjectGUID;DistinguishedName=$record.DistinguishedName;ObjectClass=$record.ObjectClass;ProtectedFromAccidentalDeletion=$true}
+                }
+                return $record
+            }
+            if ($LDAPFilter -ne '(objectClass=*)' -or $SearchScope -ne 'Subtree') { throw 'Unexpected child search scope/filter.' }
+            if ($Properties -contains '*' -or @($Properties | Where-Object { $_ -match 'password|recoveryguid|keypackage' }).Count) { throw 'Secret BitLocker attributes requested.' }
+            $parents=@($script:Fixture.Ad | Where-Object { $_.DistinguishedName -eq $SearchBase })
+            if ($parents.Count -ne 1) { throw 'Unexpected child search base.' }
+            $parents[0]
+            foreach ($record in $script:Fixture.Children) {
+                if ($script:Fixture.Mode -eq 'MovedChildOutsideSearch' -and [string]$record.ObjectGUID -eq (New-TestId 61)) { continue }
+                if (($record.DistinguishedName.EndsWith(','+$SearchBase,[StringComparison]::OrdinalIgnoreCase) -or $script:Fixture.Mode -eq 'ForeignChild') -and
+                    @($script:Fixture.Writes | Where-Object { $_.Source -eq 'AD (figlio)' -and $_.Id -eq [string]$record.ObjectGUID -and $_.Server -eq $Server }).Count -eq 0) { $record }
+            }
+        }
+        function script:Remove-ADObject {
+            [CmdletBinding(SupportsShouldProcess=$true)]
+            param([string]$Server,[guid]$Identity,[switch]$Recursive)
+            if ($Recursive) { throw 'Recursive removal is forbidden in this test.' }
+            if ($script:Fixture.Mode -eq 'LateNewChild' -and @($script:Fixture.Children | Where-Object { [string]$_.ObjectGUID -eq (New-TestId 64) }).Count -eq 0) {
+                $script:Fixture.Children += @([pscustomobject]@{ObjectGUID=(New-TestId 64);DistinguishedName=('CN=LateNew,'+$script:Fixture.Ad[0].DistinguishedName);ObjectClass='serviceConnectionPoint';ProtectedFromAccidentalDeletion=$false})
+            }
+            if ($script:Fixture.Mode -eq 'ChildWriteFailure') { throw 'Synthetic child removal failure.' }
+            [void]$script:Fixture.Writes.Add([pscustomobject]@{Source='AD (figlio)';Server=$Server;Id=$Identity.ToString();Name='PC-ONE'})
+        }
+
         function script:Get-ExplorerGraphCollection {
             param([string]$Uri, [string]$ResourcePath)
             [void]$script:Fixture.Reads.Add([pscustomobject]@{Source='Graph';Uri=$Uri})
@@ -87,7 +138,10 @@ try {
         function script:Remove-ADComputer {
             [CmdletBinding(SupportsShouldProcess=$true)]
             param([string]$Server, [guid]$Identity)
-            [void]$script:Fixture.Writes.Add([pscustomobject]@{Source='AD';Id=$Identity.ToString();Name=@($script:Fixture.Ad | Where-Object { [guid]$_.ObjectGUID -eq $Identity })[0].Name})
+            $parent=@($script:Fixture.Ad | Where-Object { [guid]$_.ObjectGUID -eq $Identity })[0]
+            $remaining=@($script:Fixture.Children | Where-Object { $_.DistinguishedName.EndsWith(','+$parent.DistinguishedName,[StringComparison]::OrdinalIgnoreCase) -and @($script:Fixture.Writes | Where-Object Source -eq 'AD (figlio)' | Where-Object Server -eq $Server | Select-Object -ExpandProperty Id) -notcontains [string]$_.ObjectGUID })
+            if ($remaining.Count -gt 0) { throw 'Synthetic leaf-only parent removal refused remaining children.' }
+            [void]$script:Fixture.Writes.Add([pscustomobject]@{Source='AD';Server=$Server;Id=$Identity.ToString();Name=@($script:Fixture.Ad | Where-Object { [guid]$_.ObjectGUID -eq $Identity })[0].Name})
             if ($script:Fixture.Mode -eq 'AdWriteFailure' -and $Server -like 'dc2.*') { throw 'Synthetic AD delete failure.' }
         }
 
@@ -218,6 +272,96 @@ try {
             $result=Invoke-ExplorerRemovalPlan -PlanId $plan.PlanId -Confirm:$false
             if ($result.Deleted -ne 8 -or @($script:Fixture.Writes | Where-Object { $_.Id -eq (New-TestId 999) }).Count -gt 0) { throw 'External preview mutation retargeted deletion.' }
             'PASS: preview DTO mutation cannot alter cached target IDs.'
+
+
+            # Use one DC for subtree scenarios so duplicate replicas cannot hide wrong counts.
+            @{DomainControllers=@('dc1.example.invalid');Search=@{MinimumCharacters=2}} | ConvertTo-Json -Depth 4 | Set-Content $configPath -Encoding UTF8
+
+            Reset-Fixture; Set-TestAdChildren
+            $plan=New-ExplorerRemovalPlan -Names PC-ONE -Sources AD,Entra,Intune -ConfigPath $configPath
+            $ad=@($plan.Entries[0].Targets | Where-Object Source -eq 'AD')[0]
+            if ($ad.AdChildren.Count -ne 3 -or $script:Fixture.Writes.Count -ne 0 -or @($ad.AdChildren | Where-Object ObjectClass -eq 'msFVE-RecoveryInformation').Count -ne 1) { throw 'AD child preview is incomplete or destructive.' }
+            $result=Invoke-ExplorerRemovalPlan -PlanId $plan.PlanId -Confirm:$false
+            if ($script:Fixture.Writes.Count -ne 0 -or $result.Failed -ne 1) { throw 'Missing explicit child consent permitted writes.' }
+            'PASS: subtree preview lists child GUID/class/DN without reading BitLocker secrets; missing consent blocks all origins before writes.'
+
+            Reset-Fixture; Set-TestAdChildren
+            $plan=New-ExplorerRemovalPlan -Names PC-ONE -Sources AD,Entra,Intune -ConfigPath $configPath
+            $result=Invoke-ExplorerRemovalPlan -PlanId $plan.PlanId -IncludeAdChildren -Confirm:$false
+            $childWrites=@($script:Fixture.Writes | Where-Object Source -eq 'AD (figlio)')
+            if ($result.Failed -ne 0 -or $result.Deleted -ne 7 -or $childWrites.Count -ne 3 -or
+                ($script:Fixture.Writes.Source -join ',') -ne 'Intune,AD (figlio),AD (figlio),AD (figlio),AD,Entra,Entra' -or
+                $childWrites[0].Id -ne (New-TestId 63) -or @($result.Results | Where-Object Source -eq 'AD (figlio)').Count -ne 3) { throw 'AD children were not removed before their parents with per-child reporting.' }
+            'PASS: explicit child consent deletes only confirmed GUIDs, deepest children before parents, with separate result rows and no recursive command.'
+
+            foreach ($kind in @('Parent','Child')) {
+                Reset-Fixture; Set-TestAdChildren
+                if ($kind -eq 'Parent') { $script:Fixture.Ad[0].ProtectedFromAccidentalDeletion=$true }
+                else { $script:Fixture.Children[0].ProtectedFromAccidentalDeletion=$true }
+                $plan=New-ExplorerRemovalPlan -Names PC-ONE -Sources AD,Entra,Intune -ConfigPath $configPath
+                $result=Invoke-ExplorerRemovalPlan -PlanId $plan.PlanId -IncludeAdChildren -Confirm:$false
+                if ($script:Fixture.Writes.Count -ne 0 -or $result.Failed -ne 1 -or $plan.Entries[0].Error -notlike '*protetto*') { throw ('Accidental deletion protection bypassed: '+$kind) }
+            }
+            'PASS: protected computers and protected descendants block every selected origin and their protection is never changed.'
+
+            Reset-Fixture; Set-TestAdChildren
+            $plan=New-ExplorerRemovalPlan -Names PC-ONE -Sources AD,Entra,Intune -ConfigPath $configPath
+            $script:Fixture.Children += @([pscustomobject]@{ObjectGUID=(New-TestId 64);DistinguishedName=('CN=New,'+$script:Fixture.Ad[0].DistinguishedName);ObjectClass='serviceConnectionPoint';ProtectedFromAccidentalDeletion=$false})
+            $result=Invoke-ExplorerRemovalPlan -PlanId $plan.PlanId -IncludeAdChildren -Confirm:$false
+            if ($script:Fixture.Writes.Count -ne 0 -or $result.Failed -ne 1) { throw 'New unconfirmed AD child was deleted.' }
+            'PASS: a newly appearing child invalidates the computer before any Intune/AD/Entra writes.'
+
+            foreach ($mode in @('MovedChildById','MovedChildOutsideSearch','ProtectedChildById','ChildReadFailure')) {
+                Reset-Fixture; Set-TestAdChildren
+                $plan=New-ExplorerRemovalPlan -Names PC-ONE -Sources AD,Entra,Intune -ConfigPath $configPath
+                $script:Fixture.Mode=$mode
+                $result=Invoke-ExplorerRemovalPlan -PlanId $plan.PlanId -IncludeAdChildren -Confirm:$false
+                if ($script:Fixture.Writes.Count -ne 0 -or $result.Failed -ne 1) { throw ('Unsafe child change permitted writes: '+$mode) }
+            }
+            'PASS: moved child GUIDs, new protection and incomplete enumeration block all origins before the first write.'
+
+            Reset-Fixture; Set-TestAdChildren
+            $plan=New-ExplorerRemovalPlan -Names PC-ONE -Sources AD,Entra,Intune -ConfigPath $configPath
+            $script:Fixture.Children=@($script:Fixture.Children | Where-Object { [string]$_.ObjectGUID -ne (New-TestId 61) })
+            $result=Invoke-ExplorerRemovalPlan -PlanId $plan.PlanId -IncludeAdChildren -Confirm:$false
+            if ($result.Failed -ne 0 -or $result.Deleted -ne 6 -or @($result.Results | Where-Object { $_.Id -eq (New-TestId 61) -and $_.State -eq 'Già assente' }).Count -ne 1) { throw 'Already-absent child blocked valid deletion or was counted as removed.' }
+            'PASS: a child already removed by another operation is reported absent without retargeting.'
+
+            Reset-Fixture; Set-TestAdChildren
+            $plan=New-ExplorerRemovalPlan -Names PC-ONE -Sources AD,Entra,Intune -ConfigPath $configPath
+            $script:Fixture.Mode='ChildWriteFailure'
+            $result=Invoke-ExplorerRemovalPlan -PlanId $plan.PlanId -IncludeAdChildren -Confirm:$false
+            if ($script:Fixture.Writes.Count -ne 1 -or $script:Fixture.Writes[0].Source -ne 'Intune' -or $result.Failed -lt 1 -or @($result.Results | Where-Object { $_.Source -eq 'AD (figlio)' -and $_.State -eq 'Errore' }).Count -ne 1) { throw 'Child failure did not preserve parent and later Entra origins.' }
+            'PASS: failed child removal is reported separately and prevents removal of its computer and subsequent Entra objects.'
+
+
+            Reset-Fixture; Set-TestAdChildren
+            $plan=New-ExplorerRemovalPlan -Names PC-ONE -Sources AD,Entra,Intune -ConfigPath $configPath
+            $script:Fixture.Mode='LateNewChild'
+            $result=Invoke-ExplorerRemovalPlan -PlanId $plan.PlanId -IncludeAdChildren -Confirm:$false
+            if (@($script:Fixture.Writes | Where-Object { $_.Id -eq (New-TestId 64) -or $_.Source -in @('AD','Entra') }).Count -gt 0 -or
+                @($script:Fixture.Writes | Where-Object Source -eq 'AD (figlio)').Count -ne 3 -or $result.Failed -ne 1) { throw 'Late unconfirmed child was removed by a recursive operation or parent/later sources were deleted.' }
+            'PASS: a child appearing after the final snapshot is preserved; leaf-only computer deletion fails and later sources stop, with prior child results retained.'
+
+            Reset-Fixture; Set-TestAdChildren
+            $plan=New-ExplorerRemovalPlan -Names PC-ONE -Sources AD -ConfigPath $configPath
+            $plan.Entries[0].Targets[0].AdChildren[0].Id=New-TestId 999
+            $plan.Entries[0].Targets[0].AdChildren[0].DistinguishedName='CN=Other,OU=Foreign,DC=example,DC=invalid'
+            $result=Invoke-ExplorerRemovalPlan -PlanId $plan.PlanId -IncludeAdChildren -Confirm:$false
+            if ($result.Failed -ne 0 -or $result.Deleted -ne 4 -or @($script:Fixture.Writes | Where-Object { $_.Id -eq (New-TestId 999) }).Count -gt 0) { throw 'Preview mutation retargeted AD child deletion.' }
+            'PASS: modifying child preview data cannot alter the internal confirmed GUIDs or paths.'
+
+            Reset-Fixture; Set-TestAdChildren
+            $script:Fixture.Mode='ForeignChild'; $script:Fixture.Children[0].DistinguishedName='CN=Foreign,OU=Other,DC=example,DC=invalid'
+            $plan=New-ExplorerRemovalPlan -Names PC-ONE -Sources AD -ConfigPath $configPath
+            if ($plan.Entries[0].Error -notlike '*esterno*' -or $script:Fixture.Writes.Count -ne 0) { throw 'AD enumeration escaped the confirmed computer subtree.' }
+            'PASS: an AD response outside the computer DN is rejected.'
+
+            Reset-Fixture; Set-TestAdChildren
+            $plan=New-ExplorerRemovalPlan -Names PC-ONE -Sources AD,Entra,Intune -ConfigPath $configPath
+            $result=Invoke-ExplorerRemovalPlan -PlanId $plan.PlanId -IncludeAdChildren -WhatIf
+            if ($script:Fixture.Writes.Count -ne 0 -or $script:Fixture.CacheCleared -ne 0 -or $result.Failed -ne 0) { throw 'WhatIf deleted AD children or cleared caches.' }
+            'PASS: WhatIf with explicit child consent remains read-only.'
 
             Reset-Fixture
             $plan=New-ExplorerRemovalPlan -Names 'PC*(ONE)' -Sources AD -ConfigPath $configPath

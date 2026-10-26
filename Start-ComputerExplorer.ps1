@@ -139,12 +139,15 @@ function Show-RemovalPreview {
     $dialog.Text = 'Conferma eliminazione - oggetti verificati'; $dialog.Size = New-Object Drawing.Size(1000, 680)
     $dialog.MinimumSize = New-Object Drawing.Size(750, 450); $dialog.StartPosition = 'CenterParent'
     $panel = New-Object Windows.Forms.TableLayoutPanel
-    $panel.Dock = 'Fill'; $panel.ColumnCount = 1; $panel.RowCount = 3; $panel.Padding = New-Object Windows.Forms.Padding(10)
+    $panel.Dock = 'Fill'; $panel.ColumnCount = 1; $panel.RowCount = 4; $panel.Padding = New-Object Windows.Forms.Padding(10)
     [void]$panel.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 65)))
     [void]$panel.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent', 100)))
+    [void]$panel.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 60)))
     [void]$panel.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 45)))
     $intro = New-Object Windows.Forms.Label; $intro.Dock = 'Fill'
     $ready = @($Plan.Entries | Where-Object { [string]::IsNullOrWhiteSpace($_.Error) -and $_.Targets.Count -gt 0 }).Count
+    $hasAdChildren = @($Plan.Entries | Where-Object { [string]::IsNullOrWhiteSpace($_.Error) } | ForEach-Object { $_.Targets } | Where-Object { $_.Source -eq 'AD' -and $_.AdChildren.Count -gt 0 }).Count -gt 0
+    if (-not $hasAdChildren) { $panel.RowStyles[2].Height = 0 }
     $intro.Text = 'Origini: {0}. Computer con oggetti pronti: {1}/{2}. Ordine: Intune, AD, Entra.' -f ($Plan.Sources -join ', '), $ready, $Plan.Entries.Count
     if ($Plan.Sources -contains 'Intune') { $intro.Text += [Environment]::NewLine + 'Intune: eliminare una registrazione Windows avvia anche il ritiro dalla gestione.' }
     $intro.Text += [Environment]::NewLine + 'Saranno rimossi solo gli ID elencati. I computer bloccati non verranno modificati.'
@@ -157,7 +160,15 @@ function Show-RemovalPreview {
         elseif ($entry.Targets.Count -eq 0) { [void]$lines.Add('  Nessun oggetto presente nelle origini selezionate.') }
         foreach ($target in $entry.Targets) {
             [void]$lines.Add('  ' + $target.Source + ' | ' + $target.DomainController + ' | ID: ' + $target.Id)
-            if ($target.Source -eq 'AD') { [void]$lines.Add('    ' + $target.DistinguishedName) }
+            if ($target.Source -eq 'AD') {
+                [void]$lines.Add('    ' + $target.DistinguishedName)
+                foreach ($child in $target.AdChildren) {
+                    $label = $child.ObjectClass
+                    if ($child.ObjectClass -eq 'msFVE-RecoveryInformation') { $label += ' | Recupero BitLocker: queste informazioni verranno eliminate da AD' }
+                    [void]$lines.Add('    FIGLIO AD | ' + $label + ' | ID: ' + $child.Id)
+                    [void]$lines.Add('      ' + $child.DistinguishedName)
+                }
+            }
             elseif ($target.Source -eq 'Intune') { [void]$lines.Add('    Windows | Seriale: ' + $target.SerialNumber + ' | DeviceId Entra: ' + $target.LinkId) }
             else { [void]$lines.Add('    DeviceId: ' + $target.LinkId) }
         }
@@ -166,11 +177,18 @@ function Show-RemovalPreview {
     $preview.Text = $lines -join [Environment]::NewLine
     $buttons = New-Object Windows.Forms.FlowLayoutPanel; $buttons.Dock = 'Fill'; $buttons.FlowDirection = 'RightToLeft'
     $cancel = New-Object Windows.Forms.Button; $cancel.Text = 'Annulla'; $cancel.Width = 100; $cancel.DialogResult = 'Cancel'
-    $confirm = New-Object Windows.Forms.Button; $confirm.Text = 'Elimina definitivamente'; $confirm.Width = 185; $confirm.DialogResult = 'OK'; $confirm.Enabled = $ready -gt 0
+    $confirm = New-Object Windows.Forms.Button; $confirm.Name = 'ConfirmRemoval'; $confirm.Text = 'Elimina definitivamente'; $confirm.Width = 185; $confirm.DialogResult = 'OK'; $confirm.Enabled = $ready -gt 0 -and -not $hasAdChildren
+    $childConsent = New-Object Windows.Forms.CheckBox; $childConsent.Name = 'AdChildrenConsent'; $childConsent.Dock = 'Fill'; $childConsent.Visible = $hasAdChildren
+    $childConsent.Text = 'Autorizzo anche l''eliminazione degli oggetti figli AD elencati. Le eventuali informazioni di recupero BitLocker salvate in AD verranno eliminate.'
+    $childConsent.Tag = [pscustomobject]@{ Button = $confirm; Ready = ($ready -gt 0) }
+    $childConsent.Add_CheckedChanged({ param($sender, $eventArgs); $sender.Tag.Button.Enabled = $sender.Tag.Ready -and $sender.Checked })
     $buttons.Controls.AddRange(@($cancel, $confirm))
-    $panel.Controls.Add($intro, 0, 0); $panel.Controls.Add($preview, 0, 1); $panel.Controls.Add($buttons, 0, 2)
+    $panel.Controls.Add($intro, 0, 0); $panel.Controls.Add($preview, 0, 1); $panel.Controls.Add($childConsent, 0, 2); $panel.Controls.Add($buttons, 0, 3)
     $dialog.Controls.Add($panel); $dialog.AcceptButton = $cancel; $dialog.CancelButton = $cancel
-    try { return $dialog.ShowDialog($form) -eq 'OK' }
+    try {
+        if ($dialog.ShowDialog($form) -eq 'OK') { return [pscustomobject]@{ IncludeAdChildren = ($hasAdChildren -and $childConsent.Checked) } }
+        return $null
+    }
     finally { $dialog.Dispose() }
 }
 
@@ -180,7 +198,7 @@ function Add-RemovalReportRow {
 }
 
 function Start-RemovalOperation {
-    param([ValidateSet('PrepareRemoval', 'Remove')][string]$Operation, [string[]]$Names, [string[]]$Sources, [string]$PlanId)
+    param([ValidateSet('PrepareRemoval', 'Remove')][string]$Operation, [string[]]$Names, [string[]]$Sources, [string]$PlanId, [switch]$IncludeAdChildren)
     try {
         $script:Operation = $Operation; $script:Stopping = $false
         $script:Queue = New-Object 'System.Collections.Concurrent.ConcurrentQueue[object]'
@@ -191,15 +209,15 @@ function Start-RemovalOperation {
             $removalGrid.Rows.Clear(); $tabs.SelectedTab = $removalTab
         }
         $workerCode = {
-            param($ModulePath, $OperationName, $Names, $Sources, $ConfigFile, $PlanId, $Queue, $Cancellation)
+            param($ModulePath, $OperationName, $Names, $Sources, $ConfigFile, $PlanId, $Queue, $Cancellation, $IncludeAdChildren)
             $ErrorActionPreference = 'Stop'
             Import-Module $ModulePath -ErrorAction Stop
             if ($OperationName -eq 'PrepareRemoval') {
                 New-ExplorerRemovalPlan -Names $Names -Sources $Sources -ConfigPath $ConfigFile -ProgressQueue $Queue
             }
-            else { Invoke-ExplorerRemovalPlan -PlanId $PlanId -ProgressQueue $Queue -Cancellation $Cancellation -Confirm:$false }
+            else { Invoke-ExplorerRemovalPlan -PlanId $PlanId -ProgressQueue $Queue -Cancellation $Cancellation -IncludeAdChildren:$IncludeAdChildren -Confirm:$false }
         }
-        [void]$script:Pipeline.AddScript($workerCode.ToString()).AddArgument((Join-Path $PSScriptRoot 'ComputerExplorer.Removal.psm1')).AddArgument($Operation).AddArgument($Names).AddArgument($Sources).AddArgument($ConfigPath).AddArgument($PlanId).AddArgument($script:Queue).AddArgument($script:RemovalCancellation)
+        [void]$script:Pipeline.AddScript($workerCode.ToString()).AddArgument((Join-Path $PSScriptRoot 'ComputerExplorer.Removal.psm1')).AddArgument($Operation).AddArgument($Names).AddArgument($Sources).AddArgument($ConfigPath).AddArgument($PlanId).AddArgument($script:Queue).AddArgument($script:RemovalCancellation).AddArgument([bool]$IncludeAdChildren)
         $script:StartedAt = [datetime]::Now; $script:StageMessage = 'Verifica degli oggetti selezionati...'
         if ($Operation -eq 'Remove') { $script:StageMessage = 'Eliminazione degli oggetti confermati...' }
         Set-SearchBusy $true
@@ -716,7 +734,8 @@ $timer.Add_Tick({
         }
         if ($script:CloseRequested) { $form.Close(); return }
         if (-not $failed -and $finishedOperation -eq 'PrepareRemoval' -and $output.Count -eq 1) {
-            if (Show-RemovalPreview $output[0]) { Start-RemovalOperation -Operation 'Remove' -PlanId $output[0].PlanId }
+            $decision = Show-RemovalPreview $output[0]
+            if ($null -ne $decision) { Start-RemovalOperation -Operation 'Remove' -PlanId $output[0].PlanId -IncludeAdChildren:$decision.IncludeAdChildren }
         }
         elseif ($finishedOperation -eq 'Remove') {
             $tabs.SelectedTab = $removalTab

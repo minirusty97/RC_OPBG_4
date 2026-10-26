@@ -259,3 +259,11 @@ I file vengono preparati in `%LOCALAPPDATA%\AssistenteIT\Updates`. L’installaz
 ### Primo accesso Graph dalla finestra
 
 Dalla versione 1.0.10 Connect-ExplorerGraph usa il login interattivo Microsoft/WAM del vecchio script e la cache protetta `CurrentUser` del modulo Microsoft. La suite fornisce una finestra Windows valida al broker, anche se viene avviata senza console. La finestra di attesa compare prima della chiamata; se Microsoft usa il codice dispositivo, le istruzioni restano visibili e copiabili, anche se arrivano dalla console nascosta. Annullare la finestra interrompe la ricerca. Le sessioni valide e gli ambiti esistenti vengono riutilizzati. Il programma non concede consensi né modifica i criteri del tenant.
+
+### Computer AD con oggetti figli
+
+Un computer AD può contenere informazioni di recupero BitLocker (`msFVE-RecoveryInformation`) o altri oggetti figli. L’anteprima di eliminazione elenca classe, GUID e percorso di ogni figlio sui DC selezionati, senza leggere password o chiavi di recupero. Quando sono presenti figli, occorre spuntare la conferma dedicata prima di **Elimina definitivamente**: anche le informazioni di recupero BitLocker elencate verranno eliminate da AD.
+
+Il modulo richiede `-IncludeAdChildren` per applicare un piano con figli. La conferma vale solo per gli ID nell’anteprima. Prima della prima scrittura rilegge computer, discendenti e singoli GUID; oggetti nuovi o spostati, protezioni dall’eliminazione accidentale ed errori di lettura bloccano quel computer. I figli già assenti sono tollerati. Le stesse verifiche vengono ripetute durante l’esecuzione: rimane possibile un cambiamento concorrente dopo un controllo, che può lasciare un’operazione parziale, riportata negli esiti.
+
+La rimozione elimina per GUID solo i figli confermati, dai più profondi ai genitori, quindi usa `Remove-ADComputer` sul computer. Non usa `Remove-ADObject -Recursive` e non modifica le protezioni dall’eliminazione accidentale. Ogni figlio ha una riga negli esiti; un errore blocca il computer e le origini successive. Nessuna eliminazione viene eseguita sui dispositivi aziendali durante i test: i casi AD sono simulati.
