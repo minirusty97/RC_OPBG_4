@@ -98,6 +98,7 @@ try {
         Copy-Item -LiteralPath (Join-Path $InstallRoot 'AssistenteIT/AssistenteIT.Core.psm1') -Destination (Join-Path $fixture 'AssistenteIT/AssistenteIT.Core.psm1')
         Copy-Item -LiteralPath (Join-Path $InstallRoot 'AssistenteIT/Invoke-Module.ps1') -Destination (Join-Path $fixture 'AssistenteIT/Invoke-Module.ps1')
         Copy-Item -LiteralPath (Join-Path $InstallRoot 'Glpi.Credentials.ps1') -Destination (Join-Path $fixture 'Glpi.Credentials.ps1')
+        Copy-Item -LiteralPath (Join-Path $InstallRoot 'Graph.Authentication.ps1') -Destination (Join-Path $fixture 'Graph.Authentication.ps1')
         Copy-Item -LiteralPath (Join-Path $InstallRoot 'AssistenteIT/LegacyMigration.ps1') -Destination (Join-Path $fixture 'AssistenteIT/LegacyMigration.ps1')
         'param($ConfigPath,$EnvPath); [pscustomobject]@{ConfigPath=$ConfigPath;EnvPath=$EnvPath}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $PSScriptRoot "result.json") -Encoding UTF8' | Set-Content -LiteralPath (Join-Path $fixture 'valid.ps1') -Encoding UTF8
         [pscustomobject]@{SchemaVersion=1;Product='Fixture';Version='1.0.0';Modules=@([pscustomobject]@{Id='test-module';EntryPoint='valid.ps1';UsesAppSettings=$true})} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $fixture 'assistente-it.json') -Encoding UTF8
