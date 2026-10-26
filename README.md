@@ -283,3 +283,13 @@ L'abbinamento richiede una sola scheda GLPI attiva con il nome esatto e un seria
 Prima della prima scrittura vengono ricontrollati identita, scheda GLPI e chiavi. Prima di ogni eliminazione viene ricontrollato che le chiavi dell'origine siano coperte dal backup verificato. Le API non offrono una transazione distribuita: cambiamenti concorrenti dopo l'ultima lettura possono causare un'operazione parziale, riportata negli esiti.
 
 I test usano AD, Graph e GLPI simulati e la GUI reale su Windows. Non vengono lette chiavi aziendali nei test. La prima prova su GLPI reale va fatta tramite **Archivia BitLocker**, controllando la nuova nota e l'integrita di quelle precedenti, prima di usare l'eliminazione.
+
+### Attese cloud e nomi assenti (1.0.14)
+
+Una ricerca senza corrispondenze termina con zero risultati e il messaggio **Nessun dispositivo trovato** quando tutte le fonti selezionate hanno risposto correttamente. Il nome non viene cercato nel cestino Entra: la ricerca riguarda le registrazioni attive.
+
+Il footer Entra/Intune mostra la pagina in lettura e il numero di record gia letti. `Search.CloudReadTimeoutSeconds` limita ogni lettore cloud a **90 secondi** per impostazione predefinita; accetta 1–600 e viene applicato anche ai JSON locali che non contengono ancora la voce. Il conteggio parte dopo l'autenticazione Graph, all'avvio del lettore. Il limite riguarda la ricerca nella finestra, non la preparazione o l'esecuzione delle eliminazioni.
+
+Al limite il coordinatore richiede l'arresto del lettore, ne attende la chiusura e conclude la fonte con un errore esplicito. La fonte resta non verificabile, senza essere interpretata come dispositivo assente; i risultati delle altre fonti restano disponibili. La relativa cache viene invalidata e una nuova ricerca puo essere eseguita con **Rileggi cloud**. Nessun inventario parziale viene pubblicato come completo.
+
+L'inventario completo e il filtro locale sul frammento restano necessari per mantenere le corrispondenze in mezzo al nome. Lo screenshot con Entra in attesa non consente da solo di distinguere una pagina lenta, un retry Graph o un problema di rete: avanzamento e timeout rendono il caso riconoscibile senza lasciare un'attesa senza limite.

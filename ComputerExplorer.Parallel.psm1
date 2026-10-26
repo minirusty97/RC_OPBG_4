@@ -19,6 +19,7 @@ function Get-ExplorerReadWorkerScript {
         $arguments = @{ Source=$Job.Kind; NameFragment=$Fragment; ConfigPath=$ConfigPath; Configuration=$Configuration; CloudCache=$Cache
             GlpiUserToken=$UserToken; GlpiAppToken=$AppToken; ForceCloudRefresh=$Refresh }
         if ($Job.Kind -eq 'AD') { $arguments.DomainController=$Job.DomainController }
+        if ($Job.Kind -in @('Entra','Intune')) { $arguments.ProgressQueue=$Job.ReadProgress }
         Read-ExplorerSource @arguments
     }
 }
@@ -30,7 +31,7 @@ function Start-ExplorerReadTask {
         $pipeline.RunspacePool = $Pool
         [void]$pipeline.AddScript($Body.ToString()).AddArgument($Job).AddArgument((Join-Path $PSScriptRoot 'ComputerExplorer.Core.psm1')).AddArgument($ConfigPath).AddArgument($Fragment).AddArgument($Configuration).AddArgument($Cache).AddArgument($UserToken).AddArgument($AppToken).AddArgument($Refresh)
         $operation = $pipeline.BeginInvoke()
-        return [pscustomobject]@{ Job=$Job; Pipeline=$pipeline; Operation=$operation; StopOperation=$null }
+        return [pscustomobject]@{ Job=$Job; Pipeline=$pipeline; Operation=$operation; StopOperation=$null; Watch=[Diagnostics.Stopwatch]::StartNew(); TimedOut=$false }
     }
     catch { $pipeline.Dispose(); throw }
 }
@@ -39,13 +40,13 @@ function Stop-ExplorerReadTasks {
     param($Tasks)
     # Invia tutti gli stop prima di attenderli: nessun lettore resta in background.
     foreach ($task in $Tasks) {
-        if (-not $task.Operation.IsCompleted) {
+        if (-not $task.Operation.IsCompleted -and $null -eq $task.StopOperation) {
             try { $task.StopOperation=$task.Pipeline.BeginStop($null, $null) } catch { }
         }
     }
     foreach ($task in $Tasks) {
         try { if ($null -ne $task.StopOperation) { $task.Pipeline.EndStop($task.StopOperation) } } catch { }
-        $task.Pipeline.Dispose()
+        $task.Watch.Stop(); $task.Pipeline.Dispose()
     }
 }
 
@@ -60,6 +61,9 @@ function Send-ParallelSnapshot {
                 Progress=$(if ($null -ne $_.PSObject.Properties['Progress']) { $_.Progress } else { '' })
                 CurrentTarget=$(if ($null -ne $_.PSObject.Properties['CurrentTarget']) { $_.CurrentTarget } else { '' }) }
         })
+    }
+    if ($Complete -and $snapshot.Rows.Count -eq 0 -and @($snapshot.Sources | Where-Object { $_.State -eq 'Errore' }).Count -eq 0) {
+        $snapshot.Message+=' Nessun dispositivo trovato.'
     }
     if ($null -ne $Queue) { $Queue.Enqueue($snapshot) }
     if ($Complete) { return $snapshot }
@@ -106,6 +110,7 @@ function Invoke-ComputerExplorerParallelSearch {
     $adPool=[RunspaceFactory]::CreateRunspacePool(1,1)
     $adPool.ApartmentState='STA'; $adPool.ThreadOptions='ReuseThread'
     $tasks=New-Object 'System.Collections.Generic.List[object]'
+    $readProgress=New-Object 'System.Collections.Concurrent.ConcurrentQueue[object]'
     $cache=Get-ExplorerCloudCache
     $body=Get-ExplorerReadWorkerScript
     $adCompleted=0
@@ -124,9 +129,20 @@ function Invoke-ComputerExplorerParallelSearch {
         while ($tasks.Count -gt 0) {
             $updated=$false
             foreach ($task in @($tasks.ToArray())) {
-                if (-not $task.Operation.IsCompleted) { continue }
                 $job=$task.Job
+                if (-not $task.Operation.IsCompleted) {
+                    if ($job.Kind -in @('Entra','Intune') -and -not $task.TimedOut -and
+                        $task.Watch.Elapsed.TotalSeconds -ge $config.CloudReadTimeoutSeconds) {
+                        $task.TimedOut=$true
+                        $sources[$job.Kind].Progress='Interruzione per timeout'
+                        try { $task.StopOperation=$task.Pipeline.BeginStop($null,$null) }
+                        catch { if (-not $task.Operation.IsCompleted) { throw } }
+                        $updated=$true
+                    }
+                    continue
+                }
                 try {
+                    if ($null -ne $task.StopOperation) { $task.Pipeline.EndStop($task.StopOperation) }
                     $output=@($task.Pipeline.EndInvoke($task.Operation))
                     if ($task.Pipeline.Streams.Error.Count -gt 0) { throw $task.Pipeline.Streams.Error[0] }
                     foreach ($warning in $task.Pipeline.Streams.Warning) { Write-Warning $warning.Message }
@@ -140,10 +156,16 @@ function Invoke-ComputerExplorerParallelSearch {
                     $result=$output[0]
                 }
                 catch { $result=New-ParallelSource $job.Kind 'Errore' $_.Exception.Message }
-                finally { $task.Pipeline.Dispose(); [void]$tasks.Remove($task) }
+                finally { $task.Watch.Stop(); $task.Pipeline.Dispose(); [void]$tasks.Remove($task) }
+                if ($task.TimedOut) {
+                    $result=New-ParallelSource $job.Kind 'Errore' ('Tempo massimo di lettura {0} superato ({1} s). Fonte non verificabile; ripetere con Rileggi cloud.' -f $job.Kind,$config.CloudReadTimeoutSeconds)
+                    foreach ($key in @($cache.Keys)) {
+                        if ([string]$key -like ('*|'+$job.Kind)) { $cache.Remove($key) }
+                    }
+                }
                 if ($job.Kind -eq 'GraphAuth') {
                     if ($result.State -eq 'OK') {
-                        foreach ($name in $cloud) { $sources[$name].Progress='Lettura'; [void]$tasks.Add((Start-ExplorerReadTask -Job ([pscustomobject]@{Kind=$name}) @arguments)) }
+                        foreach ($name in $cloud) { $sources[$name].Progress='Lettura'; [void]$tasks.Add((Start-ExplorerReadTask -Job ([pscustomobject]@{Kind=$name;ReadProgress=$readProgress}) @arguments)) }
                     }
                     else {
                         foreach ($name in $cloud) { $sources[$name]=New-ParallelSource $name 'Errore' $result.Error }
@@ -171,6 +193,13 @@ function Invoke-ComputerExplorerParallelSearch {
                 }
                 else { $sources[$job.Kind]=$result }
                 $updated=$true
+            }
+            $notice=$null
+            while ($readProgress.TryDequeue([ref]$notice)) {
+                if ($sources.Contains($notice.Source) -and $sources[$notice.Source].State -eq 'In attesa' -and
+                    $sources[$notice.Source].Progress -ne 'Interruzione per timeout') {
+                    $sources[$notice.Source].Progress=$notice.Progress; $updated=$true
+                }
             }
             if ($updated) {
                 $pending=@($sources.Values | Where-Object { $_.State -eq 'In attesa' } | ForEach-Object { $_.Name })

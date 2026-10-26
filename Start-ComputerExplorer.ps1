@@ -425,6 +425,7 @@ function Update-ExplorerSourceStatus {
         }
         $progress=[string](Get-UiSetting $source 'Progress' '')
         if ($source.Name -eq 'AD' -and $progress) { $text+=' ('+$progress+')' }
+        if ($source.Name -in @('Entra','Intune') -and $source.State -eq 'In attesa' -and $progress -and $progress -ne 'Accesso Graph') { $text=$progress }
         $label.Text=$name+': '+$text; $label.ForeColor=$foreground; $label.BackColor=$background
         $information=$label.Text
         $target=[string](Get-UiSetting $source 'CurrentTarget' '')

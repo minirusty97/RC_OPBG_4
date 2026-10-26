@@ -191,6 +191,22 @@ try {
     if ($script:Busy -or -not $deleteButton.Enabled -or $script:RemovalNeedsRefresh -or $sourceStatusLabels.AD.BackColor -ne [Drawing.Color]::Honeydew -or $sourceStatusLabels.GLPI.BackColor -ne [Drawing.Color]::MistyRose) { throw 'A terminal source error kept completed results blocked or cleared source colors.' }
     'PASS: the real timer releases selected results when every source terminates, including a source with errors.'
 
+    $snapshot.Rows=@();$snapshot.Message='Ricerca completata. Nessun dispositivo trovato.'
+    foreach ($source in $snapshot.Sources) { $source.State='OK';$source.Count=0;$source.Error=$null;$source.Progress='' }
+    $script:Queue=New-Object 'System.Collections.Concurrent.ConcurrentQueue[object]'
+    $script:Pipeline=[PowerShell]::Create();$script:Pipeline.Runspace=$script:Worker
+    [void]$script:Pipeline.AddScript({param($FinalSnapshot) return $FinalSnapshot}.ToString()).AddArgument($snapshot)
+    Set-SearchBusy $true
+    $script:Invocation=$script:Pipeline.BeginInvoke()
+    if (-not $script:Invocation.AsyncWaitHandle.WaitOne(5000)) { throw 'Zero-result native UI fixture timed out.' }
+    [void]$tickMethod.Invoke($timer,[object[]]@([EventArgs]::Empty))
+    if ($script:Busy -or $grid.Rows.Count -ne 0 -or $counterLabel.Text -ne 'Risultati: 0 | Selezionati: 0' -or -not $searchButton.Enabled -or $cancelButton.Enabled -or $deleteButton.Enabled -or $archiveButton.Enabled -or $readArchiveButton.Enabled -or @($sourceStatusLabels.Values | Where-Object { $_.BackColor -ne [Drawing.Color]::Honeydew }).Count -gt 0) { throw 'A completed zero-result search left the native UI pending or actionable.' }
+    'PASS: a zero-result search clears the native grid, completes every source and releases the search controls.'
+    Update-ExplorerSourceStatus @([pscustomobject]@{Name='Entra';State='In attesa';Progress='Pagina 2, 999 record letti';Error=$null})
+    if ($sourceStatusLabels.Entra.Text -notlike '*Pagina 2, 999*' -or $sourceStatusLabels.Entra.BackColor -ne [Drawing.Color]::LightGoldenrodYellow) { throw 'Cloud page progress is missing from the native footer.' }
+    'PASS: the native footer identifies the active cloud page and record count.'
+
+
 }
 finally {
     Close-ExplorerGraphLogin
