@@ -116,14 +116,15 @@ try {
         $script:RemovalDialogTimer=New-Object Windows.Forms.Timer
         $script:RemovalDialogTimer.Interval=50
         $script:RemovalDialogTimer.Add_Tick({
-            $window=@([Windows.Forms.Application]::OpenForms | Where-Object Text -eq 'Conferma eliminazione - oggetti verificati' | Select-Object -First 1)
+            $window=@([Windows.Forms.Application]::OpenForms | Where-Object { $_.Text -eq 'Conferma eliminazione - oggetti verificati' -and $_.Visible } | Select-Object -First 1)
             if ($window.Count -eq 0) { return }
             $dialog=$window[0]; $script:RemovalDialogSeen=$true
             try {
-                $layout=$dialog.Controls[0]
-                $consent=$layout.GetControlFromPosition(0,2)
-                $confirm=$layout.GetControlFromPosition(0,3).Controls['ConfirmRemoval']
-                $preview=$layout.GetControlFromPosition(0,1)
+                $layout=@($dialog.Controls | Where-Object { $_ -is [Windows.Forms.TableLayoutPanel] })[0]
+                $consent=@($dialog.Controls.Find('AdChildrenConsent',$true))[0]
+                $confirm=@($dialog.Controls.Find('ConfirmRemoval',$true))[0]
+                $preview=@($layout.Controls | Where-Object { $_ -is [Windows.Forms.RichTextBox] })[0]
+                if ($null -eq $consent -or $null -eq $confirm -or $null -eq $preview) { throw 'Visible removal preview has incomplete controls.' }
                 if ($script:RemovalDialogHasChildren) {
                     if (-not $consent.Visible -or $consent.Checked -or $confirm.Enabled -or $preview.Text -notlike '*msFVE-RecoveryInformation*' -or $preview.Text -notlike '*Recupero BitLocker*' -or $preview.Text -notlike '*ID: child-guid*') { throw 'Child metadata, warning or unchecked consent state missing.' }
                     $consent.Checked=$true
