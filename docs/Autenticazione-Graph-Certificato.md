@@ -2,6 +2,8 @@
 
 Disponibile da Assistente IT 1.0.16. Il sistemista crea e autorizza l'applicazione in Entra ID; sul PC viene usato il certificato installato nello store Windows. Non viene aperta la finestra di login Microsoft in questa modalita.
 
+Per gestire le operazioni in base ai ruoli del tecnico, da 1.0.17 e disponibile [Accesso delegato (app dedicata)](Autenticazione-Graph-Delegata.md), che richiede solo Tenant ID e Client ID e non usa il certificato. Le istruzioni seguenti riguardano invece la modalita applicativa.
+
 ## Dati da ricevere dal sistemista
 
 - Directory (Tenant) ID e Application (Client) ID, entrambi GUID.
@@ -31,7 +33,7 @@ I permessi sono dell'applicazione, usati attraverso la sua chiave privata. `Dire
 3. Selezionare **Applicazione con certificato**, inserire Tenant ID, Client ID e impronta, scegliere lo store e salvare.
 4. Riaprire il modulo e provare una ricerca e **Cerca chiavi** su un PC noto. Solo dopo la verifica dei permessi e del backup GLPI usare le eliminazioni.
 
-Prima della consegna del certificato si possono conservare Tenant/Client ID lasciando selezionato **Accesso utente (interattivo)**. La nuova modalita viene attivata solo quando i tre identificativi sono completi. Il certificato non deve essere presente per salvare la configurazione, ma deve essere disponibile quando ci si collega.
+Prima della consegna del certificato si possono conservare Tenant/Client ID lasciando selezionato **Accesso utente (app Microsoft)**; in questa modalita gli ID non selezionano l'app dedicata. Per il login del tecnico tramite l'app aziendale scegliere invece **Accesso delegato (app dedicata)** e configurare i permessi Delegati come descritto nella guida collegata. La modalita con certificato richiede i tre identificativi completi; il certificato non deve essere presente per salvare la configurazione, ma deve essere disponibile quando ci si collega con questa modalita.
 
 La configurazione locale comprende:
 

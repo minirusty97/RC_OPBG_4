@@ -66,7 +66,9 @@ Requisiti della console: Windows PowerShell 5.1, RSAT `ActiveDirectory`, modulo 
 Install-Module Microsoft.Graph.Authentication -Scope CurrentUser
 ```
 
-La console accetta gli ambiti di lettura e quelli più ampi già utilizzati. Se serve autenticarsi, mantiene gli ambiti autorizzati del progetto: `Directory.AccessAsUser.All` per Entra e `DeviceManagementManagedDevices.ReadWrite.All` per Intune. Una sessione applicativa preconfigurata viene conservata; le risposte API ne verificano i diritti effettivi.
+Da Impostazioni > Microsoft Graph si puo scegliere **Accesso delegato (app dedicata)**: il tecnico accede con il proprio account, usando Tenant ID e Client ID aziendali senza certificato. In questa modalita le ricerche richiedono `Device.Read.All` e `DeviceManagementManagedDevices.Read.All`; lettura chiavi ed eliminazioni aggiungono i relativi ambiti quando servono. Le API verificano anche i ruoli dell'utente. Il sistemista limita l'accesso all'app con le assegnazioni utenti/gruppi e le operazioni con i ruoli Entra e Intune: vedere la [guida all'accesso delegato](docs/Autenticazione-Graph-Delegata.md).
+
+**Accesso utente (app Microsoft)** conserva il flusso interattivo precedente e gli ambiti del progetto: `Directory.AccessAsUser.All` per Entra e `DeviceManagementManagedDevices.ReadWrite.All` per Intune quando manca il relativo accesso. Le modalita esplicite con app dedicata verificano l'identita configurata; una sessione applicativa non viene usata al posto dell'operatore delegato.
 
 ### Token GLPI
 
@@ -307,3 +309,7 @@ Anche il backup prima dell'eliminazione legge ora il cloud prima delle password 
 ### Applicazione Graph con certificato (1.0.16)
 
 Impostazioni > Microsoft Graph permette di scegliere tra accesso interattivo e app dedicata con certificato Windows. Il sistemista fornisce Tenant ID, Client ID e certificato con chiave privata e autorizza i permessi applicativi. La modalita certificato non apre il login utente e verifica l’identita della sessione. Vedere la [procedura per il sistemista](docs/Autenticazione-Graph-Certificato.md).
+
+### Accesso delegato con app dedicata (1.0.17)
+
+Per gestire le operazioni in base ai ruoli dei tecnici selezionare **Accesso delegato (app dedicata)**, inserire Tenant ID e Client ID e configurare i permessi **Delegati**. Il certificato non serve. Ogni tecnico accede con il proprio account; il sistemista controlla assegnazioni all'app e ruoli Entra/Intune. AD usa l'account Windows e GLPI il profilo del token configurato, anche per leggere le chiavi nelle Note. La [guida completa](docs/Autenticazione-Graph-Delegata.md) include redirect desktop/WAM, ambiti e configurazione dei profili.

@@ -46,6 +46,13 @@ function Connect-ExplorerGraph {
         Connect-ExplorerGraphCertificate -Authentication $authentication -Context $context
         return
     }
+    $dedicatedDelegated=$authentication.AuthenticationMode -eq 'Delegated'
+    if ($dedicatedDelegated -and -not (Test-ExplorerGraphDelegatedContext $context $authentication)) {
+        # Never reuse another app, tenant or an application-only identity for a
+        # flow whose authorization must follow the signed-in operator.
+        if ($null -ne $context) { Disconnect-MgGraph -ErrorAction Stop | Out-Null }
+        $script:CloudCache.Clear();$context=$null
+    }
     if ($null -ne $GraphAuthentication -and $null -ne $context -and (Get-ExplorerValue $context 'AuthType') -eq 'AppOnly') {
         Disconnect-MgGraph -ErrorAction Stop | Out-Null
         $script:CloudCache.Clear();$context=$null
@@ -60,13 +67,17 @@ function Connect-ExplorerGraph {
     $required = New-Object 'System.Collections.Generic.List[string]'
     $entraScopes = @('Device.Read.All', 'Device.ReadWrite.All', 'Directory.Read.All', 'Directory.ReadWrite.All', 'Directory.AccessAsUser.All')
     $intuneScopes = @('DeviceManagementManagedDevices.Read.All', 'DeviceManagementManagedDevices.ReadWrite.All')
+    $entraConsent='Directory.AccessAsUser.All';$intuneConsent='DeviceManagementManagedDevices.ReadWrite.All'
+    if ($dedicatedDelegated -and -not $ForRemoval) {
+        $entraConsent='Device.Read.All';$intuneConsent='DeviceManagementManagedDevices.Read.All'
+    }
     if ($ForRemoval) { $entraScopes = @('Directory.AccessAsUser.All'); $intuneScopes = @('DeviceManagementManagedDevices.ReadWrite.All') }
     if ($Sources -contains 'Entra' -and @($scopes | Where-Object {
         $_ -in $entraScopes
-    }).Count -eq 0) { [void]$required.Add('Directory.AccessAsUser.All') }
+    }).Count -eq 0) { [void]$required.Add($entraConsent) }
     if ($Sources -contains 'Intune' -and @($scopes | Where-Object {
         $_ -in $intuneScopes
-    }).Count -eq 0) { [void]$required.Add('DeviceManagementManagedDevices.ReadWrite.All') }
+    }).Count -eq 0) { [void]$required.Add($intuneConsent) }
     if ($ForBitLocker -and $scopes -notcontains 'BitlockerKey.Read.All') { [void]$required.Add('BitlockerKey.Read.All') }
     if ($null -eq $context -or $required.Count -gt 0) {
         # CurrentUser uses the SDK secure cache so separate suite processes
@@ -74,7 +85,10 @@ function Connect-ExplorerGraph {
         # Mantiene gli ambiti già autorizzati dall'utente nel tool di rimozione.
         $loginScopes = @(@($scopes) + @($required.ToArray()) | Sort-Object -Unique)
         $arguments = @{ Scopes = $loginScopes; ContextScope = 'CurrentUser'; NoWelcome = $true; ErrorAction = 'Stop' }
-        if ($null -ne $context) {
+        if ($dedicatedDelegated) {
+            $arguments.TenantId=$authentication.TenantId;$arguments.ClientId=$authentication.ClientId;$arguments.Environment='Global'
+        }
+        elseif ($null -ne $context) {
             foreach ($key in @('TenantId', 'ClientId')) {
                 $value = [string](Get-ExplorerValue $context $key)
                 if (-not [string]::IsNullOrWhiteSpace($value)) { $arguments[$key] = $value }
@@ -105,6 +119,18 @@ function Connect-ExplorerGraph {
                     }
                 }
                 if ($_ -is [Management.Automation.WarningRecord]) { Write-Warning $_.Message }
+            }
+            if ($dedicatedDelegated) {
+                $connected=Get-MgContext -ErrorAction Stop
+                if (-not (Test-ExplorerGraphDelegatedContext $connected $authentication)) {
+                    if ($null -ne $connected) { Disconnect-MgGraph -ErrorAction Stop | Out-Null }
+                    $script:CloudCache.Clear()
+                    throw 'La sessione Graph non corrisponde all''accesso delegato, al tenant e all''app configurati. Operazione interrotta.'
+                }
+                $granted=Get-ExplorerValue $connected 'Scopes' @()
+                if (@($required.ToArray() | Where-Object { $granted -notcontains $_ }).Count -gt 0) {
+                    throw 'Accesso delegato privo degli ambiti Graph richiesti. Verificare i permessi delegati e il consenso amministratore dell''app. I ruoli del tecnico vengono verificati dalle API.'
+                }
             }
         }
         catch { $loginError=$_.Exception.Message; throw }
