@@ -17,7 +17,7 @@ function Get-ExplorerGraphSetting {
 function ConvertTo-ExplorerGraphAuthentication {
     param($Settings)
     $mode=[string](Get-ExplorerGraphSetting $Settings 'AuthenticationMode' 'Interactive')
-    if ($mode -notin @('Interactive','Certificate')) { throw 'Modalita Graph non valida: scegliere Interactive o Certificate.' }
+    if ($mode -notin @('Interactive','Delegated','Certificate')) { throw 'Modalita Graph non valida: scegliere Interactive, Delegated o Certificate.' }
     $tenant=([string](Get-ExplorerGraphSetting $Settings 'TenantId' '')).Trim()
     $client=([string](Get-ExplorerGraphSetting $Settings 'ClientId' '')).Trim()
     $thumb=([string](Get-ExplorerGraphSetting $Settings 'CertificateThumbprint' '') -replace '[\s\u200e\u200f]','').ToUpperInvariant()
@@ -28,13 +28,26 @@ function ConvertTo-ExplorerGraphAuthentication {
         if ($value.Value -and (-not [guid]::TryParse($value.Value,[ref]$id) -or $id -eq [guid]::Empty)) { throw ($value.Name+' deve essere un GUID valido.') }
     }
     if ($tenant) { $tenant=([guid]$tenant).ToString() };if ($client) { $client=([guid]$client).ToString() }
-    if ($mode -eq 'Certificate') { $mode='Certificate' } else { $mode='Interactive' }
+    if ($mode -eq 'Certificate') { $mode='Certificate' } elseif ($mode -eq 'Delegated') { $mode='Delegated' } else { $mode='Interactive' }
     if ($location -eq 'LocalMachine') { $location='LocalMachine' } else { $location='CurrentUser' }
     if ($thumb -and $thumb -notmatch '^[A-F0-9]{40}$') { throw 'L''impronta del certificato deve contenere 40 caratteri esadecimali.' }
     if ($mode -eq 'Certificate' -and (-not $tenant -or -not $client -or -not $thumb)) {
         throw 'Per attivare il certificato servono Tenant ID, Client ID e impronta del certificato.'
     }
+    if ($mode -eq 'Delegated' -and (-not $tenant -or -not $client)) {
+        throw 'Per l''accesso delegato con app dedicata servono Tenant ID e Client ID. Non occorre un certificato.'
+    }
     [pscustomobject]@{AuthenticationMode=$mode;TenantId=$tenant;ClientId=$client;CertificateThumbprint=$thumb;CertificateStore=$location}
+}
+
+function Test-ExplorerGraphDelegatedContext {
+    param($Context,$Authentication)
+    return ($null -ne $Context -and
+        [string](Get-ExplorerGraphSetting $Context 'AuthType') -eq 'Delegated' -and
+        [string](Get-ExplorerGraphSetting $Context 'Environment') -eq 'Global' -and
+        [string](Get-ExplorerGraphSetting $Context 'ContextScope') -eq 'CurrentUser' -and
+        [string](Get-ExplorerGraphSetting $Context 'TenantId') -ieq $Authentication.TenantId -and
+        [string](Get-ExplorerGraphSetting $Context 'ClientId') -ieq $Authentication.ClientId)
 }
 
 function Get-ExplorerGraphCertificate {

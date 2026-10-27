@@ -37,7 +37,7 @@ La griglia mostra i risultati; il pannello inferiore espone gli oggetti del nome
 
 I token GLPI sono salvati con Windows DPAPI CurrentUser tramite il lettore condiviso Glpi.Credentials.ps1, usato dalla suite, dalla finestra e da Test-GlpiLookup.ps1. Il .env precedente viene migrato alla prima lettura; le sole righe dei token vengono rimosse dopo verifica dell’archivio cifrato. I token restano SecureString nella sessione della finestra. Il pulsante Token GLPI li aggiorna e li salva cifrati. Il JSON contiene soltanto configurazione e URL, non credenziali.
 
-Graph usa Microsoft.Graph.Authentication. Riutilizza la sessione e gli ambiti sufficienti già presenti; se mancano, avvia il login interattivo mantenendo tenant, client e ambiti correnti quando disponibili. Gli ambiti aggiunti sono quelli già autorizzati per il tool: Directory.AccessAsUser.All e DeviceManagementManagedDevices.ReadWrite.All. Una sessione applicativa preconfigurata non viene sostituita da una delegata. La prima implementazione supporta l'endpoint Global graph.microsoft.com.
+Graph usa Microsoft.Graph.Authentication e l'endpoint Global graph.microsoft.com. **Accesso utente (app Microsoft)** mantiene il flusso interattivo precedente e gli ambiti del tool, riutilizzando tenant, client e ambiti correnti quando disponibili. Da 1.0.17 **Accesso delegato (app dedicata)** usa Tenant ID e Client ID configurati con il login del tecnico, verifica la sessione delegata e richiede prima i soli ambiti di lettura; chiavi ed eliminazioni aggiungono gli ambiti specifici. I diritti effettivi dipendono dai ruoli Entra/Intune dell'utente. La modalita **Applicazione con certificato** resta distinta e usa i permessi dell'app. Vedere la [guida per il sistemista all'accesso delegato](Autenticazione-Graph-Delegata.md).
 
 ## Raccolte e cache
 
@@ -190,3 +190,7 @@ Anche il backup prima dell'eliminazione legge ora il cloud prima delle password 
 ### Applicazione Graph con certificato (1.0.16)
 
 Impostazioni > Microsoft Graph permette di scegliere tra accesso interattivo e app dedicata con certificato Windows. Il sistemista fornisce Tenant ID, Client ID e certificato con chiave privata e autorizza i permessi applicativi. La modalita certificato non apre il login utente e verifica l’identita della sessione. Vedere la [procedura per il sistemista](Autenticazione-Graph-Certificato.md).
+
+### Accesso delegato con app dedicata (1.0.17)
+
+**Accesso delegato (app dedicata)** richiede Tenant ID e Client ID, senza certificato. Ogni tecnico accede con il proprio account; assegnazioni e ruoli determinano accesso e operazioni consentite. La sessione deve corrispondere a identita delegata, app e tenant configurati. Le ricerche richiedono gli ambiti di lettura, mentre chiavi ed eliminazioni aggiungono quelli specifici. Il programma non riprova con un'identita applicativa in caso di errore. Configurazione e limiti dei ruoli sono descritti nella [guida per il sistemista](Autenticazione-Graph-Delegata.md).

@@ -16,12 +16,21 @@ $status=[pscustomobject]@{Text=''}
 $form=New-Object Windows.Forms.Form;$form.Icon=[Drawing.SystemIcons]::Application;$form.Font=New-Object Drawing.Font('Segoe UI',9)
 $timer=New-Object Windows.Forms.Timer;$timer.Interval=60
 $script:SettingsSeen=$false;$script:SettingsError=''
+$script:SettingsPhase='Certificate'
 $timer.Add_Tick({
     $windows=@([Windows.Forms.Application]::OpenForms | Where-Object Text -eq 'Impostazioni - Assistente IT certificate test')
     if ($windows.Count -eq 0) { return }
     $timer.Stop();$dialog=$windows[0];$script:SettingsSeen=$true
     try {
         $mode=$dialog.Controls.Find('GraphAuthenticationMode',$true)[0]
+        if ($script:SettingsPhase -eq 'Delegated') {
+            if ($mode.SelectedIndex -ne 1) { throw 'Saved certificate mode was not restored.' }
+            $mode.SelectedIndex=2
+            if (-not $dialog.Controls.Find('GraphTenantId',$true)[0].Enabled -or -not $dialog.Controls.Find('GraphClientId',$true)[0].Enabled -or $dialog.Controls.Find('GraphCertificateThumbprint',$true)[0].Enabled -or $dialog.Controls.Find('GraphCertificateStore',$true)[0].Enabled -or $dialog.Controls.Find('GraphAuthenticationHint',$true)[0].Text -notlike '*ruoli del tecnico*') { throw 'Delegated settings do not expose the dedicated app identity or incorrectly require certificate controls.' }
+            $dialog.Controls.Find('GraphCertificateThumbprint',$true)[0].Text=''
+            $dialog.Controls.Find('SaveSettings',$true)[0].PerformClick()
+            return
+        }
         if ($mode.SelectedIndex -ne 0) { throw 'New settings do not default to interactive login.' }
         $dialog.Controls.Find('GraphTenantId',$true)[0].Text='11111111-1111-4111-8111-111111111111'
         $dialog.Controls.Find('GraphClientId',$true)[0].Text='22222222-2222-4222-8222-222222222222'
@@ -46,5 +55,16 @@ try {
     try { Save-AssistenteITSettings -Paths $paths -DomainControllers $saved.DomainControllers -GraphAuthentication @{AuthenticationMode='Certificate';ClientId='invalid'} -UserToken 'must-not-be-saved' } catch { $rejected=$true }
     if (-not $rejected -or [Convert]::ToBase64String([IO.File]::ReadAllBytes($paths.ConfigPath)) -cne [Convert]::ToBase64String($before) -or (Test-Path (Join-Path $paths.ConfigDirectory 'glpi-credentials.dpapi.json'))) { throw 'Invalid Graph settings modified configuration or token storage.' }
     'PASS: certificate settings survive unrelated saves and invalid Graph input is rejected before configuration or credential changes.'
+    $script:SettingsPhase='Delegated';$script:SettingsSeen=$false;$timer.Start();Show-AssistenteITSettings
+    if (-not $script:SettingsSeen -or $script:SettingsError) { throw ('Delegated settings UI failed: '+$script:SettingsError) }
+    $saved=Get-Content $paths.ConfigPath -Raw | ConvertFrom-Json
+    if ($saved.Graph.AuthenticationMode -ne 'Delegated' -or $saved.Graph.TenantId -ne '11111111-1111-4111-8111-111111111111' -or $saved.Graph.ClientId -ne '22222222-2222-4222-8222-222222222222' -or $saved.Graph.CertificateThumbprint) { throw 'Native delegated settings failed to save the dedicated app without a certificate.' }
+    Save-AssistenteITSettings -Paths $paths -DomainControllers $saved.DomainControllers -GlpiEnabled $false
+    $again=Get-Content $paths.ConfigPath -Raw | ConvertFrom-Json
+    if ($again.Graph.AuthenticationMode -ne 'Delegated' -or $again.Graph.ClientId -ne $saved.Graph.ClientId) { throw 'Unrelated settings erased the delegated identity.' }
+    $before=[Convert]::ToBase64String([IO.File]::ReadAllBytes($paths.ConfigPath));$rejected=$false
+    try { Save-AssistenteITSettings -Paths $paths -DomainControllers $saved.DomainControllers -GraphAuthentication @{AuthenticationMode='Delegated';TenantId=$saved.Graph.TenantId} -UserToken 'must-not-be-saved' } catch { $rejected=$true }
+    if (-not $rejected -or [Convert]::ToBase64String([IO.File]::ReadAllBytes($paths.ConfigPath)) -cne $before -or (Test-Path (Join-Path $paths.ConfigDirectory 'glpi-credentials.dpapi.json'))) { throw 'An incomplete delegated app modified saved settings or credentials.' }
+    'PASS: native settings switch to the dedicated delegated app without a certificate, preserve it during unrelated saves and reject incomplete identity before changing files or tokens.'
 }
 finally { $timer.Stop();$timer.Dispose();$form.Dispose();Remove-Item -LiteralPath $temporary -Recurse -Force -ErrorAction SilentlyContinue }

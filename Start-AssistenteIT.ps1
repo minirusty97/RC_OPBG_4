@@ -43,8 +43,9 @@ function Show-AssistenteITSettings {
     $settingsTabs.TabPages.AddRange(@($generalPage,$graphPage))
     $modeLabel=New-Object Windows.Forms.Label;$modeLabel.Text='Autenticazione Microsoft Graph';$modeLabel.SetBounds(18,18,550,24)
     $modeBox=New-Object Windows.Forms.ComboBox;$modeBox.Name='GraphAuthenticationMode';$modeBox.DropDownStyle='DropDownList';$modeBox.SetBounds(18,44,550,25)
-    [void]$modeBox.Items.Add('Accesso utente (interattivo)');[void]$modeBox.Items.Add('Applicazione con certificato')
+    [void]$modeBox.Items.Add('Accesso utente (app Microsoft)');[void]$modeBox.Items.Add('Applicazione con certificato');[void]$modeBox.Items.Add('Accesso delegato (app dedicata)')
     $modeBox.SelectedIndex=0;if ($graph.AuthenticationMode -eq 'Certificate') { $modeBox.SelectedIndex=1 }
+    if ($graph.AuthenticationMode -eq 'Delegated') { $modeBox.SelectedIndex=2 }
     $tenantLabel=New-Object Windows.Forms.Label;$tenantLabel.Text='Directory (Tenant) ID';$tenantLabel.SetBounds(18,88,550,24)
     $tenantBox=New-Object Windows.Forms.TextBox;$tenantBox.Name='GraphTenantId';$tenantBox.Text=$graph.TenantId;$tenantBox.SetBounds(18,112,550,25)
     $clientLabel=New-Object Windows.Forms.Label;$clientLabel.Text='Application (Client) ID';$clientLabel.SetBounds(18,150,550,24)
@@ -55,7 +56,22 @@ function Show-AssistenteITSettings {
     $storeBox=New-Object Windows.Forms.ComboBox;$storeBox.Name='GraphCertificateStore';$storeBox.DropDownStyle='DropDownList';$storeBox.SetBounds(18,298,550,25)
     [void]$storeBox.Items.Add('Utente corrente - Personale');[void]$storeBox.Items.Add('Computer locale - Personale')
     $storeBox.SelectedIndex=0;if ($graph.CertificateStore -eq 'LocalMachine') { $storeBox.SelectedIndex=1 }
-    $graphHint=New-Object Windows.Forms.Label;$graphHint.Text='Il sistemista deve autorizzare l''applicazione e i permessi in Entra ID. Il certificato con chiave privata deve essere installato nello store selezionato. Qui viene salvata solo l''impronta. Tenant, Client ID e certificato vengono usati in modalita Applicazione con certificato.';$graphHint.SetBounds(18,340,550,104)
+    $graphHint=New-Object Windows.Forms.Label;$graphHint.Name='GraphAuthenticationHint';$graphHint.SetBounds(18,340,550,104)
+    $updateGraphMode={
+        $certificateMode=$modeBox.SelectedIndex -eq 1
+        $tenantBox.Enabled=$modeBox.SelectedIndex -ne 0;$clientBox.Enabled=$tenantBox.Enabled
+        $thumbBox.Enabled=$certificateMode;$thumbLabel.Enabled=$certificateMode;$storeBox.Enabled=$certificateMode;$storeLabel.Enabled=$certificateMode
+        if ($certificateMode) {
+            $graphHint.Text='Il sistemista autorizza i permessi Applicazione in Entra ID. Installare il certificato con chiave privata nello store selezionato. Le operazioni usano i diritti dell''applicazione.'
+        }
+        elseif ($modeBox.SelectedIndex -eq 2) {
+            $graphHint.Text='Ogni tecnico accede con il proprio account Microsoft. Inserire Tenant ID e Client ID dell''app dedicata, autorizzata con permessi Delegati. Le operazioni dipendono dai ruoli del tecnico su Entra e Intune. Non serve un certificato.'
+        }
+        else {
+            $graphHint.Text='Accesso utente tramite l''app Microsoft Graph PowerShell e la cache personale Microsoft. Per usare l''app aziendale selezionare Accesso delegato (app dedicata). Tenant ID, Client ID e certificato qui non vengono utilizzati.'
+        }
+    }
+    $modeBox.Add_SelectedIndexChanged($updateGraphMode);& $updateGraphMode
     $graphPage.Controls.AddRange(@($modeLabel,$modeBox,$tenantLabel,$tenantBox,$clientLabel,$clientBox,$thumbLabel,$thumbBox,$storeLabel,$storeBox,$graphHint))
     $save = New-Object Windows.Forms.Button; $save.Name='SaveSettings';$save.Text='Salva'; $save.SetBounds(388, 540, 105, 32)
     $cancel = New-Object Windows.Forms.Button; $cancel.Text='Annulla'; $cancel.DialogResult='Cancel'; $cancel.SetBounds(503, 540, 105, 32)
@@ -63,6 +79,7 @@ function Show-AssistenteITSettings {
     $save.Add_Click({
         try {
             $mode='Interactive';if ($modeBox.SelectedIndex -eq 1) { $mode='Certificate' }
+            if ($modeBox.SelectedIndex -eq 2) { $mode='Delegated' }
             $store='CurrentUser';if ($storeBox.SelectedIndex -eq 1) { $store='LocalMachine' }
             $graphAuthentication=[pscustomobject]@{AuthenticationMode=$mode;TenantId=$tenantBox.Text;ClientId=$clientBox.Text;CertificateThumbprint=$thumbBox.Text;CertificateStore=$store}
             Save-AssistenteITSettings -GraphAuthentication $graphAuthentication -Paths $paths -DomainControllers $dcBox.Lines -GlpiBaseUri $urlBox.Text -GlpiEnabled $glpiCheck.Checked -UseAppToken $appCheck.Checked -UserToken $userBox.Text -AppToken $appBox.Text
