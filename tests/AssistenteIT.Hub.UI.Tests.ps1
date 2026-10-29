@@ -23,7 +23,7 @@ function Connect-MgGraph {
  [HubUiFixture]::Connections++
  [HubUiFixture]::Context=[pscustomobject]@{AuthType='Delegated';TenantId=`$TenantId;ClientId=`$ClientId;Environment='Global';ContextScope='CurrentUser';Account='synthetic@example.invalid';AppName='Synthetic app';Scopes=@('Device.Read.All','DeviceManagementManagedDevices.Read.All','BitlockerKey.Read.All')}
 }
-function Invoke-MgGraphRequest { [CmdletBinding()]param(`$Method,`$Uri,`$OutputType) if (`$Method -ne 'GET') { throw 'Unexpected write in hub verification.' };[pscustomobject]@{value=@()} }
+function Invoke-MgGraphRequest { [CmdletBinding()]param(`$Method,`$Uri,`$OutputType,`$Headers) if (`$Method -ne 'GET') { throw 'Unexpected write in hub verification.' };[pscustomobject]@{value=@()} }
 Export-ModuleMember -Function Get-MgContext,Disconnect-MgGraph,Connect-MgGraph,Invoke-MgGraphRequest
 "@ | Set-Content (Join-Path $sdkDirectory 'Microsoft.Graph.Authentication.psm1') -Encoding UTF8
  $env:PSModulePath=(Split-Path $sdkDirectory -Parent)+[IO.Path]::PathSeparator+$env:PSModulePath

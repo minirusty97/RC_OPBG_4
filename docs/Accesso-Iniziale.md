@@ -7,7 +7,7 @@ Da Assistente IT 1.0.19 **Accesso** e un pulsante separato nella barra inferiore
 1. Configurare tenant/app in Impostazioni, se necessario.
 2. Premere **Accesso** e completare il login Microsoft.
 3. Controllare il riepilogo dei permessi e confermare l'accesso. Nessun modulo viene aperto automaticamente.
-4. Il wrapper abilita ciascun modulo per il quale sono soddisfatti i requisiti di lettura, indicando **Sola lettura** o **Lettura e scrittura secondo i permessi verificati**.
+4. Il wrapper abilita ciascun modulo per il quale sono soddisfatti i requisiti di lettura, indicando **Sola lettura** o **Lettura e scrittura (ambiti concessi)**.
 5. Premere **Apri modulo** sulla scheda desiderata. Il modulo usa la sessione gia verificata, senza un secondo login o nuovi consensi.
 
 I moduli sono ospitati in runspace STA separati nello stesso processo, cosi possono condividere il contesto statico del Graph SDK senza passare token su riga di comando o tramite file. Chiudere i moduli prima di cambiare accesso/impostazioni, aggiornare o uscire dal wrapper. Questa scelta mantiene la sessione coerente e non interrompe operazioni attive.
@@ -23,7 +23,21 @@ Esempio dei riferimenti ai requisiti dichiarati in `GraphPermissions`:
 "WritePermissionIds": ["entra-remove", "intune-remove"]
 ```
 
-Gli ambiti OAuth sono concessi all'app: non descrivono da soli tutti i diritti di ogni collega. I ruoli Entra/Intune e le autorizzazioni effettive su AD/GLPI restano il controllo del servizio. La verifica iniziale esegue soltanto GET limitate su Entra e Intune, senza provare cancellazioni o leggere password BitLocker.
+Gli ambiti OAuth sono concessi all'app: non descrivono da soli tutti i diritti di ogni collega. I ruoli Entra/Intune e le autorizzazioni effettive su AD/GLPI restano il controllo del servizio. Da 1.0.20 il riepilogo distingue l'ambito concesso dalla verifica effettivamente eseguita:
+
+| Funzione | Test iniziale | Esito positivo |
+| --- | --- | --- |
+| Ricerca Entra / Intune | GET di lettura limitata | Verificata, nei limiti degli oggetti accessibili all'utente |
+| Password BitLocker | Una pagina di `GET /informationProtection/bitlocker/recoveryKeys`, senza proprieta `key` | Parziale: accesso all'elenco metadati; lettura password non verificata |
+| Eliminazione Entra / Intune | Controllo ambito e prerequisiti di lettura; nessuna DELETE | Non verificabile senza eseguire l'operazione |
+
+Le richieste BitLocker includono lo User-Agent richiesto dalla documentazione, non usano `$top`, non seguono le pagine successive e non interrogano la singola chiave. Un elenco vuoto conferma soltanto che la richiesta e stata accettata. Un errore del servizio mantiene separati `ScopeGranted` e `Available` e mostra la funzione come non disponibile.
+
+L'accesso ai metadati non dimostra quello alla password: Entra prevede anche il diritto personalizzato `microsoft.directory/bitlockerKeys/metadata/read`, distinto da `microsoft.directory/bitlockerKeys/key/read`, e puo limitare i diritti al singolo dispositivo o unita amministrativa. Il test non promette di provare il recupero effettivo.
+
+Le API di cancellazione non espongono una simulazione documentata che verifichi tutti i diritti senza cancellare. `-WhatIf` interrompe l'operazione nel client, quindi non prova l'autorizzazione Microsoft. Non vengono inviate DELETE di prova, nemmeno verso identificativi inesistenti, e non vengono richiesti nuovi consensi per analizzare i ruoli.
+
+Solo le letture realmente eseguite sono verdi; verifiche parziali o non eseguibili sono gialle. Il successivo controllo del servizio rimane determinante.
 
 ## Gruppi facoltativi per modulo
 
@@ -56,5 +70,9 @@ La cancellazione Entra resta supportata con `Directory.AccessAsUser.All` e i rel
 Finestre e collegamenti usano l'identita Windows **AssistenteIT.Desktop** e l'icona del programma. PowerShell resta il motore interno; il launcher non e stato trasformato in un nuovo host eseguibile. Lo stile Windows viene inizializzato prima delle finestre.
 
 **Cerca aggiornamenti** avvia il controllo. Quando una versione e disponibile compare **Installa aggiornamento**. L'installazione conserva configurazione e credenziali personali e richiede la chiusura dei moduli.
+
+Gli errori della ricerca chiavi distinguono ricerca Intune, Azure AD Device ID, elenco metadati, lettura password e risposta non valida. Quando disponibili mostrano stato HTTP, codice Graph e request-id; non riportano corpi di risposta, token o password. Un HTTP 400 non viene presentato come prova di un ruolo mancante.
+
+Riferimenti per i controlli: [elenco metadati BitLocker](https://learn.microsoft.com/en-us/graph/api/bitlocker-list-recoverykeys), [permessi distinti per metadati e password](https://learn.microsoft.com/en-us/entra/identity/role-based-access-control/custom-device-permissions), [cancellazione Entra](https://learn.microsoft.com/en-us/graph/api/device-delete), [WhatIf nel cmdlet](https://learn.microsoft.com/en-us/powershell/module/microsoft.graph.identity.directorymanagement/remove-mgdevice).
 
 Riferimenti: [AppUserModelID](https://learn.microsoft.com/en-us/windows/win32/shell/appids), [scope .default](https://learn.microsoft.com/en-us/entra/identity-platform/scopes-oidc#the-default-scope), [appartenenze dell'utente](https://learn.microsoft.com/en-us/graph/api/user-list-transitivememberof).

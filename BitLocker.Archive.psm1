@@ -56,13 +56,17 @@ function Get-ExplorerBitLockerKeys {
     foreach ($deviceId in $deviceIds) {
         $path='/v1.0/informationProtection/bitlocker/recoveryKeys'
         $uri='https://graph.microsoft.com'+$path+'?$filter='+[Uri]::EscapeDataString("deviceId eq '$deviceId'")
+        $stage='BitLockerMetadata'
         try {
             $records=@(Get-ExplorerGraphCollection -Uri $uri -ResourcePath $path)
             foreach ($record in $records) {
+                $stage='BitLockerResponse'
                 $keyId=ConvertTo-BlId $record.id
                 if ((ConvertTo-BlId $record.deviceId) -ne $deviceId) { throw 'Chiave Graph esterna al dispositivo richiesto.' }
                 $keyUri='https://graph.microsoft.com'+$path+'/'+$keyId+'?$select=id,deviceId,key,createdDateTime,volumeType'
+                $stage='BitLockerSecret'
                 $response=Invoke-MgGraphRequest -Method GET -Uri $keyUri -OutputType PSObject -Headers @{'User-Agent'='AssistenteIT-BitLocker'} -ErrorAction Stop
+                $stage='BitLockerResponse'
                 $secret=Get-BlValue $response 'value' $response
                 if ((ConvertTo-BlId $secret.id) -ne $keyId -or (ConvertTo-BlId $secret.deviceId) -ne $deviceId) { throw 'Identita della chiave Graph cambiata.' }
                 $key=ConvertTo-BlPassword (Get-BlValue $secret 'key')
@@ -75,7 +79,7 @@ function Get-ExplorerBitLockerKeys {
                 else { $keys[$keyId]=[pscustomobject]@{KeyId=$keyId;Password=$key;Volume=[string](Get-BlValue $secret 'volumeType');CreatedAt=[string](Get-BlValue $secret 'createdDateTime');Origins=@($origin);Fingerprint=(Get-BlFingerprint $key)} }
             }
         }
-        catch { throw ('Lettura BitLocker da Entra ID non completata per Device ID '+$deviceId+'. Verificare accesso, BitlockerKey.Read.All e consenso delegato e ruolo del tecnico; nessuna eliminazione consentita.') }
+        catch { throw (New-ExplorerGraphOperationError -Failure $_ -Stage $stage) }
     }
     foreach ($target in @($Targets | Where-Object Source -eq 'AD')) {
         foreach ($child in @($target.AdChildren | Where-Object ObjectClass -eq 'msFVE-RecoveryInformation')) {
@@ -140,12 +144,18 @@ function Read-BlKeysBySource {
         $path='/v1.0/deviceManagement/managedDevices'
         $filter=[Uri]::EscapeDataString("deviceName eq '"+$Name.Replace("'","''")+"'")
         $uri='https://graph.microsoft.com'+$path+'?$filter='+$filter+'&$select=id,deviceName,azureADDeviceId,serialNumber,operatingSystem'
-        foreach ($record in @(Get-ExplorerGraphCollection -Uri $uri -ResourcePath $path)) {
-            if (-not [string]::Equals([string](Get-BlValue $record 'deviceName'),$Name,[StringComparison]::OrdinalIgnoreCase) -or
-                [string](Get-BlValue $record 'operatingSystem') -notlike 'Windows*') { continue }
-            [void]$targets.Add([pscustomobject]@{Source='Intune';Name=$Name;Id=(ConvertTo-BlId (Get-BlValue $record 'id'))
-                LinkId=(ConvertTo-BlId (Get-BlValue $record 'azureADDeviceId'));SerialNumber=[string](Get-BlValue $record 'serialNumber')})
+        $stage='IntuneLookup'
+        try {
+            $devices=@(Get-ExplorerGraphCollection -Uri $uri -ResourcePath $path)
+            foreach ($record in $devices) {
+                if (-not [string]::Equals([string](Get-BlValue $record 'deviceName'),$Name,[StringComparison]::OrdinalIgnoreCase) -or
+                    [string](Get-BlValue $record 'operatingSystem') -notlike 'Windows*') { continue }
+                $stage='IntuneIdentity'
+                [void]$targets.Add([pscustomobject]@{Source='Intune';Name=$Name;Id=(ConvertTo-BlId (Get-BlValue $record 'id'))
+                    LinkId=(ConvertTo-BlId (Get-BlValue $record 'azureADDeviceId'));SerialNumber=[string](Get-BlValue $record 'serialNumber')})
+            }
         }
+        catch { throw (New-ExplorerGraphOperationError -Failure $_ -Stage $stage) }
     }
     else {
         Import-Module ActiveDirectory -ErrorAction Stop
@@ -183,7 +193,8 @@ function Find-ExplorerBitLockerKeys {
         [void]$sources.Add([pscustomobject]@{Name='Intune';State='OK';Count=$found.Count;Error=''})
     }
     catch {
-        [void]$sources.Add([pscustomobject]@{Name='Intune';State='Errore';Count=0;Error='Lettura Intune/BitLocker non riuscita: verificare connessione, impostazioni Graph, Azure AD Device ID e consenso delegato BitlockerKey.Read.All e ruolo del tecnico. Se la richiesta e scaduta, riprovare.'})
+        $safeError=New-ExplorerGraphOperationError -Failure $_ -Stage IntuneLookup
+        [void]$sources.Add([pscustomobject]@{Name='Intune';State='Errore';Count=0;Error=('Lettura Intune/BitLocker non riuscita: '+$safeError.Message+'.')})
     }
     if ($records.Count -eq 0) {
         $configuredControllers=Get-BlValue $config.Settings 'DomainControllers' @()

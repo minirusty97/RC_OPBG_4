@@ -18,7 +18,7 @@ function Connect-MgGraph {
  if (@($Scopes).Count -ne 1 -or (@($Scopes))[0] -ne 'https://graph.microsoft.com/.default') { throw 'Unexpected dynamic scope request.' }
  [BootstrapUiFixture]::Context=[pscustomobject]@{AuthType='Delegated';TenantId=$TenantId;ClientId=$ClientId;Environment='Global';ContextScope='CurrentUser';Account='synthetic@example.invalid';AppName='Synthetic application';Scopes=@('Device.Read.All','DeviceManagementManagedDevices.ReadWrite.All','BitlockerKey.Read.All')}
 }
-function Invoke-MgGraphRequest { [CmdletBinding()]param($Method,$Uri,$OutputType) if ($Method -ne 'GET') { throw 'Unexpected preflight write.' };[pscustomobject]@{value=@()} }
+function Invoke-MgGraphRequest { [CmdletBinding()]param($Method,$Uri,$OutputType,$Headers) if ($Method -ne 'GET') { throw 'Unexpected preflight write.' };[pscustomobject]@{value=@()} }
 Export-ModuleMember -Function Get-MgContext,Disconnect-MgGraph,Connect-MgGraph,Invoke-MgGraphRequest
 '@ | Set-Content (Join-Path $moduleDirectory 'Microsoft.Graph.Authentication.psm1') -Encoding UTF8
 $config=Join-Path $fixture 'config.json'
@@ -39,7 +39,12 @@ $bootstrapTestTimer.Add_Tick({
   if ($testState.Mode -eq 'Success' -and $open.Enabled) {
    $rows=$dialog.Controls.Find('GraphAccessPermissions',$true)[0].Rows
    if ($rows.Count -ne 5 -or @($rows | Where-Object { $_.Cells['Name'].Value -eq 'Eliminazione Entra ID' -and $_.Cells['State'].Value -eq 'Non disponibile' }).Count -ne 1) { throw 'Missing consent is not reported before opening the module.' }
-   $testState.Seen=$true;$bootstrapTestTimer.Stop();$open.PerformClick()
+   if (@($rows | Where-Object { $_.Cells['Name'].Value -eq 'Lettura chiavi BitLocker cloud' -and $_.Cells['State'].Value -eq 'Parziale' }).Count -ne 1 -or @($rows | Where-Object { $_.Cells['Name'].Value -eq 'Eliminazione Intune' -and $_.Cells['State'].Value -eq 'Non verificabile' }).Count -ne 1) { throw 'The login UI claims that metadata or granted write scope proves the actual operation.' }
+   $testState.Seen=$true;$bootstrapTestTimer.Stop()
+   $bitmap=New-Object Drawing.Bitmap($dialog.ClientSize.Width,$dialog.ClientSize.Height)
+   try { $dialog.DrawToBitmap($bitmap,(New-Object Drawing.Rectangle(0,0,$bitmap.Width,$bitmap.Height)));$memory=New-Object IO.MemoryStream;try { $bitmap.Save($memory,[Drawing.Imaging.ImageFormat]::Png);Write-Host ('CAPABILITY_UI_PNG:'+ [Convert]::ToBase64String($memory.ToArray())) } finally { $memory.Dispose() } }
+   finally { $bitmap.Dispose() }
+   $open.PerformClick()
   }
   elseif ($testState.Mode -eq 'Denied' -and $status.Text -like 'Accesso o verifica non riusciti*') {
    if ($open.Enabled) { throw 'Module opening is offered after failed authentication.' }

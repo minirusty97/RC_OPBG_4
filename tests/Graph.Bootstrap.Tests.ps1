@@ -20,8 +20,8 @@ try {
             if ($script:Bootstrap.Mode -eq 'WrongClient') { $script:Bootstrap.Context.ClientId='33333333-3333-4333-8333-333333333333' }
         }
         function script:Invoke-MgGraphRequest {
-            [CmdletBinding()]param($Method,$Uri,$OutputType)
-            if ($Method -ne 'GET' -or $Uri -match 'recoveryKeys') { throw 'Preflight must not write or read recovery passwords.' }
+            [CmdletBinding()]param($Method,$Uri,$OutputType,$Headers)
+            if ($Method -ne 'GET' -or ($Uri -match 'recoveryKeys' -and ($Uri -ne 'https://graph.microsoft.com/v1.0/informationProtection/bitlocker/recoveryKeys' -or -not $Headers['User-Agent']))) { throw 'Preflight must not write or read recovery passwords.' }
             [void]$script:Bootstrap.Requests.Add($Uri)
             if ($script:Bootstrap.Mode -eq 'IntuneDenied' -and $Uri -like '*managedDevices*') { throw 'Synthetic Intune RBAC denied.' }
             [pscustomobject]@{value=@()}
@@ -31,8 +31,8 @@ try {
         $login=$script:Bootstrap.Logins[0]
         if ($login.Scopes.Count -ne 1 -or $login.Scopes[0] -ne 'https://graph.microsoft.com/.default' -or $login.TenantId -ne $tenant -or $login.ClientId -ne $client -or $login.ContextScope -ne 'CurrentUser') { throw 'Dedicated bootstrap requested unapproved feature scopes or changed app identity.' }
         $statuses=@(Get-ExplorerGraphPermissionStatus -Definitions $Definitions -Context $context -Probe)
-        if ($statuses.Count -ne 5 -or @($statuses | Where-Object { -not $_.Available }).Count -ne 1 -or @($statuses | Where-Object Id -eq 'entra-remove')[0].Available -or $script:Bootstrap.Requests.Count -ne 2 -or $queue.Count -ne 2) { throw 'Initial verification did not expose the missing Entra-delete consent or used destructive probes.' }
-        'PASS: dedicated bootstrap uses only existing app grants via .default, displays missing Entra removal and safely probes Entra/Intune reads without reading keys or modifying devices.'
+        if ($statuses.Count -ne 5 -or @($statuses | Where-Object { -not $_.Available }).Count -ne 1 -or @($statuses | Where-Object Id -eq 'entra-remove')[0].Available -or $script:Bootstrap.Requests.Count -ne 3 -or $queue.Count -ne 2) { throw 'Initial verification did not expose the missing Entra-delete consent or used destructive probes.' }
+        'PASS: dedicated bootstrap uses only existing app grants via .default, displays missing Entra removal and safely probes Entra/Intune reads and BitLocker metadata without reading passwords or modifying devices.'
         Connect-ExplorerGraph -Sources Entra,Intune -ForBitLocker -GraphAuthentication $auth
         Connect-ExplorerGraph -Sources Intune -ForRemoval -ForBitLocker -GraphAuthentication $auth
         $rejected=$false;try { Connect-ExplorerGraph -Sources Entra -ForRemoval -GraphAuthentication $auth } catch { $rejected=$_.Exception.Message -like '*verifica iniziale*' }
@@ -50,7 +50,7 @@ try {
         'PASS: missing, foreign app/tenant and app-only contexts are rejected during operations without any authentication side effect.'
         $script:Bootstrap.Context=$context;$script:Bootstrap.Mode='IntuneDenied'
         $statuses=@(Get-ExplorerGraphPermissionStatus -Definitions $Definitions -Context $context -Probe)
-        if (@($statuses | Where-Object Id -eq 'intune-remove')[0].Available -or @($statuses | Where-Object Id -eq 'intune-read')[0].Available -or @($statuses | Where-Object Id -eq 'intune-read')[0].Detail -notlike '*RBAC denied*') { throw 'A failed read probe was reported as verified.' }
+        if (@($statuses | Where-Object Id -eq 'intune-remove')[0].Available -or @($statuses | Where-Object Id -eq 'intune-read')[0].Available -or @($statuses | Where-Object Id -eq 'intune-read')[0].Detail -notlike '*verifica non riuscita*') { throw 'A failed read probe was reported as verified.' }
         'PASS: initial read verification reports backend denial separately from consent and does not claim that granted scopes prove effective user roles.'
         foreach ($mode in @('Denied','WrongClient')) {
             $script:Bootstrap.Mode=$mode;$script:Bootstrap.Context=$null
