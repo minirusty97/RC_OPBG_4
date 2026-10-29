@@ -1,57 +1,60 @@
-# Accesso e verifica prima dei moduli
+# Accesso comune e autorizzazioni dei moduli
 
-Da Assistente IT 1.0.18 il pulsante **Accesso e apri** avvia il wrapper comune. Prima di mostrare il modulo, il wrapper:
+Da Assistente IT 1.0.19 **Accesso** e un pulsante separato nella barra inferiore, accanto a Impostazioni, Cartella dati e Cerca aggiornamenti. Le schede dei moduli mostrano **Apri modulo**, inizialmente disabilitato.
 
-1. Legge la configurazione Graph e i requisiti del modulo dal manifest.
-2. Esegue l'accesso utente Microsoft nella modalita configurata.
-3. Legge gli ambiti effettivamente restituiti dal token tramite il contesto SDK.
-4. Mostra le funzioni con ambito disponibile e quelle prive di consenso.
-5. Verifica le letture Entra e Intune con richieste GET limitate a un ID. Non elimina oggetti e non legge password BitLocker.
-6. Apre il modulo soltanto dopo la scelta **Apri modulo** o **Apri funzioni disponibili**.
+## Flusso
 
-Un errore o un annullamento non apre il modulo. La finestra riporta l'errore senza ripetere automaticamente il login. Durante l'uso, i moduli controllano la sessione e gli ambiti: non chiamano il login e non richiedono nuovi consensi. Una sessione assente o non corrispondente, oppure un ambito mancante, richiede di tornare al wrapper.
+1. Configurare tenant/app in Impostazioni, se necessario.
+2. Premere **Accesso** e completare il login Microsoft.
+3. Controllare il riepilogo dei permessi e confermare l'accesso. Nessun modulo viene aperto automaticamente.
+4. Il wrapper abilita ciascun modulo per il quale sono soddisfatti i requisiti di lettura, indicando **Sola lettura** o **Lettura e scrittura secondo i permessi verificati**.
+5. Premere **Apri modulo** sulla scheda desiderata. Il modulo usa la sessione gia verificata, senza un secondo login o nuovi consensi.
 
-## App dedicata
+I moduli sono ospitati in runspace STA separati nello stesso processo, cosi possono condividere il contesto statico del Graph SDK senza passare token su riga di comando o tramite file. Chiudere i moduli prima di cambiare accesso/impostazioni, aggiornare o uscire dal wrapper. Questa scelta mantiene la sessione coerente e non interrompe operazioni attive.
 
-**Accesso delegato (app dedicata)** usa Tenant ID e Client ID configurati con lo scope `https://graph.microsoft.com/.default`. Se esiste almeno un consenso Graph per quell'app e utente, Microsoft restituisce gli ambiti gia concessi. Il wrapper non aggiunge permessi quando si preme un comando e non forza un consenso aggiuntivo. Se nessun consenso esiste, Microsoft puo richiedere l'approvazione iniziale dell'amministratore; il modulo resta chiuso se l'accesso non riesce.
+## Permessi e modalita
 
-Se `Directory.AccessAsUser.All` non e stato autorizzato, il riepilogo segnala **Eliminazione Entra ID: non disponibile**. La funzione non e stata rimossa: resta disponibile con un accesso che possiede l'ambito e i diritti necessari. Non viene avviato un accesso alternativo all'app Microsoft per aggirare un consenso mancante.
+Il manifest di ogni modulo dichiara `GraphPermissions`, `ReadPermissionIds` e `WritePermissionIds`. Basta un requisito di lettura disponibile tra quelli dichiarati per abilitare il modulo; le singole fonti/funzioni mantengono i loro controlli specifici. Senza un requisito di scrittura disponibile il modulo si apre in sola lettura: eliminazioni e archiviazioni GLPI sono disabilitate e rifiutate anche dai comandi di scrittura.
 
-**Accesso utente (app Microsoft)** conserva il metodo precedente. Il wrapper richiede in un unico accesso iniziale gli ambiti dichiarati dal modulo, compreso quello di eliminazione Entra. I consensi dell'app Microsoft e dell'app dedicata restano separati.
-
-Gli ambiti presenti non dimostrano da soli tutti i diritti dell'utente. Le prove iniziali verificano le letture; le eliminazioni dipendono dai ruoli Entra/Intune e gli errori delle API vengono riportati senza riaprire il consenso. AD usa l'account Windows e GLPI i token configurati, con le rispettive autorizzazioni.
-
-## Processi e sessione
-
-Il menu principale avvia ogni modulo in un processo separato per conservarne isolamento e ciclo di vita. L'accesso avviene in **AssistenteIT/Invoke-Module.ps1**, nello stesso processo che poi ospita il modulo. La finestra di verifica usa un runspace; il contesto statico del Graph SDK resta disponibile ai runspace del modulo nello stesso processo. Non si passano token su riga di comando o tramite file temporanei.
-
-L'accesso puo essere riutilizzato dalla cache personale Microsoft; ogni apertura verifica comunque configurazione e autorizzazioni. Modificare tenant o app richiede di chiudere e riaprire il modulo tramite il wrapper. I programmi gia aperti non cambiano identita in seguito a un salvataggio delle impostazioni.
-
-## Requisiti dei moduli futuri
-
-Il manifest `assistente-it.json` puo dichiarare `GraphPermissions` per ogni modulo:
+Esempio dei riferimenti ai requisiti dichiarati in `GraphPermissions`:
 
 ```json
-"UsesGraphAccess": true,
-"GraphPermissions": [
-  {
-    "Id": "entra-read",
-    "Name": "Ricerca Entra ID",
-    "AnyOf": ["Device.Read.All", "Directory.Read.All"]
-  }
-]
+"ReadPermissionIds": ["entra-read", "intune-read"],
+"WritePermissionIds": ["entra-remove", "intune-remove"]
 ```
 
-`AnyOf` elenca ambiti alternativi sufficienti. Nel login con app Microsoft il wrapper combina gli ambiti dei requisiti ed elimina quelli ridondanti gia coperti da un'alternativa piu ampia; l'app dedicata usa sempre `.default` e i consensi gia presenti. ID, nomi e ambiti vengono validati dal lettore del manifest.
+Gli ambiti OAuth sono concessi all'app: non descrivono da soli tutti i diritti di ogni collega. I ruoli Entra/Intune e le autorizzazioni effettive su AD/GLPI restano il controllo del servizio. La verifica iniziale esegue soltanto GET limitate su Entra e Intune, senza provare cancellazioni o leggere password BitLocker.
 
-Con `UsesGraphAccess` il wrapper passa il riepilogo al parametro `GraphAccess` del modulo. I moduli senza `GraphPermissions` non avviano Graph. Il wrapper resta generico e non dipende da Computer Explorer.
+## Gruppi facoltativi per modulo
 
-## Autenticazione con certificato
+Per attribuire accessi diversi ai colleghi anche quando l'app ha gli stessi ambiti, un modulo puo dichiarare gruppi Entra separati. Identificativi fittizi:
 
-La modalita applicativa con certificato e stata rimossa, insieme a campi e codice relativi. Le configurazioni di accesso utente restano valide; gli eventuali vecchi campi del certificato vengono ignorati e rimossi al salvataggio. Una configurazione ancora impostata su `Certificate` deve essere corretta esplicitamente da Impostazioni: il programma non cambia automaticamente identita. I certificati nello store Windows non vengono modificati o cancellati.
+```json
+"ReadGroupIds": ["33333333-3333-4333-8333-333333333333"],
+"WriteGroupIds": ["44444444-4444-4444-8444-444444444444"]
+```
 
-## Collaudo
+- Membro del gruppo lettori: sola lettura, anche se il token dell'app contiene ambiti di scrittura.
+- Membro del gruppo operatori: scrittura soltanto se sono disponibili anche i requisiti Graph richiesti.
+- Non assegnato: modulo disabilitato.
+- Appartenenze non verificabili: modulo disabilitato.
 
-Le prove automatiche usano risposte simulate e finestre Windows reali: coprono accesso iniziale, riepilogo parziale, letture, annullamento, mancato consenso, riuso della sessione e assenza di nuove richieste nelle funzioni. Il collaudo aziendale rimane necessario per app, consensi, ruoli e criteri di accesso del tenant.
+Un operatore puo aprire il modulo senza essere anche nel gruppo lettori. Se e configurato soltanto un gruppo lettori, nessuno riceve accesso in scrittura tramite questa regola. Senza gruppi configurati si applicano i soli requisiti di ambito dichiarati. I gruppi non vengono creati ne assegnati dall'app: il sistemista deve concordare gli accessi e mantenere coerenti le autorizzazioni dei servizi.
 
-Riferimenti: [scope .default e consensi](https://learn.microsoft.com/en-us/entra/identity-platform/scopes-oidc#the-default-scope), [autenticazione Graph PowerShell](https://learn.microsoft.com/en-us/powershell/microsoftgraph/authentication-commands).
+Le appartenenze dell'utente autenticato vengono lette con `GET /me/transitiveMemberOf?$select=id`, comprese quelle transitive. Serve il consenso `User.Read` o un ambito compatibile; non si richiedono automaticamente autorizzazioni Directory piu ampie. La verifica gruppi viene eseguita soltanto quando almeno un modulo configura una regola di gruppo. La configurazione attuale di Computer Explorer non contiene gruppi aziendali inventati o preassegnati.
+
+## Modalita di autenticazione
+
+**Accesso delegato (app dedicata)** usa Tenant ID, Client ID e `https://graph.microsoft.com/.default`. Se esiste gia un consenso Graph per quell'app e utente, Microsoft restituisce gli ambiti concessi. Non si aggiungono consensi durante l'uso dei moduli. Se nessun consenso esiste, Microsoft puo richiedere l'approvazione iniziale dell'amministratore; un errore o un annullamento mantiene i moduli disabilitati.
+
+**Accesso utente (app Microsoft)** mantiene il metodo precedente e richiede gli ambiti del catalogo nel solo accesso iniziale, eliminando le richieste ridondanti quando un ambito piu ampio copre gia un requisito. Non si passa automaticamente da un'app all'altra per aggirare un consenso mancante.
+
+La cancellazione Entra resta supportata con `Directory.AccessAsUser.All` e i relativi diritti. Se il consenso manca, la scelta Entra e indisponibile; gli altri accessi autorizzati rimangono utilizzabili. La modalita con certificato e stata rimossa in 1.0.18. Eventuali certificati nello store Windows non vengono modificati.
+
+## Finestra e aggiornamenti
+
+Finestre e collegamenti usano l'identita Windows **AssistenteIT.Desktop** e l'icona del programma. PowerShell resta il motore interno; il launcher non e stato trasformato in un nuovo host eseguibile. Lo stile Windows viene inizializzato prima delle finestre.
+
+**Cerca aggiornamenti** avvia il controllo. Quando una versione e disponibile compare **Installa aggiornamento**. L'installazione conserva configurazione e credenziali personali e richiede la chiusura dei moduli.
+
+Riferimenti: [AppUserModelID](https://learn.microsoft.com/en-us/windows/win32/shell/appids), [scope .default](https://learn.microsoft.com/en-us/entra/identity-platform/scopes-oidc#the-default-scope), [appartenenze dell'utente](https://learn.microsoft.com/en-us/graph/api/user-list-transitivememberof).

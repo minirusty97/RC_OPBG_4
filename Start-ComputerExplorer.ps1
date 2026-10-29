@@ -140,9 +140,14 @@ function Update-ExplorerCounters {
     $conflicts=@($grid.SelectedRows | Where-Object { $null -ne $_.Tag -and $null -ne $_.Tag.PSObject.Properties['SerialConflict'] -and $_.Tag.SerialConflict }).Count
     if ($conflicts -gt 0) { $counterLabel.Text+=' | Conflitti seriale: '+$conflicts }
     $deleteButton.Enabled = $conflicts -eq 0 -and $selected -gt 0 -and $complete -and -not $script:Busy -and -not $script:RemovalNeedsRefresh
+    if (Test-UiReadOnly) { $deleteButton.Enabled=$false }
     $archiveButton.Enabled=$deleteButton.Enabled
     $readArchiveButton.Enabled=$selected -eq 1 -and $complete -and -not $script:Busy
     $findKeysButton.Enabled=-not $script:Busy -and ($selected -eq 1 -or $nameBox.Text.Trim().Length -ge $config.MinimumCharacters)
+}
+
+function Test-UiReadOnly {
+    return ($null -ne $GraphAccess -and $null -ne $GraphAccess.PSObject.Properties['ReadOnly'] -and [bool]$GraphAccess.ReadOnly)
 }
 
 function Test-UiGraphPermission {
@@ -278,6 +283,7 @@ function Add-RemovalReportRow {
 
 function Start-RemovalOperation {
     param([ValidateSet('PrepareRemoval','Remove','PrepareArchive','Archive','ReadArchive','ReadKeys')][string]$Operation, [string[]]$Names, [string[]]$Sources, [string]$PlanId, [switch]$IncludeAdChildren, [switch]$ConfirmGlpiMapping, [int]$ComputerId)
+    if ((Test-UiReadOnly) -and $Operation -in @('PrepareRemoval','Remove','PrepareArchive','Archive')) { throw 'Modulo in sola lettura: modifiche e archiviazioni non consentite.' }
     try {
         $script:Operation = $Operation; $script:Stopping = $false
         $script:Queue = New-Object 'System.Collections.Concurrent.ConcurrentQueue[object]'
@@ -288,9 +294,10 @@ function Start-RemovalOperation {
             $removalGrid.Rows.Clear(); $tabs.SelectedTab = $removalTab
         }
         $workerCode = {
-            param($ModulePath, $OperationName, $Names, $Sources, $ConfigFile, $PlanId, $Queue, $Cancellation, $IncludeAdChildren, $Credentials, $ConfirmMapping, $ComputerId)
+            param($ModulePath, $OperationName, $Names, $Sources, $ConfigFile, $PlanId, $Queue, $Cancellation, $IncludeAdChildren, $Credentials, $ConfirmMapping, $ComputerId, $SessionReadOnly)
             $ErrorActionPreference = 'Stop'
             Import-Module $ModulePath -ErrorAction Stop
+            Set-ExplorerRemovalReadOnly -ReadOnly:$SessionReadOnly
             if ($OperationName -in @('PrepareRemoval','PrepareArchive')) {
                 $arguments=@{Names=$Names;Sources=$Sources;ConfigPath=$ConfigFile;ProgressQueue=$Queue}
                 if ($null -ne $Credentials) { $arguments.GlpiCredentials=$Credentials }
@@ -314,7 +321,7 @@ function Start-RemovalOperation {
                 Invoke-ExplorerRemovalPlan @arguments
             }
         }
-        [void]$script:Pipeline.AddScript($workerCode.ToString()).AddArgument((Join-Path $PSScriptRoot 'ComputerExplorer.Removal.psm1')).AddArgument($Operation).AddArgument($Names).AddArgument($Sources).AddArgument($ConfigPath).AddArgument($PlanId).AddArgument($script:Queue).AddArgument($script:RemovalCancellation).AddArgument([bool]$IncludeAdChildren).AddArgument($script:GlpiCredentials).AddArgument([bool]$ConfirmGlpiMapping).AddArgument($ComputerId)
+        [void]$script:Pipeline.AddScript($workerCode.ToString()).AddArgument((Join-Path $PSScriptRoot 'ComputerExplorer.Removal.psm1')).AddArgument($Operation).AddArgument($Names).AddArgument($Sources).AddArgument($ConfigPath).AddArgument($PlanId).AddArgument($script:Queue).AddArgument($script:RemovalCancellation).AddArgument([bool]$IncludeAdChildren).AddArgument($script:GlpiCredentials).AddArgument([bool]$ConfirmGlpiMapping).AddArgument($ComputerId).AddArgument((Test-UiReadOnly))
         $script:StartedAt = [datetime]::Now; $script:StageMessage = 'Verifica degli oggetti selezionati...'
         if ($Operation -eq 'Remove') { $script:StageMessage = 'Backup BitLocker, verifica e successiva eliminazione...' }
         elseif ($Operation -eq 'Archive') { $script:StageMessage='Archiviazione BitLocker su GLPI...' }
@@ -523,6 +530,7 @@ $form = New-Object Windows.Forms.Form
 $applicationIcon = New-Object Drawing.Icon((Join-Path $PSScriptRoot 'assets/AssistenteIT.ico'))
 $form.Icon = $applicationIcon
 $form.Text = 'Computer Explorer - AD / Entra ID / Intune / GLPI'
+if (Test-UiReadOnly) { $form.Text+=' - Sola lettura' }
 $form.Size = New-Object Drawing.Size(1440, 850)
 $form.MinimumSize = New-Object Drawing.Size(1000, 640)
 $form.StartPosition = 'CenterScreen'; $form.Font = New-Object Drawing.Font('Segoe UI', 9)
@@ -554,8 +562,8 @@ foreach ($name in @('AD', 'Entra', 'Intune', 'GLPI')) {
 $counterLabel = New-Object Windows.Forms.Label; $counterLabel.AutoSize = $true
 $counterLabel.Text = 'Risultati: 0 | Selezionati: 0'; $counterLabel.Margin = New-Object Windows.Forms.Padding(20, 5, 12, 0)
 $options.Controls.Add($counterLabel)
-$deleteButton = New-Object Windows.Forms.Button; $deleteButton.Text = 'Elimina...'; $deleteButton.Width = 100; $deleteButton.Enabled = $false
-$archiveButton=New-Object Windows.Forms.Button; $archiveButton.Text='Archivia BitLocker'; $archiveButton.Width=135; $archiveButton.Enabled=$false
+$deleteButton = New-Object Windows.Forms.Button; $deleteButton.Name='DeleteComputers';$deleteButton.Text = 'Elimina...'; $deleteButton.Width = 100; $deleteButton.Enabled = $false
+$archiveButton=New-Object Windows.Forms.Button; $archiveButton.Name='ArchiveBitLocker';$archiveButton.Text='Archivia BitLocker'; $archiveButton.Width=135; $archiveButton.Enabled=$false
 $readArchiveButton=New-Object Windows.Forms.Button; $readArchiveButton.Text='Leggi archivio'; $readArchiveButton.Width=115; $readArchiveButton.Enabled=$false
 $options.Controls.AddRange(@($deleteButton,$archiveButton,$readArchiveButton))
 $splitter = New-Object Windows.Forms.SplitContainer

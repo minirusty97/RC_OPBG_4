@@ -9,7 +9,8 @@ Set-StrictMode -Version 2.0
 $tokens = $null; $errors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile((Resolve-Path $UiPath).ProviderPath, [ref]$tokens, [ref]$errors)
 if ($errors.Count -gt 0) { throw 'UI script does not parse.' }
-foreach ($name in @('Update-ExplorerCounters', 'Set-SearchBusy')) {
+$GraphAccess=$null
+foreach ($name in @('Update-ExplorerCounters', 'Set-SearchBusy', 'Test-UiReadOnly')) {
     $definition = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
     if ($null -eq $definition) { throw ('UI helper not found: ' + $name) }
     Set-Item -Path ('Function:' + $name) -Value $definition.Body.GetScriptBlock()
@@ -147,3 +148,14 @@ try {
     'PASS: a failed or stopped worker invalidates a previously queued final update.'
 }
 finally { Close-TestOperation }
+
+$GraphAccess=[pscustomobject]@{ReadOnly=$true}
+Start-TestOperation
+try {
+    $script:Release.Set()
+    if (-not $script:Invocation.AsyncWaitHandle.WaitOne(5000)) { throw 'Read-only worker did not finish.' }
+    & $tick
+    if ($script:Busy -or -not $script:Latest.Complete -or $deleteButton.Enabled -or $archiveButton.Enabled -or -not $readArchiveButton.Enabled -or -not $findKeysButton.Enabled) { throw 'Completed read-only search enabled writing or disabled recovery reads.' }
+    'PASS: completing a read-only search keeps removal and archive writes disabled while recovery reads remain available.'
+}
+finally { Close-TestOperation; $GraphAccess=$null }

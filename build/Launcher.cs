@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 [assembly: AssemblyTitle("Assistente IT")]
@@ -11,11 +12,13 @@ using System.Windows.Forms;
 
 internal static class Launcher
 {
+    [DllImport("shell32.dll", CharSet=CharSet.Unicode)] private static extern int SetCurrentProcessExplicitAppUserModelID(string id);
     [STAThread]
     private static int Main(string[] args)
     {
         try
         {
+            Marshal.ThrowExceptionForHR(SetCurrentProcessExplicitAppUserModelID("AssistenteIT.Desktop"));
             string app = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "app");
             string script = Path.Combine(app, "Start-AssistenteIT.ps1");
             if (!File.Exists(script)) throw new FileNotFoundException("Installazione incompleta. Reinstallare Assistente IT.");

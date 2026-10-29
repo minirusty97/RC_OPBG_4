@@ -96,6 +96,7 @@ try {
     if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
         [void][IO.Directory]::CreateDirectory((Join-Path $fixture 'AssistenteIT'))
         Copy-Item -LiteralPath (Join-Path $InstallRoot 'AssistenteIT/AssistenteIT.Core.psm1') -Destination (Join-Path $fixture 'AssistenteIT/AssistenteIT.Core.psm1')
+        Copy-Item -LiteralPath (Join-Path $InstallRoot 'AssistenteIT/Window.Identity.cs') -Destination (Join-Path $fixture 'AssistenteIT/Window.Identity.cs')
         Copy-Item -LiteralPath (Join-Path $InstallRoot 'AssistenteIT/Invoke-Module.ps1') -Destination (Join-Path $fixture 'AssistenteIT/Invoke-Module.ps1')
         Copy-Item -LiteralPath (Join-Path $InstallRoot 'Glpi.Credentials.ps1') -Destination (Join-Path $fixture 'Glpi.Credentials.ps1')
         Copy-Item -LiteralPath (Join-Path $InstallRoot 'Graph.Authentication.ps1') -Destination (Join-Path $fixture 'Graph.Authentication.ps1')

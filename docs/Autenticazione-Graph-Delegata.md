@@ -52,7 +52,7 @@ L'assegnazione all'app decide chi puo accedere; i ruoli Entra/Intune e gli ambit
 1. Aggiornare almeno alla versione 1.0.17 e chiudere i moduli aperti.
 2. Aprire **Impostazioni > Microsoft Graph** e selezionare **Accesso delegato (app dedicata)**.
 3. Inserire Tenant ID e Client ID e salvare. I controlli del certificato sono stati rimossi.
-4. Dal wrapper scegliere **Accesso e apri**: completare il login con l'account del tecnico e controllare il riepilogo prima di aprire Computer Explorer.
+4. Dal wrapper scegliere **Accesso** dalla barra inferiore: completare il login con l'account del tecnico e confermare il riepilogo, poi premere **Apri modulo** sulla scheda abilitata di Computer Explorer.
 5. Verificare il recupero chiavi e le autorizzazioni con account dei diversi profili concordati. Per i profili limitati controllare anche che le operazioni escluse vengano rifiutate. Il backup GLPI obbligatorio continua a precedere ogni eliminazione.
 
 Esempio con identificativi fittizi:
