@@ -26,9 +26,9 @@ $config=Join-Path $fixture 'config.json'
 $previousModulePath=$env:PSModulePath;$env:PSModulePath=$fixture+[IO.Path]::PathSeparator+$previousModulePath
 . (Join-Path $root 'AssistenteIT/Graph.Access.ps1')
 $moduleInfo=(Get-Content (Join-Path $root 'assistente-it.json') -Raw | ConvertFrom-Json).Modules[0]
-$timer=New-Object Windows.Forms.Timer;$timer.Interval=50
+$bootstrapTestTimer=New-Object Windows.Forms.Timer;$bootstrapTestTimer.Interval=50
 $testState=@{Mode='';Error='';Seen=$false;Watch=[Diagnostics.Stopwatch]::StartNew()}
-$timer.Add_Tick({
+$bootstrapTestTimer.Add_Tick({
  $dialogs=@([Windows.Forms.Application]::OpenForms | Where-Object Text -eq 'Assistente IT - Accesso e verifica')
  if ($dialogs.Count -ne 1) { return }
  $dialog=$dialogs[0]
@@ -39,23 +39,23 @@ $timer.Add_Tick({
   if ($testState.Mode -eq 'Success' -and $open.Enabled) {
    $rows=$dialog.Controls.Find('GraphAccessPermissions',$true)[0].Rows
    if ($rows.Count -ne 5 -or @($rows | Where-Object { $_.Cells['Name'].Value -eq 'Eliminazione Entra ID' -and $_.Cells['State'].Value -eq 'Non disponibile' }).Count -ne 1) { throw 'Missing consent is not reported before opening the module.' }
-   $testState.Seen=$true;$timer.Stop();$open.PerformClick()
+   $testState.Seen=$true;$bootstrapTestTimer.Stop();$open.PerformClick()
   }
   elseif ($testState.Mode -eq 'Denied' -and $status.Text -like 'Accesso o verifica non riusciti*') {
    if ($open.Enabled) { throw 'Module opening is offered after failed authentication.' }
-   $testState.Seen=$true;$timer.Stop();@($dialog.Controls | Where-Object Text -eq 'Annulla')[0].PerformClick()
+   $testState.Seen=$true;$bootstrapTestTimer.Stop();@($dialog.Controls | Where-Object Text -eq 'Annulla')[0].PerformClick()
   }
   elseif ($testState.Mode -eq 'Hold' -and [BootstrapUiFixture]::Connections -gt 2) {
    if ($open.Enabled) { throw 'Module opening was offered while initial login was pending.' }
-   $testState.Seen=$true;$timer.Stop();@($dialog.Controls | Where-Object Text -eq 'Annulla')[0].PerformClick()
+   $testState.Seen=$true;$bootstrapTestTimer.Stop();@($dialog.Controls | Where-Object Text -eq 'Annulla')[0].PerformClick()
   }
  }
- catch { $testState.Error=$_.Exception.Message;$timer.Stop();@($dialog.Controls | Where-Object Text -eq 'Annulla')[0].PerformClick() }
+ catch { $testState.Error=$_.Exception.Message;$bootstrapTestTimer.Stop();@($dialog.Controls | Where-Object Text -eq 'Annulla')[0].PerformClick() }
 })
 try {
  foreach ($mode in @('Success','Denied','Hold')) {
   $testState.Mode=$mode;$testState.Seen=$false;$testState.Watch.Restart();[BootstrapUiFixture]::Mode=$mode;[BootstrapUiFixture]::Context=$null
-  $timer.Start();$access=Show-AssistenteITModuleAccess -InstallRoot $root -Module $moduleInfo -ConfigPath $config
+  $bootstrapTestTimer.Start();$access=Show-AssistenteITModuleAccess -InstallRoot $root -Module $moduleInfo -ConfigPath $config
   if (-not $testState.Seen -or $testState.Error) { throw ('Native bootstrap failed: '+$testState.Error) }
   if ($mode -eq 'Success') {
    if ($null -eq $access -or $access.Permissions.Count -ne 5) { throw 'Verified access did not reach the module launcher.' }
@@ -89,4 +89,4 @@ try {
  finally { $pickTimer.Stop();$pickTimer.Dispose();$form.Dispose() }
  'PASS: the existing Entra deletion feature is retained but its choice is disabled when the initial report lacks consent; AD and Intune remain available.'
 }
-finally { $timer.Stop();$timer.Dispose();$env:PSModulePath=$previousModulePath;Remove-Module Microsoft.Graph.Authentication -Force -ErrorAction SilentlyContinue;Remove-Item $fixture -Recurse -Force }
+finally { $bootstrapTestTimer.Stop();$bootstrapTestTimer.Dispose();$env:PSModulePath=$previousModulePath;Remove-Module Microsoft.Graph.Authentication -Force -ErrorAction SilentlyContinue;Remove-Item $fixture -Recurse -Force }
