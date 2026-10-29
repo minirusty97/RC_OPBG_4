@@ -4,6 +4,15 @@ Import-Module (Join-Path $PSScriptRoot 'ComputerExplorer.Core.psm1') -ErrorActio
 Import-Module (Join-Path $PSScriptRoot 'BitLocker.Archive.psm1') -ErrorAction Stop
 $script:RemovalPlans = @{}
 
+$script:RemovalReadOnly=$false
+function Set-ExplorerRemovalReadOnly {
+    param([switch]$ReadOnly)
+    if ($ReadOnly) { $script:RemovalReadOnly=$true }
+}
+function Assert-ExplorerRemovalWriteAccess {
+    if ($script:RemovalReadOnly) { throw 'Modulo in sola lettura: eliminazioni e scritture su GLPI non consentite.' }
+}
+
 function Get-RemovalValue {
     param($Object, [string]$Name, $Default = $null)
     if ($null -ne $Object) {
@@ -199,6 +208,7 @@ function New-ExplorerRemovalPlan {
         [switch]$ArchiveOnly,
         $ProgressQueue
     )
+    Assert-ExplorerRemovalWriteAccess
     $script:RemovalPlans.Clear()
     $namesToRead = @($Names | ForEach-Object {
         $name = $_.Trim()
@@ -289,6 +299,7 @@ function Read-RemovalTargetById {
 
 function Remove-RemovalTarget {
     param($Target, $Results, $ProgressQueue)
+    Assert-ExplorerRemovalWriteAccess
     if ($Target.Source -eq 'AD') {
         # Niente cancellazione ricorsiva: eliminare esclusivamente i GUID confermati,
         # dai discendenti più profondi al computer. Eventuali nuovi figli restano intatti.
@@ -335,6 +346,7 @@ function Invoke-ExplorerRemovalPlan {
         [switch]$IncludeAdChildren,
         [switch]$ConfirmGlpiMapping
     )
+    Assert-ExplorerRemovalWriteAccess
     if (-not $script:RemovalPlans.ContainsKey($PlanId)) { throw 'Anteprima non valida o già utilizzata. Ripetere la verifica.' }
     $plan = $script:RemovalPlans[$PlanId]
     $script:RemovalPlans.Remove($PlanId)
@@ -442,4 +454,4 @@ function Invoke-ExplorerRemovalPlan {
     }
 }
 
-Export-ModuleMember -Function New-ExplorerRemovalPlan, Invoke-ExplorerRemovalPlan
+Export-ModuleMember -Function Set-ExplorerRemovalReadOnly, New-ExplorerRemovalPlan, Invoke-ExplorerRemovalPlan

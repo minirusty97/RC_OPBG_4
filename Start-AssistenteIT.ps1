@@ -13,6 +13,7 @@ Enable-AssistenteITDependencies $PSScriptRoot
 $manifest = Read-AssistenteITManifest $PSScriptRoot
 $activity = Open-AssistenteITActivity
 $paths = Initialize-AssistenteIT -InstallRoot $PSScriptRoot -DataRoot $DataRoot
+Initialize-AssistenteITWindowIdentity -InstallRoot $PSScriptRoot
 $prerequisites = Get-AssistenteITPrerequisites
 
 function Show-AssistenteITSettings {
@@ -97,15 +98,37 @@ function Show-AssistenteITSettings {
 $script:UpdateWorker=$null; $script:UpdatePipeline=$null; $script:UpdateInvocation=$null
 $script:UpdateInfo=$null; $script:DownloadedUpdate=$null; $script:UpdateOperation=''
 $script:UpdateQueue=New-Object 'System.Collections.Concurrent.ConcurrentQueue[object]'
-$script:ModuleProcesses=New-Object 'System.Collections.Generic.List[object]'
+$script:ModuleTasks=New-Object 'System.Collections.Generic.List[object]'
+$script:Access=$null
+$script:ModuleButtons=@{}
+$script:ModuleAccessLabels=@{}
 
 function Get-AssistenteITOpenModules {
     $running=0
-    foreach ($process in @($script:ModuleProcesses.ToArray())) {
-        if ($process.HasExited) { $process.Dispose(); [void]$script:ModuleProcesses.Remove($process) }
+    foreach ($task in @($script:ModuleTasks.ToArray())) {
+        if ($task.Invocation.IsCompleted) {
+            [void]$script:ModuleTasks.Remove($task)
+            try { $null=$task.Pipeline.EndInvoke($task.Invocation);if ($task.Pipeline.Streams.Error.Count) { throw $task.Pipeline.Streams.Error[0] } }
+            catch { $status.Text='Modulo '+$task.ModuleId+': '+$_.Exception.Message }
+            finally { $task.Pipeline.Dispose();$task.Runspace.Close();$task.Runspace.Dispose() }
+        }
         else { $running++ }
     }
     return $running
+}
+
+function Update-AssistenteITModuleAvailability {
+    foreach ($entry in $manifest.Modules) {
+        $verified=Get-AssistenteITModuleAccess -Module $entry -Access $script:Access
+        $script:ModuleButtons[$entry.Id].Enabled=$verified.CanOpen
+        $label=$script:ModuleAccessLabels[$entry.Id]
+        $label.Text='Eseguire Accesso per abilitare il modulo';$label.ForeColor=[Drawing.Color]::DimGray
+        if ($null -ne $script:Access -and -not $verified.CanOpen) { $label.Text=$verified.Reason;$label.ForeColor=[Drawing.Color]::DarkOrange }
+        elseif ($verified.CanOpen) {
+            $label.Text='Sola lettura';$label.ForeColor=[Drawing.Color]::SteelBlue
+            if ($verified.AccessMode -eq 'ReadWrite') { $label.Text='Lettura e scrittura secondo i permessi verificati';$label.ForeColor=[Drawing.Color]::DarkGreen }
+        }
+    }
 }
 
 function Install-AssistenteITDownloadedUpdate {
@@ -148,39 +171,64 @@ $form = New-Object Windows.Forms.Form
 $applicationIcon = New-Object Drawing.Icon((Join-Path $PSScriptRoot 'assets/AssistenteIT.ico'))
 $form.Icon = $applicationIcon
 $form.Text = '{0} - {1}' -f $manifest.Product, $manifest.Version
-$form.Size = New-Object Drawing.Size(790, 650); $form.MinimumSize=New-Object Drawing.Size(660, 535)
+$form.Size = New-Object Drawing.Size(880, 680); $form.MinimumSize=New-Object Drawing.Size(800, 600)
 $form.StartPosition='CenterScreen'; $form.Font=New-Object Drawing.Font('Segoe UI', 10)
 $layout = New-Object Windows.Forms.TableLayoutPanel
 $layout.Dock='Fill'; $layout.Padding=New-Object Windows.Forms.Padding(20); $layout.ColumnCount=1; $layout.RowCount=5
 [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 75)))
 [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent', 100)))
-[void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 48)))
+[void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 52)))
 [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 95)))
 [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 60)))
 $heading = New-Object Windows.Forms.Label; $heading.Dock='Fill'
-$heading.Text = $manifest.Product + "`r`nScegli il modulo: accesso e verifica dei permessi precedono l''apertura. Configura le connessioni da Impostazioni."
+$heading.Text = $manifest.Product + "`r`nEsegui Accesso dalla barra in basso, poi scegli un modulo abilitato."
 $heading.Font = New-Object Drawing.Font('Segoe UI', 12)
 $modulePanel = New-Object Windows.Forms.FlowLayoutPanel; $modulePanel.Dock='Fill'; $modulePanel.AutoScroll=$true; $modulePanel.FlowDirection='TopDown'; $modulePanel.WrapContents=$false
+$modulePanel.Add_SizeChanged({ foreach ($card in $modulePanel.Controls) { $card.Width=[Math]::Max(500,$modulePanel.ClientSize.Width-26);foreach ($control in $card.Controls) { if ($control -is [Windows.Forms.Button]) { $control.Left=$card.Width-167 } else { $control.Width=$card.Width-205 } } } })
 foreach ($module in $manifest.Modules) {
-    $card = New-Object Windows.Forms.GroupBox; $card.Text=$module.Name; $card.Size=New-Object Drawing.Size(685, 123)
-    $description = New-Object Windows.Forms.Label; $description.Text=$module.Description; $description.SetBounds(18, 30, 485, 67)
-    $open = New-Object Windows.Forms.Button; $open.Text='Accesso e apri'; $open.SetBounds(530, 43, 132, 35); $open.Tag=$module.Id
+    $card = New-Object Windows.Forms.GroupBox; $card.Text=$module.Name; $card.Size=New-Object Drawing.Size(785, 136)
+    $description = New-Object Windows.Forms.Label; $description.Text=$module.Description; $description.SetBounds(18, 29, 555, 44)
+    $accessLabel=New-Object Windows.Forms.Label;$accessLabel.Name='ModuleAccess-'+$module.Id;$accessLabel.SetBounds(18,82,555,34)
+    $open = New-Object Windows.Forms.Button; $open.Name='OpenModule-'+$module.Id;$open.Text='Apri modulo'; $open.SetBounds(618, 48, 145, 36); $open.Tag=$module.Id;$open.Enabled=$false
+    $script:ModuleButtons[$module.Id]=$open;$script:ModuleAccessLabels[$module.Id]=$accessLabel
     $open.Add_Click({
         param($sender, $eventArgs)
         try {
-            $info = Get-AssistenteITModuleStartInfo -InstallRoot $PSScriptRoot -ModuleId ([string]$sender.Tag) -Paths $paths
-            [void]$script:ModuleProcesses.Add([Diagnostics.Process]::Start($info))
+            $task=Start-AssistenteITModule -InstallRoot $PSScriptRoot -ModuleId ([string]$sender.Tag) -Paths $paths -Access $script:Access
+            [void]$script:ModuleTasks.Add($task)
+            $accessButton.Enabled=$false;$settingsButton.Enabled=$false
         }
         catch { [void][Windows.Forms.MessageBox]::Show($form, $_.Exception.Message, 'Avvio modulo', 'OK', 'Error') }
     })
-    $card.Controls.AddRange(@($description,$open)); $modulePanel.Controls.Add($card)
+    $card.Controls.AddRange(@($description,$accessLabel,$open)); $modulePanel.Controls.Add($card)
 }
-$toolbar = New-Object Windows.Forms.FlowLayoutPanel; $toolbar.Dock='Fill'; $toolbar.WrapContents=$false
-$settingsButton = New-Object Windows.Forms.Button; $settingsButton.Text='Impostazioni'; $settingsButton.Size=New-Object Drawing.Size(135, 34)
-$dataButton = New-Object Windows.Forms.Button; $dataButton.Text='Cartella dati'; $dataButton.Size=New-Object Drawing.Size(135, 34)
-$releaseButton = New-Object Windows.Forms.Button; $releaseButton.Text='Aggiornamenti'; $releaseButton.Size=New-Object Drawing.Size(160, 34)
-$installUpdateButton=New-Object Windows.Forms.Button; $installUpdateButton.Text='Aggiorna'; $installUpdateButton.Size=New-Object Drawing.Size(105,34); $installUpdateButton.Visible=$false
-$settingsButton.Add_Click({ try { Show-AssistenteITSettings } catch { [void][Windows.Forms.MessageBox]::Show($form, $_.Exception.Message, 'Impostazioni', 'OK', 'Error') } })
+$toolbar = New-Object Windows.Forms.FlowLayoutPanel; $toolbar.Dock='Fill'; $toolbar.WrapContents=$true
+$accessButton=New-Object Windows.Forms.Button;$accessButton.Name='SignIn';$accessButton.Text='Accesso';$accessButton.Size=New-Object Drawing.Size(105,34)
+$settingsButton = New-Object Windows.Forms.Button; $settingsButton.Text='Impostazioni'; $settingsButton.Size=New-Object Drawing.Size(115, 34)
+$dataButton = New-Object Windows.Forms.Button; $dataButton.Text='Cartella dati'; $dataButton.Size=New-Object Drawing.Size(120, 34)
+$releaseButton = New-Object Windows.Forms.Button; $releaseButton.Name='CheckUpdates';$releaseButton.Text='Cerca aggiornamenti'; $releaseButton.Size=New-Object Drawing.Size(180, 34)
+$installUpdateButton=New-Object Windows.Forms.Button; $installUpdateButton.Text='Installa aggiornamento'; $installUpdateButton.Size=New-Object Drawing.Size(180,34); $installUpdateButton.Visible=$false
+$accessButton.Add_Click({
+    if ((Get-AssistenteITOpenModules) -gt 0) { $status.Text='Chiudi i moduli prima di cambiare accesso.';return }
+    $script:Access=$null;Update-AssistenteITModuleAvailability
+    try {
+        . (Join-Path $PSScriptRoot 'AssistenteIT/Graph.Access.ps1')
+        $definition=Get-AssistenteITAccessDefinition -Modules $manifest.Modules
+        $script:Access=Show-AssistenteITModuleAccess -InstallRoot $PSScriptRoot -Module $definition -ConfigPath $paths.ConfigPath -VerifyOnly -Owner $form
+        if ($null -ne $script:Access) { $status.Text='Accesso verificato: '+$script:Access.Account+'. Moduli abilitati secondo i permessi disponibili.' }
+        else { $status.Text='Accesso non completato. I moduli restano disabilitati.' }
+    }
+    catch { $status.Text='Accesso non riuscito: '+$_.Exception.Message }
+    finally { Update-AssistenteITModuleAvailability }
+})
+$settingsButton.Add_Click({
+    try {
+        $before=[IO.File]::ReadAllText($paths.ConfigPath)
+        Show-AssistenteITSettings
+        if ($before -cne [IO.File]::ReadAllText($paths.ConfigPath)) { $script:Access=$null;Update-AssistenteITModuleAvailability;$status.Text='Impostazioni salvate. Eseguire nuovamente Accesso.' }
+    }
+    catch { [void][Windows.Forms.MessageBox]::Show($form, $_.Exception.Message, 'Impostazioni', 'OK', 'Error') }
+})
 $dataButton.Add_Click({ [void][Diagnostics.Process]::Start('explorer.exe', ('"' + $paths.DataRoot + '"')) })
 $releaseButton.Add_Click({ try { Start-AssistenteITUpdateOperation Check } catch { $status.Text=$_.Exception.Message; $releaseButton.Enabled=$true } })
 $installUpdateButton.Add_Click({
@@ -193,7 +241,7 @@ $installUpdateButton.Add_Click({
         try { Start-AssistenteITUpdateOperation Download } catch { $status.Text=$_.Exception.Message; $releaseButton.Enabled=$true; $installUpdateButton.Enabled=$true }
     }
 })
-$toolbar.Controls.AddRange(@($settingsButton,$dataButton,$releaseButton,$installUpdateButton))
+$toolbar.Controls.AddRange(@($accessButton,$settingsButton,$dataButton,$releaseButton,$installUpdateButton))
 $components = New-Object Windows.Forms.GroupBox; $components.Text='Componenti aggiuntivi'; $components.Dock='Fill'
 $componentRows=New-Object Windows.Forms.TableLayoutPanel
 $componentRows.Dock='Fill'; $componentRows.Padding=New-Object Windows.Forms.Padding(10,3,10,6)
@@ -213,6 +261,11 @@ $status.Text='Aggiornamenti: in attesa del controllo.'
 $layout.Controls.Add($heading,0,0); $layout.Controls.Add($modulePanel,0,1); $layout.Controls.Add($toolbar,0,2)
 $layout.Controls.Add($components,0,3); $layout.Controls.Add($status,0,4)
 $form.Controls.Add($layout)
+Initialize-AssistenteITWindowIdentity -InstallRoot $PSScriptRoot -Window $form
+Update-AssistenteITModuleAvailability
+$moduleTimer=New-Object Windows.Forms.Timer;$moduleTimer.Interval=300
+$moduleTimer.Add_Tick({ $running=Get-AssistenteITOpenModules;$accessButton.Enabled=$running -eq 0;$settingsButton.Enabled=$running -eq 0 });$moduleTimer.Start()
+$form.Add_FormClosing({param($sender,$eventArgs) if ((Get-AssistenteITOpenModules) -gt 0) { $eventArgs.Cancel=$true;$status.Text='Chiudi i moduli aperti prima di uscire da Assistente IT.' } })
 $updateTimer=New-Object Windows.Forms.Timer; $updateTimer.Interval=250
 $updateTimer.Add_Tick({
     $progress=$null
@@ -227,9 +280,9 @@ $updateTimer.Add_Tick({
         if ($output.Count -ne 1) { throw 'Risposta aggiornamento incompleta.' }
         if ($operation -eq 'Check') {
             $script:UpdateInfo=$output[0]; $installUpdateButton.Visible=$script:UpdateInfo.Available
-            $installUpdateButton.Text='Aggiorna'
-            if ($script:UpdateInfo.Available) { $status.Text='Disponibile Assistente IT '+$script:UpdateInfo.Version+'. Premi Aggiorna per installare.' }
-            else { $status.Text='Assistente IT e aggiornato (versione '+$manifest.Version+').' }
+            $installUpdateButton.Text='Installa aggiornamento'
+            if ($script:UpdateInfo.Available) { $status.Text='Disponibile Assistente IT '+$script:UpdateInfo.Version+'. Premi Installa aggiornamento per installare.' }
+            else { $status.Text='Assistente IT è aggiornato (versione '+$manifest.Version+').' }
         }
         else { $script:DownloadedUpdate=$output[0]; $installUpdateButton.Text='Installa'; $status.Text='Download verificato. Preparazione installazione...' }
         $success=$true
@@ -245,7 +298,7 @@ $form.Add_Shown({ if (-not $SmokeTestOutput) { try { Start-AssistenteITUpdateOpe
 try {
     if ($SmokeTestOutput) {
         $form.CreateControl(); $form.PerformLayout()
-        [pscustomobject]@{Product=$manifest.Product;Version=$manifest.Version;WindowTitle=$form.Text;ModuleCount=$modulePanel.Controls.Count;GraphAvailable=$prerequisites.GraphAvailable;DataRoot=$paths.DataRoot;ConfigPath=$paths.ConfigPath;EnvPath=$paths.EnvPath} | ConvertTo-Json | Set-Content -LiteralPath $SmokeTestOutput -Encoding UTF8
+        [pscustomobject]@{Product=$manifest.Product;Version=$manifest.Version;WindowTitle=$form.Text;ModuleCount=$modulePanel.Controls.Count;GraphAvailable=$prerequisites.GraphAvailable;LoginButton=$accessButton.Text;UpdateButton=$releaseButton.Text;ModulesEnabled=@($script:ModuleButtons.Values | Where-Object Enabled).Count;AppUserModelId=[AssistenteIT.WindowIdentity]::CurrentId();DataRoot=$paths.DataRoot;ConfigPath=$paths.ConfigPath;EnvPath=$paths.EnvPath} | ConvertTo-Json | Set-Content -LiteralPath $SmokeTestOutput -Encoding UTF8
     }
     else { [void]$form.ShowDialog() }
 }
@@ -253,6 +306,6 @@ finally {
     $updateTimer.Stop(); $updateTimer.Dispose()
     if ($null -ne $script:UpdatePipeline) { $script:UpdatePipeline.Stop(); $script:UpdatePipeline.Dispose() }
     if ($null -ne $script:UpdateWorker) { $script:UpdateWorker.Close(); $script:UpdateWorker.Dispose() }
-    foreach ($process in $script:ModuleProcesses) { $process.Dispose() }
+    $moduleTimer.Stop();$moduleTimer.Dispose()
     $form.Dispose(); $applicationIcon.Dispose(); $activity.Dispose()
 }

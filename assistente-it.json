@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 1,
   "Product": "Assistente IT",
-  "Version": "1.0.18",
+  "Version": "1.0.19",
   "ReleasesUrl": "https://github.com/minirusty97/RC_OPBG_4/releases/latest",
   "GraphVersion": "2.41.1",
   "Modules": [
@@ -52,6 +52,14 @@
             "Directory.AccessAsUser.All"
           ]
         }
+      ],
+      "ReadPermissionIds": [
+        "entra-read",
+        "intune-read"
+      ],
+      "WritePermissionIds": [
+        "entra-remove",
+        "intune-remove"
       ]
     }
   ]

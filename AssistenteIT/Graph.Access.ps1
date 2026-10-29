@@ -1,14 +1,15 @@
 ﻿#requires -version 5.1
 function Show-AssistenteITModuleAccess {
     [CmdletBinding()]
-    param([Parameter(Mandatory=$true)][string]$InstallRoot,[Parameter(Mandatory=$true)]$Module,[Parameter(Mandatory=$true)][string]$ConfigPath)
+    param([Parameter(Mandatory=$true)][string]$InstallRoot,[Parameter(Mandatory=$true)]$Module,[Parameter(Mandatory=$true)][string]$ConfigPath,[switch]$VerifyOnly,$Owner)
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
+    [Windows.Forms.Application]::EnableVisualStyles()
     $dialog=New-Object Windows.Forms.Form
     $dialog.Text='Assistente IT - Accesso e verifica';$dialog.ClientSize=New-Object Drawing.Size(760,500)
-    $dialog.StartPosition='CenterScreen';$dialog.Font=New-Object Drawing.Font('Segoe UI',9)
+    $dialog.StartPosition='CenterScreen';$dialog.Font=New-Object Drawing.Font('Segoe UI',10)
     $icon=New-Object Drawing.Icon((Join-Path $InstallRoot 'assets/AssistenteIT.ico'));$dialog.Icon=$icon
-    $title=New-Object Windows.Forms.Label;$title.Text='Accesso prima di aprire '+$Module.Name;$title.SetBounds(18,14,724,28)
+    $title=New-Object Windows.Forms.Label;$title.Text='Accesso Microsoft e verifica autorizzazioni';$title.SetBounds(18,14,724,28)
     $status=New-Object Windows.Forms.Label;$status.Name='GraphAccessStatus';$status.Text='Preparazione accesso Microsoft...';$status.SetBounds(18,46,724,56)
     $grid=New-Object Windows.Forms.DataGridView;$grid.Name='GraphAccessPermissions';$grid.SetBounds(18,112,724,225)
     $grid.ReadOnly=$true;$grid.AllowUserToAddRows=$false;$grid.AllowUserToDeleteRows=$false;$grid.RowHeadersVisible=$false
@@ -20,6 +21,7 @@ function Show-AssistenteITModuleAccess {
     $browserButton=New-Object Windows.Forms.Button;$browserButton.Text='Apri accesso Microsoft';$browserButton.Visible=$false;$browserButton.SetBounds(230,411,190,30)
     $browserButton.Add_Click({ [void][Diagnostics.Process]::Start('https://microsoft.com/devicelogin') })
     $open=New-Object Windows.Forms.Button;$open.Name='OpenVerifiedModule';$open.Text='Apri modulo';$open.Enabled=$false;$open.SetBounds(420,454,185,32)
+    if ($VerifyOnly) { $open.Text='Conferma accesso' }
     $cancel=New-Object Windows.Forms.Button;$cancel.Text='Annulla';$cancel.SetBounds(617,454,125,32)
     $dialog.Controls.AddRange(@($title,$status,$grid,$hint,$codeBox,$browserButton,$open,$cancel))
     $state=@{Pipeline=$null;Runspace=$null;Invocation=$null;Stop=$null;Cancelled=$false;Accepted=$false;Result=$null;BrowserShown=$false}
@@ -64,7 +66,7 @@ function Show-AssistenteITModuleAccess {
                 else { $grid.Rows[$index].DefaultCellStyle.BackColor=[Drawing.Color]::Honeydew }
             }
             $status.Text=('Account: {0}. App: {1}.{2}Verifica completata; nessuna richiesta di nuovi permessi verra avviata nel modulo.' -f $state.Result.Account,$state.Result.AppName,[Environment]::NewLine)
-            if (@($state.Result.Permissions | Where-Object { -not $_.Available }).Count) { $open.Text='Apri funzioni disponibili' }
+            if (-not $VerifyOnly -and @($state.Result.Permissions | Where-Object { -not $_.Available }).Count) { $open.Text='Apri funzioni disponibili' }
             $open.Enabled=$true
         }
         catch {
@@ -88,7 +90,7 @@ function Show-AssistenteITModuleAccess {
         catch { $status.Text='Preparazione accesso non riuscita: '+$_.Exception.Message }
     })
     try {
-        [void]$dialog.ShowDialog()
+        if ($null -ne $Owner) { [void]$dialog.ShowDialog($Owner) } else { [void]$dialog.ShowDialog() }
         if ($state.Accepted) { return $state.Result }
         return $null
     }

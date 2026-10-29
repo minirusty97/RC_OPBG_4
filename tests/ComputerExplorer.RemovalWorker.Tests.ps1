@@ -15,6 +15,7 @@ $directory = Join-Path ([IO.Path]::GetTempPath()) ('removal-worker-' + [guid]::N
 [void][IO.Directory]::CreateDirectory($directory)
 $modulePath = Join-Path $directory 'SyntheticRemoval.psm1'
 $moduleText = @'
+function Set-ExplorerRemovalReadOnly { param([switch]$ReadOnly) }
 function New-ExplorerRemovalPlan {
     param($Names, $Sources, $ConfigPath, $ProgressQueue)
     [pscustomobject]@{Operation='PrepareRemoval';Names=$Names;Sources=$Sources;ConfigPath=$ConfigPath}
@@ -24,7 +25,7 @@ function Invoke-ExplorerRemovalPlan {
     param([string]$PlanId, $ProgressQueue, $Cancellation, [switch]$IncludeAdChildren)
     [pscustomobject]@{Operation='Remove';PlanId=$PlanId;IncludeAdChildren=[bool]$IncludeAdChildren}
 }
-Export-ModuleMember -Function New-ExplorerRemovalPlan, Invoke-ExplorerRemovalPlan
+Export-ModuleMember -Function Set-ExplorerRemovalReadOnly, New-ExplorerRemovalPlan, Invoke-ExplorerRemovalPlan
 '@
 try {
     [IO.File]::WriteAllText($modulePath, $moduleText, (New-Object Text.UTF8Encoding($true)))
