@@ -152,7 +152,9 @@ function Initialize-AssistenteITModuleAccess {
     $scopes=@($definitions | ForEach-Object { $_.AnyOf[0] } | Sort-Object -Unique)
     $context=Initialize-ExplorerGraphSession -Scopes $scopes -GraphAuthentication $authentication -ProgressQueue $ProgressQueue
     $permissions=@(Get-ExplorerGraphPermissionStatus -Definitions $definitions -Context $context -ProgressQueue $ProgressQueue -Probe)
-    [pscustomobject]@{Account=[string]$context.Account;AppName=[string]$context.AppName;ClientId=[string]$context.ClientId;TenantId=[string]$context.TenantId;Permissions=$permissions}
+    $appName=[string](Get-ExplorerGraphSetting $context 'AppName' '')
+    if ([string]::IsNullOrWhiteSpace($appName)) { $appName=[string]$context.ClientId }
+    [pscustomobject]@{Account=[string]$context.Account;AppName=$appName;ClientId=[string]$context.ClientId;TenantId=[string]$context.TenantId;Permissions=$permissions}
 }
 
 function Get-AssistenteITModuleStartInfo {

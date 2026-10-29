@@ -52,7 +52,7 @@ function Initialize-ExplorerGraphSession {
     catch { throw ('Modulo Microsoft.Graph.Authentication non caricabile: '+$_.Exception.Message) }
     $context=Get-MgContext -ErrorAction SilentlyContinue
     if ($null -ne $context) { Disconnect-MgGraph -ErrorAction Stop | Out-Null }
-    $cacheVariable=Get-Variable -Name CloudCache -Scope Script -ErrorAction SilentlyContinue
+    $cacheVariable=$ExecutionContext.SessionState.PSVariable.Get('CloudCache')
     if ($null -ne $cacheVariable -and $null -ne $cacheVariable.Value) { $cacheVariable.Value.Clear() }
     $arguments=@{Scopes=@($Scopes);ContextScope='CurrentUser';NoWelcome=$true;ErrorAction='Stop'}
     if ($authentication.AuthenticationMode -eq 'Delegated') {
@@ -152,6 +152,13 @@ function Get-ExplorerGraphPermissionStatus {
                 $status[0].Detail='Lettura verificata tramite una richiesta senza modifiche.'
             }
             catch { $status[0].Available=$false;$status[0].Detail='Verifica lettura non riuscita: '+$_.Exception.Message }
+        }
+    }
+    foreach ($pair in @(@{Read='entra-read';Remove='entra-remove'},@{Read='intune-read';Remove='intune-remove'})) {
+        $readStatus=@($statuses | Where-Object Id -eq $pair.Read)
+        $removeStatus=@($statuses | Where-Object Id -eq $pair.Remove)
+        if ($readStatus.Count -eq 1 -and -not $readStatus[0].Available -and $removeStatus.Count -eq 1 -and $removeStatus[0].Available) {
+            $removeStatus[0].Available=$false;$removeStatus[0].Detail='Lettura della fonte non disponibile nella verifica iniziale: ripetere la verifica prima delle eliminazioni.'
         }
     }
     return @($statuses.ToArray())

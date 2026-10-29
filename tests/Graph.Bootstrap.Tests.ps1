@@ -50,7 +50,7 @@ try {
         'PASS: missing, foreign app/tenant and app-only contexts are rejected during operations without any authentication side effect.'
         $script:Bootstrap.Context=$context;$script:Bootstrap.Mode='IntuneDenied'
         $statuses=@(Get-ExplorerGraphPermissionStatus -Definitions $Definitions -Context $context -Probe)
-        if (@($statuses | Where-Object Id -eq 'intune-read')[0].Available -or @($statuses | Where-Object Id -eq 'intune-read')[0].Detail -notlike '*RBAC denied*') { throw 'A failed read probe was reported as verified.' }
+        if (@($statuses | Where-Object Id -eq 'intune-remove')[0].Available -or @($statuses | Where-Object Id -eq 'intune-read')[0].Available -or @($statuses | Where-Object Id -eq 'intune-read')[0].Detail -notlike '*RBAC denied*') { throw 'A failed read probe was reported as verified.' }
         'PASS: initial read verification reports backend denial separately from consent and does not claim that granted scopes prove effective user roles.'
         foreach ($mode in @('Denied','WrongClient')) {
             $script:Bootstrap.Mode=$mode;$script:Bootstrap.Context=$null
