@@ -41,7 +41,7 @@ $bootstrapTestTimer.Add_Tick({
    if ($rows.Count -ne 5 -or @($rows | Where-Object { $_.Cells['Name'].Value -eq 'Eliminazione Entra ID' -and $_.Cells['State'].Value -eq 'Non disponibile' }).Count -ne 1) { throw 'Missing consent is not reported before opening the module.' }
    if (@($rows | Where-Object { $_.Cells['Name'].Value -eq 'Lettura chiavi BitLocker cloud' -and $_.Cells['State'].Value -eq 'Parziale' }).Count -ne 1 -or @($rows | Where-Object { $_.Cells['Name'].Value -eq 'Eliminazione Intune' -and $_.Cells['State'].Value -eq 'Non verificabile' }).Count -ne 1) { throw 'The login UI claims that metadata or granted write scope proves the actual operation.' }
    $testState.Seen=$true;$bootstrapTestTimer.Stop()
-   $bitmap=New-Object Drawing.Bitmap($dialog.ClientSize.Width,$dialog.ClientSize.Height)
+   $bitmap=New-Object Drawing.Bitmap($dialog.Width,$dialog.Height)
    try { $dialog.DrawToBitmap($bitmap,(New-Object Drawing.Rectangle(0,0,$bitmap.Width,$bitmap.Height)));$memory=New-Object IO.MemoryStream;try { $bitmap.Save($memory,[Drawing.Imaging.ImageFormat]::Png);Write-Host ('CAPABILITY_UI_PNG:'+ [Convert]::ToBase64String($memory.ToArray())) } finally { $memory.Dispose() } }
    finally { $bitmap.Dispose() }
    $open.PerformClick()

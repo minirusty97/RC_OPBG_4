@@ -194,7 +194,7 @@ function Get-ExplorerGraphPermissionStatus {
         $available=@($alternatives | Where-Object { $scopes -contains $_ }).Count -gt 0
         $detail='Ambito concesso; fattibilita dell''operazione non verificata.'
         $verification='ScopeOnly';$checkStatus='Solo ambito'
-        if ([string]$definition.Id -in @('entra-remove','intune-remove')) { $verification='NotTestable';$checkStatus='Non verificabile';$detail='Ambito concesso. Nessuna simulazione di cancellazione lato API: ruolo, ambito e vincoli sul dispositivo saranno applicati dal servizio.' }
+        if ([string]$definition.Id -in @('entra-remove','intune-remove')) { $verification='NotTestable';$checkStatus='Non verificabile';$detail='Ambito concesso. Cancellazione non provata: ruolo e diritti sul dispositivo non verificati.' }
         if (-not $available) { $detail='Consenso mancante: '+($alternatives -join ' oppure ');$verification='MissingScope';$checkStatus='Non disponibile' }
         [void]$statuses.Add([pscustomobject]@{Id=[string]$definition.Id;Name=[string]$definition.Name;Available=$available;ScopeGranted=$available;Verification=$verification;OperationVerified=$false;CheckStatus=$checkStatus;Detail=$detail})
     }
@@ -211,10 +211,10 @@ function Get-ExplorerGraphPermissionStatus {
                 $values=Get-ExplorerGraphSetting $page 'value'
                 if ($null -eq $values -or -not ($values -is [Array] -or $values -is [Collections.IList])) { throw 'Risposta Graph non valida.' }
                 $status[0].Verification='ReadVerified';$status[0].OperationVerified=$true;$status[0].CheckStatus='Verificata'
-                $status[0].Detail='Ambito concesso. Lettura verificata con una richiesta senza modifiche; i risultati possono essere limitati agli oggetti autorizzati.'
+                $status[0].Detail='Ambito concesso; GET di lettura riuscita. Accesso limitato agli oggetti autorizzati.'
                 if ($readProbe.Id -eq 'bitlocker-read') {
                     $status[0].Verification='MetadataVerified';$status[0].OperationVerified=$false;$status[0].CheckStatus='Parziale'
-                    $status[0].Detail='Ambito concesso; elenco metadati accessibile. Password non richiesta: lettura della chiave e diritti sul singolo dispositivo restano da verificare.'
+                    $status[0].Detail='Elenco metadati accessibile. Password non richiesta; lettura della chiave sul dispositivo non verificata.'
                 }
             }
             catch {
