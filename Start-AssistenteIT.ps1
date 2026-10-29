@@ -36,6 +36,17 @@ function Show-AssistenteITSettings {
     $hint = New-Object Windows.Forms.Label; $hint.Text='Lascia vuoti i token per conservare quelli salvati. I token sono cifrati da Windows per il tuo account su questo PC.'; $hint.SetBounds(18, 393, 590, 42)
     $graphProperty=$settings.PSObject.Properties['Graph']
     $graphSettings=$null;if ($null -ne $graphProperty) { $graphSettings=$graphProperty.Value }
+    # Let old certificate configurations be edited without authenticating as
+    # another identity. The operator must explicitly select and save a user mode.
+    $removedCertificate=$false
+    if ($null -ne $graphSettings) {
+        $oldMode=$graphSettings.PSObject.Properties['AuthenticationMode']
+        if ($null -ne $oldMode -and $oldMode.Value -eq 'Certificate') {
+            $removedCertificate=$true
+            $graphSettings=$graphSettings | Select-Object AuthenticationMode,TenantId,ClientId
+            $graphSettings.AuthenticationMode='Interactive'
+        }
+    }
     $graph=ConvertTo-ExplorerGraphAuthentication $graphSettings
     $settingsTabs=New-Object Windows.Forms.TabControl;$settingsTabs.SetBounds(4,10,622,515)
     $generalPage=New-Object Windows.Forms.TabPage;$generalPage.Text='GLPI / AD'
@@ -43,45 +54,33 @@ function Show-AssistenteITSettings {
     $settingsTabs.TabPages.AddRange(@($generalPage,$graphPage))
     $modeLabel=New-Object Windows.Forms.Label;$modeLabel.Text='Autenticazione Microsoft Graph';$modeLabel.SetBounds(18,18,550,24)
     $modeBox=New-Object Windows.Forms.ComboBox;$modeBox.Name='GraphAuthenticationMode';$modeBox.DropDownStyle='DropDownList';$modeBox.SetBounds(18,44,550,25)
-    [void]$modeBox.Items.Add('Accesso utente (app Microsoft)');[void]$modeBox.Items.Add('Applicazione con certificato');[void]$modeBox.Items.Add('Accesso delegato (app dedicata)')
-    $modeBox.SelectedIndex=0;if ($graph.AuthenticationMode -eq 'Certificate') { $modeBox.SelectedIndex=1 }
-    if ($graph.AuthenticationMode -eq 'Delegated') { $modeBox.SelectedIndex=2 }
+    [void]$modeBox.Items.Add('Accesso utente (app Microsoft)');[void]$modeBox.Items.Add('Accesso delegato (app dedicata)')
+    $modeBox.SelectedIndex=0;if ($graph.AuthenticationMode -eq 'Delegated') { $modeBox.SelectedIndex=1 }
     $tenantLabel=New-Object Windows.Forms.Label;$tenantLabel.Text='Directory (Tenant) ID';$tenantLabel.SetBounds(18,88,550,24)
     $tenantBox=New-Object Windows.Forms.TextBox;$tenantBox.Name='GraphTenantId';$tenantBox.Text=$graph.TenantId;$tenantBox.SetBounds(18,112,550,25)
     $clientLabel=New-Object Windows.Forms.Label;$clientLabel.Text='Application (Client) ID';$clientLabel.SetBounds(18,150,550,24)
     $clientBox=New-Object Windows.Forms.TextBox;$clientBox.Name='GraphClientId';$clientBox.Text=$graph.ClientId;$clientBox.SetBounds(18,174,550,25)
-    $thumbLabel=New-Object Windows.Forms.Label;$thumbLabel.Text='Impronta del certificato (Thumbprint)';$thumbLabel.SetBounds(18,212,550,24)
-    $thumbBox=New-Object Windows.Forms.TextBox;$thumbBox.Name='GraphCertificateThumbprint';$thumbBox.Text=$graph.CertificateThumbprint;$thumbBox.SetBounds(18,236,550,25)
-    $storeLabel=New-Object Windows.Forms.Label;$storeLabel.Text='Archivio certificati di Windows';$storeLabel.SetBounds(18,274,550,24)
-    $storeBox=New-Object Windows.Forms.ComboBox;$storeBox.Name='GraphCertificateStore';$storeBox.DropDownStyle='DropDownList';$storeBox.SetBounds(18,298,550,25)
-    [void]$storeBox.Items.Add('Utente corrente - Personale');[void]$storeBox.Items.Add('Computer locale - Personale')
-    $storeBox.SelectedIndex=0;if ($graph.CertificateStore -eq 'LocalMachine') { $storeBox.SelectedIndex=1 }
-    $graphHint=New-Object Windows.Forms.Label;$graphHint.Name='GraphAuthenticationHint';$graphHint.SetBounds(18,340,550,104)
+    $graphHint=New-Object Windows.Forms.Label;$graphHint.Name='GraphAuthenticationHint';$graphHint.SetBounds(18,220,550,100)
     $updateGraphMode={
-        $certificateMode=$modeBox.SelectedIndex -eq 1
-        $tenantBox.Enabled=$modeBox.SelectedIndex -ne 0;$clientBox.Enabled=$tenantBox.Enabled
-        $thumbBox.Enabled=$certificateMode;$thumbLabel.Enabled=$certificateMode;$storeBox.Enabled=$certificateMode;$storeLabel.Enabled=$certificateMode
-        if ($certificateMode) {
-            $graphHint.Text='Il sistemista autorizza i permessi Applicazione in Entra ID. Installare il certificato con chiave privata nello store selezionato. Le operazioni usano i diritti dell''applicazione.'
-        }
-        elseif ($modeBox.SelectedIndex -eq 2) {
-            $graphHint.Text='Ogni tecnico accede con il proprio account Microsoft. Inserire Tenant ID e Client ID dell''app dedicata, autorizzata con permessi Delegati. Le operazioni dipendono dai ruoli del tecnico su Entra e Intune. Non serve un certificato.'
+        $tenantBox.Enabled=$modeBox.SelectedIndex -eq 1;$clientBox.Enabled=$tenantBox.Enabled
+        if ($modeBox.SelectedIndex -eq 1) {
+            $graphHint.Text='Ogni tecnico accede con il proprio account Microsoft. Inserire Tenant ID e Client ID dell''app dedicata, autorizzata con permessi Delegati. Le operazioni dipendono dai ruoli del tecnico su Entra e Intune.'
         }
         else {
-            $graphHint.Text='Accesso utente tramite l''app Microsoft Graph PowerShell e la cache personale Microsoft. Per usare l''app aziendale selezionare Accesso delegato (app dedicata). Tenant ID, Client ID e certificato qui non vengono utilizzati.'
+            $graphHint.Text='Accesso utente tramite l''app Microsoft Graph PowerShell e la cache personale Microsoft. Per usare l''app aziendale selezionare Accesso delegato (app dedicata). Tenant ID e Client ID qui non vengono utilizzati.'
         }
+        if ($removedCertificate) { $graphHint.Text='La modalita con certificato e stata rimossa. Selezionare e salvare un accesso utente. '+$graphHint.Text }
     }
     $modeBox.Add_SelectedIndexChanged($updateGraphMode);& $updateGraphMode
-    $graphPage.Controls.AddRange(@($modeLabel,$modeBox,$tenantLabel,$tenantBox,$clientLabel,$clientBox,$thumbLabel,$thumbBox,$storeLabel,$storeBox,$graphHint))
+    $restrictionsHint=New-Object Windows.Forms.Label;$restrictionsHint.Name='GraphRestrictionsHint';$restrictionsHint.Text='Il wrapper verifica accesso e permessi prima di aprire ogni modulo. Con l''app dedicata vengono usati i consensi gia concessi; nessuna funzione richiede nuovi permessi durante l''uso.';$restrictionsHint.SetBounds(18,340,550,70)
+    $graphPage.Controls.AddRange(@($modeLabel,$modeBox,$tenantLabel,$tenantBox,$clientLabel,$clientBox,$graphHint,$restrictionsHint))
     $save = New-Object Windows.Forms.Button; $save.Name='SaveSettings';$save.Text='Salva'; $save.SetBounds(388, 540, 105, 32)
     $cancel = New-Object Windows.Forms.Button; $cancel.Text='Annulla'; $cancel.DialogResult='Cancel'; $cancel.SetBounds(503, 540, 105, 32)
     $dialog.AcceptButton=$save; $dialog.CancelButton=$cancel
     $save.Add_Click({
         try {
-            $mode='Interactive';if ($modeBox.SelectedIndex -eq 1) { $mode='Certificate' }
-            if ($modeBox.SelectedIndex -eq 2) { $mode='Delegated' }
-            $store='CurrentUser';if ($storeBox.SelectedIndex -eq 1) { $store='LocalMachine' }
-            $graphAuthentication=[pscustomobject]@{AuthenticationMode=$mode;TenantId=$tenantBox.Text;ClientId=$clientBox.Text;CertificateThumbprint=$thumbBox.Text;CertificateStore=$store}
+            $mode='Interactive';if ($modeBox.SelectedIndex -eq 1) { $mode='Delegated' }
+            $graphAuthentication=[pscustomobject]@{AuthenticationMode=$mode;TenantId=$tenantBox.Text;ClientId=$clientBox.Text}
             Save-AssistenteITSettings -GraphAuthentication $graphAuthentication -Paths $paths -DomainControllers $dcBox.Lines -GlpiBaseUri $urlBox.Text -GlpiEnabled $glpiCheck.Checked -UseAppToken $appCheck.Checked -UserToken $userBox.Text -AppToken $appBox.Text
             $dialog.DialogResult='OK'; $dialog.Close()
         }
@@ -159,13 +158,13 @@ $layout.Dock='Fill'; $layout.Padding=New-Object Windows.Forms.Padding(20); $layo
 [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 95)))
 [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 60)))
 $heading = New-Object Windows.Forms.Label; $heading.Dock='Fill'
-$heading.Text = $manifest.Product + "`r`nScegli il modulo da aprire. Configura GLPI e i DC da Impostazioni."
+$heading.Text = $manifest.Product + "`r`nScegli il modulo: accesso e verifica dei permessi precedono l''apertura. Configura le connessioni da Impostazioni."
 $heading.Font = New-Object Drawing.Font('Segoe UI', 12)
 $modulePanel = New-Object Windows.Forms.FlowLayoutPanel; $modulePanel.Dock='Fill'; $modulePanel.AutoScroll=$true; $modulePanel.FlowDirection='TopDown'; $modulePanel.WrapContents=$false
 foreach ($module in $manifest.Modules) {
     $card = New-Object Windows.Forms.GroupBox; $card.Text=$module.Name; $card.Size=New-Object Drawing.Size(685, 123)
     $description = New-Object Windows.Forms.Label; $description.Text=$module.Description; $description.SetBounds(18, 30, 485, 67)
-    $open = New-Object Windows.Forms.Button; $open.Text='Apri modulo'; $open.SetBounds(530, 43, 132, 35); $open.Tag=$module.Id
+    $open = New-Object Windows.Forms.Button; $open.Text='Accesso e apri'; $open.SetBounds(530, 43, 132, 35); $open.Tag=$module.Id
     $open.Add_Click({
         param($sender, $eventArgs)
         try {

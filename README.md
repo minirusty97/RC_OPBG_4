@@ -54,7 +54,7 @@ powershell.exe -NoProfile -STA -File .\Start-ComputerExplorer.ps1
 
 Riutilizza `computer-explorer.config.local.json`, già configurato per le prove AD e GLPI. Se manca, copiarlo dal modello e impostare URL GLPI, Enabled e UseAppToken come descritto sotto. Il modello viene lasciato disabilitato per GLPI e non contiene token.
 
-Scrivere ad esempio `PORT-` e premere **Cerca**. I token GLPI vengono letti dall’archivio cifrato personale; un `.env` precedente viene migrato alla prima lettura. Se mancano i token richiesti, si apre il prompt della finestra. **Token GLPI** permette di aggiornarli e salvarli cifrati. Graph riutilizza la sessione disponibile nello stesso processo; se manca o richiede ambiti aggiuntivi, mostra il codice di accesso Microsoft e apre il browser esterno. I token GLPI non vanno inseriti nel JSON o nel repository.
+Scrivere ad esempio `PORT-` e premere **Cerca**. I token GLPI vengono letti dall’archivio cifrato personale; un `.env` precedente viene migrato alla prima lettura. Se mancano i token richiesti, si apre il prompt della finestra. **Token GLPI** permette di aggiornarli e salvarli cifrati. Da 1.0.18 Graph viene autenticato e verificato nel wrapper prima di aprire il modulo. Le funzioni controllano soltanto la sessione gia predisposta; gli ambiti mancanti non aprono nuovi consensi. I token GLPI non vanno inseriti nel JSON o nel repository.
 
 I cinque DC vengono interrogati in sequenza da un unico lettore AD dedicato. In parallelo ad AD procedono GLPI, Entra e Intune, per un massimo di quattro lettori attivi. Un solo lavoro prepara la sessione Graph, poi Entra e Intune partono insieme; AD e GLPI possono già procedere durante il login. La finestra riceve i risultati man mano, senza aspettare le fonti più lente. Gli aggiornamenti arrivati nello stesso intervallo vengono riuniti prima di ridisegnare la griglia. **Interrompi** annulla tutti i lettori della ricerca; le fonti ancora in attesa restano non verificate. I lettori vengono arrestati e disposti prima di consentire una nuova operazione. Le caselle AD / Entra / Intune / GLPI scelgono le fonti da interrogare. Quattro indicatori permanenti in basso mostrano lo stato di ogni fonte: verde se terminata correttamente, rosso se terminata con errori, giallo se in corso e grigio se esclusa. AD indica anche i DC completati. La ricerca si conclude quando tutte le fonti selezionate hanno un esito finale, compresi gli errori; a quel punto si può agire sui risultati selezionati. La verifica prima della cancellazione continua a controllare le fonti scelte.
 
@@ -66,7 +66,7 @@ Requisiti della console: Windows PowerShell 5.1, RSAT `ActiveDirectory`, modulo 
 Install-Module Microsoft.Graph.Authentication -Scope CurrentUser
 ```
 
-Da Impostazioni > Microsoft Graph si puo scegliere **Accesso delegato (app dedicata)**: il tecnico accede con il proprio account, usando Tenant ID e Client ID aziendali senza certificato. In questa modalita le ricerche richiedono `Device.Read.All` e `DeviceManagementManagedDevices.Read.All`; lettura chiavi ed eliminazioni aggiungono i relativi ambiti quando servono. Le API verificano anche i ruoli dell'utente. Il sistemista limita l'accesso all'app con le assegnazioni utenti/gruppi e le operazioni con i ruoli Entra e Intune: vedere la [guida all'accesso delegato](docs/Autenticazione-Graph-Delegata.md).
+Da Impostazioni > Microsoft Graph si puo scegliere **Accesso delegato (app dedicata)**: il tecnico accede con il proprio account, usando Tenant ID e Client ID aziendali senza certificato. Da 1.0.18 il wrapper usa `.default`, legge gli ambiti gia concessi e presenta il riepilogo delle funzioni prima di aprire il modulo. Le API verificano anche i ruoli dell'utente. Il sistemista limita l'accesso all'app con le assegnazioni utenti/gruppi e le operazioni con i ruoli Entra e Intune: vedere la [guida all'accesso delegato](docs/Autenticazione-Graph-Delegata.md).
 
 **Accesso utente (app Microsoft)** conserva il flusso interattivo precedente e gli ambiti del progetto: `Directory.AccessAsUser.All` per Entra e `DeviceManagementManagedDevices.ReadWrite.All` per Intune quando manca il relativo accesso. Le modalita esplicite con app dedicata verificano l'identita configurata; una sessione applicativa non viene usata al posto dell'operatore delegato.
 
@@ -260,7 +260,7 @@ I file vengono preparati in `%LOCALAPPDATA%\AssistenteIT\Updates`. L’installaz
 
 ### Primo accesso Graph dalla finestra
 
-Dalla versione 1.0.10 Connect-ExplorerGraph usa il login interattivo Microsoft/WAM del vecchio script e la cache protetta `CurrentUser` del modulo Microsoft. La suite fornisce una finestra Windows valida al broker, anche se viene avviata senza console. La finestra di attesa compare prima della chiamata; se Microsoft usa il codice dispositivo, le istruzioni restano visibili e copiabili, anche se arrivano dalla console nascosta. Annullare la finestra interrompe la ricerca. Le sessioni valide e gli ambiti esistenti vengono riutilizzati. Il programma non concede consensi né modifica i criteri del tenant.
+Da 1.0.10 a 1.0.17 Connect-ExplorerGraph gestiva il login interattivo Microsoft/WAM del vecchio script e la cache protetta `CurrentUser` del modulo Microsoft. La suite fornisce una finestra Windows valida al broker, anche se viene avviata senza console. La finestra di attesa compare prima della chiamata; se Microsoft usa il codice dispositivo, le istruzioni restano visibili e copiabili, anche se arrivano dalla console nascosta. Annullare la finestra interrompe la ricerca. Le sessioni valide e gli ambiti esistenti vengono riutilizzati. Il programma non concede consensi né modifica i criteri del tenant.
 
 ### Computer AD con oggetti figli
 
@@ -306,10 +306,10 @@ La finestra mostra le chiavi leggibili, l'origine, il seriale Intune disponibile
 
 Anche il backup prima dell'eliminazione legge ora il cloud prima delle password AD e gestisce le risposte Graph dirette o contenute in `value`. Il backup conserva la verifica completa di tutte le origini selezionate: un errore su una di esse continua a bloccare l'eliminazione; il fallback della consultazione non aggira questo controllo. Le Note GLPI preesistenti restano inalterate.
 
-### Applicazione Graph con certificato (1.0.16)
-
-Impostazioni > Microsoft Graph permette di scegliere tra accesso interattivo e app dedicata con certificato Windows. Il sistemista fornisce Tenant ID, Client ID e certificato con chiave privata e autorizza i permessi applicativi. La modalita certificato non apre il login utente e verifica l’identita della sessione. Vedere la [procedura per il sistemista](docs/Autenticazione-Graph-Certificato.md).
-
 ### Accesso delegato con app dedicata (1.0.17)
 
 Per gestire le operazioni in base ai ruoli dei tecnici selezionare **Accesso delegato (app dedicata)**, inserire Tenant ID e Client ID e configurare i permessi **Delegati**. Il certificato non serve. Ogni tecnico accede con il proprio account; il sistemista controlla assegnazioni all'app e ruoli Entra/Intune. AD usa l'account Windows e GLPI il profilo del token configurato, anche per leggere le chiavi nelle Note. La [guida completa](docs/Autenticazione-Graph-Delegata.md) include redirect desktop/WAM, ambiti e configurazione dei profili.
+
+### Accesso iniziale comune (1.0.18)
+
+**Accesso e apri** esegue login e verifica dei permessi nel wrapper, prima della finestra del modulo. L'app dedicata usa i consensi gia concessi con `.default` e mostra subito le funzioni disponibili. Ricerca, BitLocker ed eliminazioni non avviano richieste aggiuntive di consenso. La cancellazione Entra resta supportata con l'ambito necessario; una sua assenza e segnalata all'inizio senza un accesso alternativo automatico. La modalita con certificato e stata rimossa. [Flusso e configurazione dei moduli futuri](docs/Accesso-Iniziale.md).

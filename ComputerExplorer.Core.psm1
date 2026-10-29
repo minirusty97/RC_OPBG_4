@@ -35,113 +35,6 @@ function Read-ExplorerConfiguration {
     [pscustomobject]@{ GraphAuthentication=$graph; Settings = $config; MinimumCharacters = $minimum; CloudCacheMinutes = $cacheMinutes; CloudReadTimeoutSeconds = $cloudTimeout }
 }
 
-function Connect-ExplorerGraph {
-    [CmdletBinding()]
-    param([string[]]$Sources, [switch]$ForRemoval, [switch]$ForBitLocker, $ProgressQueue, $GraphAuthentication)
-    try { Import-Module Microsoft.Graph.Authentication -ErrorAction Stop }
-    catch { throw ('Modulo Microsoft.Graph.Authentication non caricabile. Verificare il modulo nella stessa versione di PowerShell usata per avviare la console. Dettaglio: ' + $_.Exception.Message) }
-    $context = Get-MgContext -ErrorAction SilentlyContinue
-    $authentication=ConvertTo-ExplorerGraphAuthentication $GraphAuthentication
-    if ($authentication.AuthenticationMode -eq 'Certificate') {
-        Connect-ExplorerGraphCertificate -Authentication $authentication -Context $context
-        return
-    }
-    $dedicatedDelegated=$authentication.AuthenticationMode -eq 'Delegated'
-    if ($dedicatedDelegated -and -not (Test-ExplorerGraphDelegatedContext $context $authentication)) {
-        # Never reuse another app, tenant or an application-only identity for a
-        # flow whose authorization must follow the signed-in operator.
-        if ($null -ne $context) { Disconnect-MgGraph -ErrorAction Stop | Out-Null }
-        $script:CloudCache.Clear();$context=$null
-    }
-    if ($null -ne $GraphAuthentication -and $null -ne $context -and (Get-ExplorerValue $context 'AuthType') -eq 'AppOnly') {
-        Disconnect-MgGraph -ErrorAction Stop | Out-Null
-        $script:CloudCache.Clear();$context=$null
-    }
-    if ($null -ne $context -and (Get-ExplorerValue $context 'Environment' 'Global') -ne 'Global') {
-        throw 'Questa console usa graph.microsoft.com. La sessione Graph corrente appartiene a un cloud diverso.'
-    }
-    # Una sessione applicativa già configurata viene riutilizzata; i diritti effettivi
-    # vengono verificati dalle API. Non avviare un login delegato al suo posto.
-    if ($null -ne $context -and (Get-ExplorerValue $context 'AuthType') -eq 'AppOnly') { return }
-    $scopes = Get-ExplorerValue $context 'Scopes' @()
-    $required = New-Object 'System.Collections.Generic.List[string]'
-    $entraScopes = @('Device.Read.All', 'Device.ReadWrite.All', 'Directory.Read.All', 'Directory.ReadWrite.All', 'Directory.AccessAsUser.All')
-    $intuneScopes = @('DeviceManagementManagedDevices.Read.All', 'DeviceManagementManagedDevices.ReadWrite.All')
-    $entraConsent='Directory.AccessAsUser.All';$intuneConsent='DeviceManagementManagedDevices.ReadWrite.All'
-    if ($dedicatedDelegated -and -not $ForRemoval) {
-        $entraConsent='Device.Read.All';$intuneConsent='DeviceManagementManagedDevices.Read.All'
-    }
-    if ($ForRemoval) { $entraScopes = @('Directory.AccessAsUser.All'); $intuneScopes = @('DeviceManagementManagedDevices.ReadWrite.All') }
-    if ($Sources -contains 'Entra' -and @($scopes | Where-Object {
-        $_ -in $entraScopes
-    }).Count -eq 0) { [void]$required.Add($entraConsent) }
-    if ($Sources -contains 'Intune' -and @($scopes | Where-Object {
-        $_ -in $intuneScopes
-    }).Count -eq 0) { [void]$required.Add($intuneConsent) }
-    if ($ForBitLocker -and $scopes -notcontains 'BitlockerKey.Read.All') { [void]$required.Add('BitlockerKey.Read.All') }
-    if ($null -eq $context -or $required.Count -gt 0) {
-        # CurrentUser uses the SDK secure cache so separate suite processes
-        # can silently reuse sign-in. Interactive/WAM matches the legacy tool.
-        # Mantiene gli ambiti già autorizzati dall'utente nel tool di rimozione.
-        $loginScopes = @(@($scopes) + @($required.ToArray()) | Sort-Object -Unique)
-        $arguments = @{ Scopes = $loginScopes; ContextScope = 'CurrentUser'; NoWelcome = $true; ErrorAction = 'Stop' }
-        if ($dedicatedDelegated) {
-            $arguments.TenantId=$authentication.TenantId;$arguments.ClientId=$authentication.ClientId;$arguments.Environment='Global'
-        }
-        elseif ($null -ne $context) {
-            foreach ($key in @('TenantId', 'ClientId')) {
-                $value = [string](Get-ExplorerValue $context $key)
-                if (-not [string]::IsNullOrWhiteSpace($value)) { $arguments[$key] = $value }
-            }
-        }
-        $capture=$null; $authWindow=$null; $loginError=$null
-        if ($null -ne $ProgressQueue) {
-            if (-not ('AssistenteIT.GraphLoginBridge' -as [type])) { Add-Type -Path (Join-Path $PSScriptRoot 'Graph.LoginBridge.cs') -ErrorAction Stop }
-            $ProgressQueue.Enqueue([pscustomobject]@{Kind='GraphLoginStarting';Message='Apertura dell''accesso interattivo Microsoft. Completa il login nella finestra Microsoft.';Code=''})
-        }
-        try {
-            # Observe success, information and warning streams, plus the SDK's
-            # Console.WriteLine fallback. The UI is already open while networking waits.
-            if ($null -ne $ProgressQueue) {
-                # The native owner is required by the compiled SDK cmdlet.
-                # A caller-provided wrapper owns its authentication UI itself.
-                if ((Get-Command Connect-MgGraph -ErrorAction Stop).CommandType -eq 'Cmdlet') { $authWindow=[AssistenteIT.GraphAuthConsole]::Open() }
-                $capture=[AssistenteIT.GraphLoginBridge]::Capture($ProgressQueue)
-            }
-            Connect-MgGraph @arguments 6>&1 3>&1 | ForEach-Object {
-                $message=[string]$_
-                if ($null -ne $capture) { [void]$capture.TryPublish($message) }
-                elseif ($message -match 'https://(?:www\.)?microsoft\.com/devicelogin') {
-                    Write-Host $message
-                    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
-                        try { $browser=New-Object Diagnostics.ProcessStartInfo; $browser.FileName='https://microsoft.com/devicelogin'; $browser.UseShellExecute=$true; [void][Diagnostics.Process]::Start($browser) }
-                        catch { Write-Warning 'Aprire https://microsoft.com/devicelogin e usare il codice mostrato.' }
-                    }
-                }
-                if ($_ -is [Management.Automation.WarningRecord]) { Write-Warning $_.Message }
-            }
-            if ($dedicatedDelegated) {
-                $connected=Get-MgContext -ErrorAction Stop
-                if (-not (Test-ExplorerGraphDelegatedContext $connected $authentication)) {
-                    if ($null -ne $connected) { Disconnect-MgGraph -ErrorAction Stop | Out-Null }
-                    $script:CloudCache.Clear()
-                    throw 'La sessione Graph non corrisponde all''accesso delegato, al tenant e all''app configurati. Operazione interrotta.'
-                }
-                $granted=Get-ExplorerValue $connected 'Scopes' @()
-                if (@($required.ToArray() | Where-Object { $granted -notcontains $_ }).Count -gt 0) {
-                    throw 'Accesso delegato privo degli ambiti Graph richiesti. Verificare i permessi delegati e il consenso amministratore dell''app. I ruoli del tecnico vengono verificati dalle API.'
-                }
-            }
-        }
-        catch { $loginError=$_.Exception.Message; throw }
-        finally {
-            if ($null -ne $authWindow) { $authWindow.Dispose() }
-            if ($null -ne $capture) { $capture.Dispose() }
-            if ($null -ne $ProgressQueue) { $ProgressQueue.Enqueue([pscustomobject]@{Kind='GraphLoginComplete';Message='Accesso Graph concluso.';Error=$loginError}) }
-        }
-    }
-}
-
 function Get-ExplorerGraphCollection {
     param([string]$Uri, [string]$ResourcePath, $ProgressQueue, [string]$Source)
     $visited = @{}
@@ -527,4 +420,4 @@ function Get-ExplorerCloudCache { return $script:CloudCache }
 
 function Clear-ExplorerCloudCache { $script:CloudCache.Clear() }
 
-Export-ModuleMember -Function Read-ExplorerSource, Get-ExplorerCloudCache, Connect-ExplorerGraph, Get-ExplorerGraphCollection, Clear-ExplorerCloudCache, Read-ExplorerConfiguration, Invoke-ComputerExplorerSearch, Merge-ExplorerResults, Format-ExplorerDate, Read-ExplorerGlpiCredentials, Save-ExplorerGlpiCredentials
+Export-ModuleMember -Function Initialize-ExplorerGraphSession, Get-ExplorerGraphPermissionStatus, Read-ExplorerSource, Get-ExplorerCloudCache, Connect-ExplorerGraph, Get-ExplorerGraphCollection, Clear-ExplorerCloudCache, Read-ExplorerConfiguration, Invoke-ComputerExplorerSearch, Merge-ExplorerResults, Format-ExplorerDate, Read-ExplorerGlpiCredentials, Save-ExplorerGlpiCredentials

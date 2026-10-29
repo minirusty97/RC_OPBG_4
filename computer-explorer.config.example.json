@@ -9,9 +9,7 @@
   "Graph": {
     "AuthenticationMode": "Interactive",
     "TenantId": "",
-    "ClientId": "",
-    "CertificateThumbprint": "",
-    "CertificateStore": "CurrentUser"
+    "ClientId": ""
   },
   "Search": {
     "Mode": "Contains",
