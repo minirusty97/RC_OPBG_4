@@ -15,7 +15,7 @@ function Connect-MgGraph {
  $script:Connections++
  $script:Context=[pscustomobject]@{AuthType='Delegated';TenantId=$TenantId;ClientId=$ClientId;ContextScope=$ContextScope;Environment='Global';Account='synthetic@example.invalid';Scopes=@('Device.Read.All','DeviceManagementManagedDevices.ReadWrite.All','BitlockerKey.Read.All')}
 }
-function Invoke-MgGraphRequest { [CmdletBinding()]param($Method,$Uri,$OutputType) if ($Method -ne 'GET') { throw 'Unexpected write.' };[pscustomobject]@{value=@()} }
+function Invoke-MgGraphRequest { [CmdletBinding()]param($Method,$Uri,$OutputType,$Headers) if ($Method -ne 'GET') { throw 'Unexpected write.' };[pscustomobject]@{value=@()} }
 function Get-FixtureConnections { return $script:Connections }
 Export-ModuleMember -Function Get-MgContext,Disconnect-MgGraph,Connect-MgGraph,Invoke-MgGraphRequest,Get-FixtureConnections
 '@ | Set-Content (Join-Path $sdk 'Microsoft.Graph.Authentication.psm1') -Encoding UTF8

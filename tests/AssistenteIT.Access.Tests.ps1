@@ -42,7 +42,7 @@ try {
   function script:Connect-MgGraph { [CmdletBinding()]param($Scopes,$TenantId,$ClientId,$Environment,$ContextScope,[switch]$NoWelcome)
    $script:GroupFixture.Context=[pscustomobject]@{AuthType='Delegated';Environment='Global';ContextScope='CurrentUser';TenantId=$TenantId;ClientId=$ClientId;Account='synthetic@example.invalid';Scopes=@('Device.Read.All','DeviceManagementManagedDevices.ReadWrite.All','BitlockerKey.Read.All','User.Read')}
   }
-  function script:Invoke-MgGraphRequest { [CmdletBinding()]param($Method,$Uri,$OutputType)
+  function script:Invoke-MgGraphRequest { [CmdletBinding()]param($Method,$Uri,$OutputType,$Headers)
    if ($Method -ne 'GET') { throw 'Group verification attempted a write.' }
    if ($Uri -like '*transitiveMemberOf*') {
     $script:GroupFixture.Requests++

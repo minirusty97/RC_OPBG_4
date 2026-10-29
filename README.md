@@ -312,8 +312,12 @@ Per gestire le operazioni in base ai ruoli dei tecnici selezionare **Accesso del
 
 ### Accesso iniziale comune (1.0.18)
 
-**Accesso e apri** esegue login e verifica dei permessi nel wrapper, prima della finestra del modulo. L'app dedicata usa i consensi gia concessi con `.default` e mostra subito le funzioni disponibili. Ricerca, BitLocker ed eliminazioni non avviano richieste aggiuntive di consenso. La cancellazione Entra resta supportata con l'ambito necessario; una sua assenza e segnalata all'inizio senza un accesso alternativo automatico. La modalita con certificato e stata rimossa. [Flusso e configurazione dei moduli futuri](docs/Accesso-Iniziale.md).
+**Accesso** nella barra inferiore esegue login e verifica dei permessi nel wrapper, prima della finestra del modulo. L'app dedicata usa i consensi gia concessi con `.default` e mostra subito le funzioni disponibili. Ricerca, BitLocker ed eliminazioni non avviano richieste aggiuntive di consenso. La cancellazione Entra resta supportata con l'ambito necessario; una sua assenza e segnalata all'inizio senza un accesso alternativo automatico. La modalita con certificato e stata rimossa. [Flusso e configurazione dei moduli futuri](docs/Accesso-Iniziale.md).
 
 ### Accesso separato e modalita dei moduli (1.0.19)
 
 Premere **Accesso** nella barra inferiore: la verifica abilita le schede autorizzate, senza aprire moduli. **Apri modulo** riutilizza la sessione gia verificata. I requisiti di lettura e scrittura sono separati; per i moduli futuri si possono dichiarare gruppi Entra distinti per i colleghi. Sono stati ripristinati gli stili Windows e l'identita applicazione con icona propria. Il controllo si chiama **Cerca aggiornamenti**; il messaggio senza nuove versioni e **Assistente IT è aggiornato**. [Configurazione e comportamento](docs/Accesso-Iniziale.md).
+
+### Verifiche effettive senza operazioni di prova (1.0.20)
+
+Il riepilogo Accesso distingue **Verificata**, **Parziale** e **Non verificabile**. Le ricerche Entra/Intune vengono testate con GET limitate. Per BitLocker viene letta una sola pagina di metadati, senza chiedere la proprieta `key`: questo non prova il diritto di leggere la password. Le cancellazioni non sono eseguite ne simulate verso le API; l'ambito concesso resta distinto dalla fattibilita sul singolo oggetto. Gli errori della ricerca chiavi indicano fase, stato HTTP, codice Graph e request-id quando disponibili, senza copiare messaggi o corpi di risposta contenenti segreti. [Limiti e dettagli](docs/Accesso-Iniziale.md).

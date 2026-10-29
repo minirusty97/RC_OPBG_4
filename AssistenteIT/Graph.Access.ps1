@@ -6,23 +6,23 @@ function Show-AssistenteITModuleAccess {
     Add-Type -AssemblyName System.Drawing
     [Windows.Forms.Application]::EnableVisualStyles()
     $dialog=New-Object Windows.Forms.Form
-    $dialog.Text='Assistente IT - Accesso e verifica';$dialog.ClientSize=New-Object Drawing.Size(760,500)
+    $dialog.Text='Assistente IT - Accesso e verifica';$dialog.ClientSize=New-Object Drawing.Size(760,550)
     $dialog.StartPosition='CenterScreen';$dialog.Font=New-Object Drawing.Font('Segoe UI',10)
     $icon=New-Object Drawing.Icon((Join-Path $InstallRoot 'assets/AssistenteIT.ico'));$dialog.Icon=$icon
     $title=New-Object Windows.Forms.Label;$title.Text='Accesso Microsoft e verifica autorizzazioni';$title.SetBounds(18,14,724,28)
     $status=New-Object Windows.Forms.Label;$status.Name='GraphAccessStatus';$status.Text='Preparazione accesso Microsoft...';$status.SetBounds(18,46,724,56)
-    $grid=New-Object Windows.Forms.DataGridView;$grid.Name='GraphAccessPermissions';$grid.SetBounds(18,112,724,225)
+    $grid=New-Object Windows.Forms.DataGridView;$grid.Name='GraphAccessPermissions';$grid.SetBounds(18,112,724,275)
     $grid.ReadOnly=$true;$grid.AllowUserToAddRows=$false;$grid.AllowUserToDeleteRows=$false;$grid.RowHeadersVisible=$false
-    $grid.AutoSizeColumnsMode='Fill';$grid.MultiSelect=$false
+    $grid.AutoSizeColumnsMode='Fill';$grid.MultiSelect=$false;$grid.AutoSizeRowsMode='AllCells';$grid.DefaultCellStyle.WrapMode='True'
     [void]$grid.Columns.Add('Name','Funzione');[void]$grid.Columns.Add('State','Esito');[void]$grid.Columns.Add('Detail','Dettaglio')
-    $grid.Columns['Name'].FillWeight=28;$grid.Columns['State'].FillWeight=20;$grid.Columns['Detail'].FillWeight=52
-    $hint=New-Object Windows.Forms.Label;$hint.Text='Le funzioni senza consenso saranno indisponibili. Gli ambiti non sostituiscono i ruoli dell''utente: i diritti sulle operazioni restano verificati dalle API. Questa verifica non elimina dispositivi e non legge password BitLocker.';$hint.SetBounds(18,348,724,60)
-    $codeBox=New-Object Windows.Forms.TextBox;$codeBox.ReadOnly=$true;$codeBox.Visible=$false;$codeBox.SetBounds(18,414,200,25)
-    $browserButton=New-Object Windows.Forms.Button;$browserButton.Text='Apri accesso Microsoft';$browserButton.Visible=$false;$browserButton.SetBounds(230,411,190,30)
+    $grid.Columns['Name'].FillWeight=28;$grid.Columns['State'].FillWeight=24;$grid.Columns['Detail'].FillWeight=48
+    $hint=New-Object Windows.Forms.Label;$hint.Text='Verificata: richiesta di lettura riuscita. Parziale: solo metadati BitLocker, senza password. Le cancellazioni non vengono provate. I diritti possono dipendere dal singolo dispositivo e dai ruoli del tecnico.';$hint.SetBounds(18,398,724,60)
+    $codeBox=New-Object Windows.Forms.TextBox;$codeBox.ReadOnly=$true;$codeBox.Visible=$false;$codeBox.SetBounds(18,464,200,25)
+    $browserButton=New-Object Windows.Forms.Button;$browserButton.Text='Apri accesso Microsoft';$browserButton.Visible=$false;$browserButton.SetBounds(230,461,190,30)
     $browserButton.Add_Click({ [void][Diagnostics.Process]::Start('https://microsoft.com/devicelogin') })
-    $open=New-Object Windows.Forms.Button;$open.Name='OpenVerifiedModule';$open.Text='Apri modulo';$open.Enabled=$false;$open.SetBounds(420,454,185,32)
+    $open=New-Object Windows.Forms.Button;$open.Name='OpenVerifiedModule';$open.Text='Apri modulo';$open.Enabled=$false;$open.SetBounds(420,504,185,32)
     if ($VerifyOnly) { $open.Text='Conferma accesso' }
-    $cancel=New-Object Windows.Forms.Button;$cancel.Text='Annulla';$cancel.SetBounds(617,454,125,32)
+    $cancel=New-Object Windows.Forms.Button;$cancel.Text='Annulla';$cancel.SetBounds(617,504,125,32)
     $dialog.Controls.AddRange(@($title,$status,$grid,$hint,$codeBox,$browserButton,$open,$cancel))
     $state=@{Pipeline=$null;Runspace=$null;Invocation=$null;Stop=$null;Cancelled=$false;Accepted=$false;Result=$null;BrowserShown=$false}
     $queue=New-Object 'Collections.Concurrent.ConcurrentQueue[object]'
@@ -60,11 +60,14 @@ function Show-AssistenteITModuleAccess {
             if ($state.Pipeline.Streams.Error.Count -gt 0 -or $output.Count -ne 1) { throw 'Verifica non completata. Controllare configurazione, connessione e consensi con il sistemista.' }
             $state.Result=$output[0]
             foreach ($permission in $state.Result.Permissions) {
-                $label='Non disponibile';if ($permission.Available) { $label='Ambito disponibile' }
+                $label='Non disponibile';if ($permission.Available) { $label='Solo ambito' }
+                $check=$permission.PSObject.Properties['CheckStatus'];if ($null -ne $check) { $label=[string]$check.Value }
                 $index=$grid.Rows.Add($permission.Name,$label,$permission.Detail)
                 if (-not $permission.Available) { $grid.Rows[$index].DefaultCellStyle.BackColor=[Drawing.Color]::MistyRose }
-                else { $grid.Rows[$index].DefaultCellStyle.BackColor=[Drawing.Color]::Honeydew }
+                elseif ($null -ne $permission.PSObject.Properties['OperationVerified'] -and $permission.OperationVerified) { $grid.Rows[$index].DefaultCellStyle.BackColor=[Drawing.Color]::Honeydew }
+                else { $grid.Rows[$index].DefaultCellStyle.BackColor=[Drawing.Color]::LemonChiffon }
             }
+            $grid.ClearSelection()
             $status.Text=('Account: {0}. App: {1}.{2}Verifica completata; nessuna richiesta di nuovi permessi verra avviata nel modulo.' -f $state.Result.Account,$state.Result.AppName,[Environment]::NewLine)
             if (-not $VerifyOnly -and @($state.Result.Permissions | Where-Object { -not $_.Available }).Count) { $open.Text='Apri funzioni disponibili' }
             $open.Enabled=$true

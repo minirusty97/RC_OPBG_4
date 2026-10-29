@@ -126,7 +126,7 @@ function Update-AssistenteITModuleAvailability {
         if ($null -ne $script:Access -and -not $verified.CanOpen) { $label.Text=$verified.Reason;$label.ForeColor=[Drawing.Color]::DarkOrange }
         elseif ($verified.CanOpen) {
             $label.Text='Sola lettura';$label.ForeColor=[Drawing.Color]::SteelBlue
-            if ($verified.AccessMode -eq 'ReadWrite') { $label.Text='Lettura e scrittura secondo i permessi verificati';$label.ForeColor=[Drawing.Color]::DarkGreen }
+            if ($verified.AccessMode -eq 'ReadWrite') { $label.Text='Lettura e scrittura (ambiti concessi)';$label.ForeColor=[Drawing.Color]::DarkGreen }
         }
     }
 }
