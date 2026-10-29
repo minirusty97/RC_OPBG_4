@@ -75,7 +75,7 @@ function Get-ExplorerBitLockerKeys {
                 else { $keys[$keyId]=[pscustomobject]@{KeyId=$keyId;Password=$key;Volume=[string](Get-BlValue $secret 'volumeType');CreatedAt=[string](Get-BlValue $secret 'createdDateTime');Origins=@($origin);Fingerprint=(Get-BlFingerprint $key)} }
             }
         }
-        catch { throw ('Lettura BitLocker da Entra ID non completata per Device ID '+$deviceId+'. Verificare accesso, BitlockerKey.Read.All e autorizzazioni dell''app o ruolo; nessuna eliminazione consentita.') }
+        catch { throw ('Lettura BitLocker da Entra ID non completata per Device ID '+$deviceId+'. Verificare accesso, BitlockerKey.Read.All e consenso delegato e ruolo del tecnico; nessuna eliminazione consentita.') }
     }
     foreach ($target in @($Targets | Where-Object Source -eq 'AD')) {
         foreach ($child in @($target.AdChildren | Where-Object ObjectClass -eq 'msFVE-RecoveryInformation')) {
@@ -183,7 +183,7 @@ function Find-ExplorerBitLockerKeys {
         [void]$sources.Add([pscustomobject]@{Name='Intune';State='OK';Count=$found.Count;Error=''})
     }
     catch {
-        [void]$sources.Add([pscustomobject]@{Name='Intune';State='Errore';Count=0;Error='Lettura Intune/BitLocker non riuscita: verificare connessione, impostazioni Graph/certificato, Azure AD Device ID e autorizzazioni BitlockerKey.Read.All dell''app o del ruolo. Se la richiesta e scaduta, riprovare.'})
+        [void]$sources.Add([pscustomobject]@{Name='Intune';State='Errore';Count=0;Error='Lettura Intune/BitLocker non riuscita: verificare connessione, impostazioni Graph, Azure AD Device ID e consenso delegato BitlockerKey.Read.All e ruolo del tecnico. Se la richiesta e scaduta, riprovare.'})
     }
     if ($records.Count -eq 0) {
         $configuredControllers=Get-BlValue $config.Settings 'DomainControllers' @()

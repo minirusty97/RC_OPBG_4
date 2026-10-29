@@ -50,29 +50,22 @@ try {
         Connect-ExplorerGraph -Sources Entra,Intune
         if ($script:Fixture.Logins.Count -ne 0) { throw 'Existing broad scopes not reused.' }
         'PASS: existing broad Graph permissions reused.'
-        $script:Context.Scopes=@('Directory.Read.All')
-        Connect-ExplorerGraph -Sources Entra,Intune
-        $login=$script:Fixture.Logins[0]
-        if ($login.Scopes -notcontains 'Directory.Read.All' -or $login.Scopes -notcontains 'DeviceManagementManagedDevices.ReadWrite.All' -or
-            $login.TenantId -ne 'tenant-a' -or $login.ClientId -ne 'client-a' -or $login.DeviceCode -or $login.ContextScope -ne 'CurrentUser') { throw 'Missing Intune scope or login identity lost.' }
-        'PASS: Intune consent retains existing scopes, tenant and client.'
-        $script:Context.Scopes=@('Directory.AccessAsUser.All','DeviceManagementManagedDevices.ReadWrite.All')
-        $script:Context.AuthType='AppOnly'
-        Connect-ExplorerGraph -Sources Entra,Intune
-        if ($script:Fixture.Logins.Count -ne 1) { throw 'Application authentication replaced.' }
-        'PASS: existing app-only session retained.'
-        $script:Context.AuthType='Delegated'
         $script:Context.Scopes=@('Device.Read.All','DeviceManagementManagedDevices.Read.All')
-        Connect-ExplorerGraph -Sources Entra,Intune -ForRemoval
-        $writeLogin=$script:Fixture.Logins[-1]
-        if ($writeLogin.Scopes -notcontains 'Directory.AccessAsUser.All' -or $writeLogin.Scopes -notcontains 'DeviceManagementManagedDevices.ReadWrite.All') { throw 'Removal accepted read-only scopes.' }
-        'PASS: removal requests the existing project write permissions when the session is read-only.'
-        $script:Context.Scopes=@('Directory.AccessAsUser.All','DeviceManagementManagedDevices.ReadWrite.All')
-
-        Connect-ExplorerGraph -Sources Entra,Intune -ForBitLocker
-        $bitlockerLogin=$script:Fixture.Logins[-1]
-        if ($bitlockerLogin.Scopes -notcontains 'BitlockerKey.Read.All' -or $bitlockerLogin.Scopes -notcontains 'Directory.AccessAsUser.All' -or $bitlockerLogin.Scopes -notcontains 'DeviceManagementManagedDevices.ReadWrite.All' -or $bitlockerLogin.ClientId -ne 'client-a' -or $bitlockerLogin.TenantId -ne 'tenant-a' -or $bitlockerLogin.ContextScope -ne 'CurrentUser') { throw 'BitLocker scope or existing session identity was lost.' }
-        'PASS: BitLocker backup requests its explicit key-read permission while retaining scopes, tenant, application and CurrentUser interactive authentication.'
+        foreach ($operation in @('Removal','Keys')) {
+            $rejected=$false
+            try { Connect-ExplorerGraph -Sources Entra,Intune -ForRemoval:($operation -eq 'Removal') -ForBitLocker:($operation -eq 'Keys') } catch { $rejected=$true }
+            if (-not $rejected -or $script:Fixture.Logins.Count -ne 0) { throw 'An operation requested incremental permission consent.' }
+        }
+        'PASS: missing deletion and key permissions are reported without opening a login or requesting consent.'
+        $script:Context.AuthType='AppOnly'
+        $rejected=$false;try { Connect-ExplorerGraph -Sources Entra } catch { $rejected=$true }
+        if (-not $rejected -or $script:Fixture.Logins.Count -ne 0) { throw 'An application context was used as an authenticated operator.' }
+        'PASS: operation-time checks reject app-only contexts without an interactive fallback.'
+        $script:Context.AuthType='Delegated'
+        $script:Context.Scopes=@('Directory.AccessAsUser.All','DeviceManagementManagedDevices.ReadWrite.All','BitlockerKey.Read.All')
+        Connect-ExplorerGraph -Sources Entra,Intune -ForRemoval -ForBitLocker
+        if ($script:Fixture.Logins.Count -ne 0) { throw 'A prepared session was authenticated again.' }
+        'PASS: all supported operations reuse an already prepared user session without another login.'
 
         $pages=New-Object 'System.Collections.Concurrent.ConcurrentQueue[object]'
         $first=Get-ExplorerCloudInventory -Source Entra -ProgressQueue $pages

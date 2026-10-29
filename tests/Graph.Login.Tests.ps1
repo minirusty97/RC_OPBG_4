@@ -25,7 +25,7 @@ foreach ($channel in @('Console','Success','Information','Warning','Cancel')) {
             & $m {
                 param($Queue,$Release,$Channel)
                 function script:Import-Module { param($Name) }
-                function script:Get-MgContext { return $null }
+                function script:Get-MgContext { if (-not $Release.IsSet) { return $null };[pscustomobject]@{AuthType='Delegated';Environment='Global';Scopes=@('Directory.AccessAsUser.All')} }
                 function script:Connect-MgGraph {
                     [CmdletBinding()]param($Scopes,$ContextScope,[switch]$NoWelcome,[switch]$UseDeviceAuthentication)
                     if ($UseDeviceAuthentication -or $ContextScope -ne 'CurrentUser' -or $Scopes -notcontains 'Directory.AccessAsUser.All') { throw 'Login must preserve interactive authentication, CurrentUser cache and existing scopes.' }
@@ -38,7 +38,7 @@ foreach ($channel in @('Console','Success','Information','Warning','Cancel')) {
                     while (-not $Release.IsSet -and $watch.Elapsed.TotalSeconds -lt 8) { Start-Sleep -Milliseconds 20 }
                     if (-not $Release.IsSet) { throw 'Synthetic login timed out.' }
                 }
-                Connect-ExplorerGraph -Sources Entra -ProgressQueue $Queue
+                $null=Initialize-ExplorerGraphSession -Scopes @('Directory.AccessAsUser.All') -ProgressQueue $Queue
                 'Finished'
             } $Queue $Release $Channel
         }
@@ -109,6 +109,8 @@ try {
     $worker.Open();$ps.Runspace=$worker
     $root=Split-Path (Resolve-Path (Join-Path $PSScriptRoot '../ComputerExplorer.Core.psm1')).ProviderPath -Parent
     [void]$ps.AddScript({param($Root,$Queue)
+        Import-Module (Join-Path $Root 'ComputerExplorer.Core.psm1')
+        $null=Initialize-ExplorerGraphSession -Scopes @('Directory.AccessAsUser.All') -ProgressQueue $Queue
         Import-Module (Join-Path $Root 'ComputerExplorer.Parallel.psm1')
         Invoke-ComputerExplorerParallelSearch -NameFragment 'PC-TEST' -ConfigPath (Join-Path $Root 'computer-explorer.config.example.json') -EnabledSources Entra -ProgressQueue $Queue
     }.ToString()).AddArgument($root).AddArgument($queue)

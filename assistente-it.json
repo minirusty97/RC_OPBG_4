@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 1,
   "Product": "Assistente IT",
-  "Version": "1.0.17",
+  "Version": "1.0.18",
   "ReleasesUrl": "https://github.com/minirusty97/RC_OPBG_4/releases/latest",
   "GraphVersion": "2.41.1",
   "Modules": [
@@ -10,7 +10,49 @@
       "Name": "Computer Explorer",
       "Description": "Ricerca e gestione dispositivi in AD, Entra ID, Intune e GLPI.",
       "EntryPoint": "Start-ComputerExplorer.ps1",
-      "UsesAppSettings": true
+      "UsesAppSettings": true,
+      "UsesGraphAccess": true,
+      "GraphPermissions": [
+        {
+          "Id": "entra-read",
+          "Name": "Ricerca Entra ID",
+          "AnyOf": [
+            "Device.Read.All",
+            "Directory.Read.All",
+            "Directory.ReadWrite.All",
+            "Directory.AccessAsUser.All"
+          ]
+        },
+        {
+          "Id": "intune-read",
+          "Name": "Ricerca Intune",
+          "AnyOf": [
+            "DeviceManagementManagedDevices.Read.All",
+            "DeviceManagementManagedDevices.ReadWrite.All"
+          ]
+        },
+        {
+          "Id": "bitlocker-read",
+          "Name": "Lettura chiavi BitLocker cloud",
+          "AnyOf": [
+            "BitlockerKey.Read.All"
+          ]
+        },
+        {
+          "Id": "intune-remove",
+          "Name": "Eliminazione Intune",
+          "AnyOf": [
+            "DeviceManagementManagedDevices.ReadWrite.All"
+          ]
+        },
+        {
+          "Id": "entra-remove",
+          "Name": "Eliminazione Entra ID",
+          "AnyOf": [
+            "Directory.AccessAsUser.All"
+          ]
+        }
+      ]
     }
   ]
 }

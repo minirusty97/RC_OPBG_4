@@ -17,27 +17,20 @@ function Get-ExplorerGraphSetting {
 function ConvertTo-ExplorerGraphAuthentication {
     param($Settings)
     $mode=[string](Get-ExplorerGraphSetting $Settings 'AuthenticationMode' 'Interactive')
-    if ($mode -notin @('Interactive','Delegated','Certificate')) { throw 'Modalita Graph non valida: scegliere Interactive, Delegated o Certificate.' }
+    if ($mode -eq 'Certificate') { throw 'Autenticazione Graph con certificato rimossa. Aprire Impostazioni > Microsoft Graph e selezionare Accesso delegato (app dedicata).' }
+    if ($mode -notin @('Interactive','Delegated')) { throw 'Modalita Graph non valida: scegliere Interactive o Delegated.' }
     $tenant=([string](Get-ExplorerGraphSetting $Settings 'TenantId' '')).Trim()
     $client=([string](Get-ExplorerGraphSetting $Settings 'ClientId' '')).Trim()
-    $thumb=([string](Get-ExplorerGraphSetting $Settings 'CertificateThumbprint' '') -replace '[\s\u200e\u200f]','').ToUpperInvariant()
-    $location=[string](Get-ExplorerGraphSetting $Settings 'CertificateStore' 'CurrentUser')
-    if ($location -notin @('CurrentUser','LocalMachine')) { throw 'Archivio certificati non valido: scegliere CurrentUser o LocalMachine.' }
     foreach ($value in @(@{Name='Tenant ID';Value=$tenant},@{Name='Client ID';Value=$client})) {
         $id=[guid]::Empty
         if ($value.Value -and (-not [guid]::TryParse($value.Value,[ref]$id) -or $id -eq [guid]::Empty)) { throw ($value.Name+' deve essere un GUID valido.') }
     }
     if ($tenant) { $tenant=([guid]$tenant).ToString() };if ($client) { $client=([guid]$client).ToString() }
-    if ($mode -eq 'Certificate') { $mode='Certificate' } elseif ($mode -eq 'Delegated') { $mode='Delegated' } else { $mode='Interactive' }
-    if ($location -eq 'LocalMachine') { $location='LocalMachine' } else { $location='CurrentUser' }
-    if ($thumb -and $thumb -notmatch '^[A-F0-9]{40}$') { throw 'L''impronta del certificato deve contenere 40 caratteri esadecimali.' }
-    if ($mode -eq 'Certificate' -and (-not $tenant -or -not $client -or -not $thumb)) {
-        throw 'Per attivare il certificato servono Tenant ID, Client ID e impronta del certificato.'
-    }
+    if ($mode -eq 'Delegated') { $mode='Delegated' } else { $mode='Interactive' }
     if ($mode -eq 'Delegated' -and (-not $tenant -or -not $client)) {
         throw 'Per l''accesso delegato con app dedicata servono Tenant ID e Client ID. Non occorre un certificato.'
     }
-    [pscustomobject]@{AuthenticationMode=$mode;TenantId=$tenant;ClientId=$client;CertificateThumbprint=$thumb;CertificateStore=$location}
+    [pscustomobject]@{AuthenticationMode=$mode;TenantId=$tenant;ClientId=$client}
 }
 
 function Test-ExplorerGraphDelegatedContext {
@@ -50,47 +43,124 @@ function Test-ExplorerGraphDelegatedContext {
         [string](Get-ExplorerGraphSetting $Context 'ClientId') -ieq $Authentication.ClientId)
 }
 
-function Get-ExplorerGraphCertificate {
-    param($Authentication)
-    $path='Cert:\'+$Authentication.CertificateStore+'\My\'+$Authentication.CertificateThumbprint
-    try { $certificate=Get-Item -LiteralPath $path -ErrorAction Stop }
-    catch { throw ('Certificato Graph non disponibile in '+$path+'. Installarlo con la chiave privata e verificare i permessi dell''utente Windows.') }
-    if ($null -eq $certificate -or [string]$certificate.Thumbprint -ine $Authentication.CertificateThumbprint) { throw 'Il certificato trovato non corrisponde all''impronta configurata.' }
-    if (-not $certificate.HasPrivateKey) { throw 'Il certificato Graph non contiene la chiave privata. Il solo file CER pubblico non e sufficiente.' }
-    $now=[datetime]::UtcNow
-    if ($certificate.NotBefore.ToUniversalTime() -gt $now -or $certificate.NotAfter.ToUniversalTime() -le $now) { throw 'Il certificato Graph e scaduto o non ancora valido. Richiedere il certificato aggiornato al sistemista.' }
-    return $certificate
-}
 
-function Get-ExplorerGraphContextThumbprint {
-    param($Context)
-    $thumb=[string](Get-ExplorerGraphSetting $Context 'CertificateThumbprint' '')
-    if (-not $thumb) { $thumb=[string](Get-ExplorerGraphSetting (Get-ExplorerGraphSetting $Context 'Certificate') 'Thumbprint' '') }
-    return ($thumb -replace '[\s\u200e\u200f]','').ToUpperInvariant()
-}
-
-function Test-ExplorerGraphCertificateContext {
-    param($Context,$Authentication)
-    return ($null -ne $Context -and
-        [string](Get-ExplorerGraphSetting $Context 'AuthType') -eq 'AppOnly' -and
-        [string](Get-ExplorerGraphSetting $Context 'Environment') -eq 'Global' -and
-        [string](Get-ExplorerGraphSetting $Context 'ContextScope') -eq 'Process' -and
-        [string](Get-ExplorerGraphSetting $Context 'TenantId') -ieq $Authentication.TenantId -and
-        [string](Get-ExplorerGraphSetting $Context 'ClientId') -ieq $Authentication.ClientId -and
-        (Get-ExplorerGraphContextThumbprint $Context) -ceq $Authentication.CertificateThumbprint)
-}
-
-function Connect-ExplorerGraphCertificate {
-    param($Authentication,$Context)
-    # Explicit store lookup prevents silently selecting another certificate.
-    $certificate=Get-ExplorerGraphCertificate $Authentication
-    if (Test-ExplorerGraphCertificateContext $Context $Authentication) { return }
-    if ($null -ne $Context) { Disconnect-MgGraph -ErrorAction Stop | Out-Null }
-    $script:CloudCache.Clear()
-    try {
-        Connect-MgGraph -TenantId $Authentication.TenantId -ClientId $Authentication.ClientId -Certificate $certificate -Environment Global -ContextScope Process -NoWelcome -ErrorAction Stop | Out-Null
+function Initialize-ExplorerGraphSession {
+    [CmdletBinding()]
+    param([string[]]$Scopes,$GraphAuthentication,$ProgressQueue)
+    $authentication=ConvertTo-ExplorerGraphAuthentication $GraphAuthentication
+    try { Import-Module Microsoft.Graph.Authentication -ErrorAction Stop }
+    catch { throw ('Modulo Microsoft.Graph.Authentication non caricabile: '+$_.Exception.Message) }
+    $context=Get-MgContext -ErrorAction SilentlyContinue
+    if ($null -ne $context) { Disconnect-MgGraph -ErrorAction Stop | Out-Null }
+    $cacheVariable=$ExecutionContext.SessionState.PSVariable.Get('CloudCache')
+    if ($null -ne $cacheVariable -and $null -ne $cacheVariable.Value) { $cacheVariable.Value.Clear() }
+    $arguments=@{Scopes=@($Scopes);ContextScope='CurrentUser';NoWelcome=$true;ErrorAction='Stop'}
+    if ($authentication.AuthenticationMode -eq 'Delegated') {
+        # .default returns the permissions already consented to this app. Never
+        # expand them on behalf of a feature or silently switch to another app.
+        $arguments.Scopes=@('https://graph.microsoft.com/.default')
+        $arguments.TenantId=$authentication.TenantId;$arguments.ClientId=$authentication.ClientId;$arguments.Environment='Global'
     }
-    catch { throw 'Autenticazione Graph con certificato non riuscita. Verificare Tenant ID, Client ID, certificato registrato nell''app e accesso alla chiave privata. Non viene avviato un login interattivo.' }
-    $connected=Get-MgContext -ErrorAction Stop
-    if (-not (Test-ExplorerGraphCertificateContext $connected $Authentication)) { throw 'La sessione Graph non corrisponde all''applicazione e al certificato configurati. Operazione interrotta.' }
+    $capture=$null; $authWindow=$null; $loginError=$null
+    if ($null -ne $ProgressQueue) {
+        if (-not ('AssistenteIT.GraphLoginBridge' -as [type])) { Add-Type -Path (Join-Path $PSScriptRoot 'Graph.LoginBridge.cs') -ErrorAction Stop }
+        $ProgressQueue.Enqueue([pscustomobject]@{Kind='GraphLoginStarting';Message='Apertura dell''accesso interattivo Microsoft. Completa il login nella finestra Microsoft.';Code=''})
+    }
+    try {
+        # Observe success, information and warning streams, plus the SDK's
+        # Console.WriteLine fallback. The UI is already open while networking waits.
+        if ($null -ne $ProgressQueue) {
+            # The native owner is required by the compiled SDK cmdlet.
+            # A caller-provided wrapper owns its authentication UI itself.
+            if ((Get-Command Connect-MgGraph -ErrorAction Stop).CommandType -eq 'Cmdlet') { $authWindow=[AssistenteIT.GraphAuthConsole]::Open() }
+            $capture=[AssistenteIT.GraphLoginBridge]::Capture($ProgressQueue)
+        }
+        Connect-MgGraph @arguments 6>&1 3>&1 | ForEach-Object {
+            $message=[string]$_
+            if ($null -ne $capture) { [void]$capture.TryPublish($message) }
+            elseif ($message -match 'https://(?:www\.)?microsoft\.com/devicelogin') {
+                Write-Host $message
+                if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+                    try { $browser=New-Object Diagnostics.ProcessStartInfo; $browser.FileName='https://microsoft.com/devicelogin'; $browser.UseShellExecute=$true; [void][Diagnostics.Process]::Start($browser) }
+                    catch { Write-Warning 'Aprire https://microsoft.com/devicelogin e usare il codice mostrato.' }
+                }
+            }
+            if ($_ -is [Management.Automation.WarningRecord]) { Write-Warning $_.Message }
+        }
+        $connected=Get-MgContext -ErrorAction Stop
+        if ($null -eq $connected -or (Get-ExplorerGraphSetting $connected 'AuthType') -ne 'Delegated' -or
+            (Get-ExplorerGraphSetting $connected 'Environment' 'Global') -ne 'Global' -or
+            ($authentication.AuthenticationMode -eq 'Delegated' -and -not (Test-ExplorerGraphDelegatedContext $connected $authentication))) {
+            throw 'La sessione Graph non corrisponde all''accesso utente configurato. Modulo non aperto.'
+        }
+        return $connected
+    }
+    catch { $loginError=$_.Exception.Message; throw }
+    finally {
+        if ($null -ne $authWindow) { $authWindow.Dispose() }
+        if ($null -ne $capture) { $capture.Dispose() }
+        if ($null -ne $ProgressQueue) { $ProgressQueue.Enqueue([pscustomobject]@{Kind='GraphLoginComplete';Message='Accesso Graph concluso.';Error=$loginError}) }
+    }
 }
+
+function Connect-ExplorerGraph {
+    [CmdletBinding()]
+    param([string[]]$Sources,[switch]$ForRemoval,[switch]$ForBitLocker,$ProgressQueue,$GraphAuthentication)
+    # Operation-time checks are deliberately read-only: only the suite wrapper
+    # is allowed to authenticate, request consent or select a different identity.
+    $authentication=ConvertTo-ExplorerGraphAuthentication $GraphAuthentication
+    Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
+    $context=Get-MgContext -ErrorAction SilentlyContinue
+    if ($null -eq $context -or (Get-ExplorerGraphSetting $context 'AuthType') -ne 'Delegated' -or
+        (Get-ExplorerGraphSetting $context 'Environment' 'Global') -ne 'Global' -or
+        ($authentication.AuthenticationMode -eq 'Delegated' -and -not (Test-ExplorerGraphDelegatedContext $context $authentication))) {
+        throw 'Sessione Graph assente o diversa dalla configurazione. Chiudere il modulo e usare Accesso e verifica nel wrapper Assistente IT.'
+    }
+    $scopes=Get-ExplorerGraphSetting $context 'Scopes' @()
+    $missing=New-Object 'Collections.Generic.List[string]'
+    $entraScopes=@('Device.Read.All','Device.ReadWrite.All','Directory.Read.All','Directory.ReadWrite.All','Directory.AccessAsUser.All')
+    $intuneScopes=@('DeviceManagementManagedDevices.Read.All','DeviceManagementManagedDevices.ReadWrite.All')
+    if ($ForRemoval) { $entraScopes=@('Directory.AccessAsUser.All');$intuneScopes=@('DeviceManagementManagedDevices.ReadWrite.All') }
+    if ($Sources -contains 'Entra' -and @($scopes | Where-Object { $_ -in $entraScopes }).Count -eq 0) { [void]$missing.Add($entraScopes[0]) }
+    if ($Sources -contains 'Intune' -and @($scopes | Where-Object { $_ -in $intuneScopes }).Count -eq 0) { [void]$missing.Add($intuneScopes[0]) }
+    if ($ForBitLocker -and $scopes -notcontains 'BitlockerKey.Read.All') { [void]$missing.Add('BitlockerKey.Read.All') }
+    if ($missing.Count) { throw ('Permessi non disponibili nella verifica iniziale: '+($missing.ToArray() -join ', ')+'. Tornare al wrapper per verificare accesso e consensi. Nessuna nuova richiesta viene avviata dal modulo.') }
+}
+
+function Get-ExplorerGraphPermissionStatus {
+    [CmdletBinding()]
+    param([Parameter(Mandatory=$true)]$Definitions,$Context,$ProgressQueue,[switch]$Probe)
+    if ($null -eq $Context) { $Context=Get-MgContext -ErrorAction Stop }
+    $scopes=Get-ExplorerGraphSetting $Context 'Scopes' @()
+    $statuses=New-Object 'Collections.Generic.List[object]'
+    foreach ($definition in @($Definitions)) {
+        $alternatives=Get-ExplorerGraphSetting $definition 'AnyOf' @()
+        $available=@($alternatives | Where-Object { $scopes -contains $_ }).Count -gt 0
+        $detail='Ambito presente; i diritti effettivi dell''utente vengono applicati dalle API.'
+        if (-not $available) { $detail='Consenso mancante: '+($alternatives -join ' oppure ') }
+        [void]$statuses.Add([pscustomobject]@{Id=[string]$definition.Id;Name=[string]$definition.Name;Available=$available;Detail=$detail})
+    }
+    if ($Probe) {
+        foreach ($readProbe in @(@{Id='entra-read';Uri='https://graph.microsoft.com/v1.0/devices?$top=1&$select=id'},@{Id='intune-read';Uri='https://graph.microsoft.com/v1.0/deviceManagement/managedDevices?$top=1&$select=id'})) {
+            $status=@($statuses | Where-Object Id -eq $readProbe.Id)
+            if ($status.Count -ne 1 -or -not $status[0].Available) { continue }
+            if ($null -ne $ProgressQueue) { $ProgressQueue.Enqueue([pscustomobject]@{Kind='Verification';Message=('Verifica lettura: '+$status[0].Name)}) }
+            try {
+                $page=Invoke-MgGraphRequest -Method GET -Uri $readProbe.Uri -OutputType PSObject -ErrorAction Stop
+                $values=Get-ExplorerGraphSetting $page 'value'
+                if ($null -eq $values -or -not ($values -is [Array] -or $values -is [Collections.IList])) { throw 'Risposta Graph non valida.' }
+                $status[0].Detail='Lettura verificata tramite una richiesta senza modifiche.'
+            }
+            catch { $status[0].Available=$false;$status[0].Detail='Verifica lettura non riuscita: '+$_.Exception.Message }
+        }
+    }
+    foreach ($pair in @(@{Read='entra-read';Remove='entra-remove'},@{Read='intune-read';Remove='intune-remove'})) {
+        $readStatus=@($statuses | Where-Object Id -eq $pair.Read)
+        $removeStatus=@($statuses | Where-Object Id -eq $pair.Remove)
+        if ($readStatus.Count -eq 1 -and -not $readStatus[0].Available -and $removeStatus.Count -eq 1 -and $removeStatus[0].Available) {
+            $removeStatus[0].Available=$false;$removeStatus[0].Detail='Lettura della fonte non disponibile nella verifica iniziale: ripetere la verifica prima delle eliminazioni.'
+        }
+    }
+    return @($statuses.ToArray())
+}
+

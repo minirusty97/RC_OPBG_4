@@ -2,7 +2,8 @@
 [CmdletBinding()]
 param(
     [string]$ConfigPath = (Join-Path $PSScriptRoot 'computer-explorer.config.local.json'),
-    [string]$EnvPath = (Join-Path $PSScriptRoot '.env')
+    [string]$EnvPath = (Join-Path $PSScriptRoot '.env'),
+    $GraphAccess
 )
 
 $ErrorActionPreference = 'Stop'
@@ -144,6 +145,13 @@ function Update-ExplorerCounters {
     $findKeysButton.Enabled=-not $script:Busy -and ($selected -eq 1 -or $nameBox.Text.Trim().Length -ge $config.MinimumCharacters)
 }
 
+function Test-UiGraphPermission {
+    param([string]$Id)
+    if ($null -eq $GraphAccess) { return $true }
+    $permission=@($GraphAccess.Permissions | Where-Object Id -eq $Id)
+    return ($permission.Count -eq 1 -and [bool]$permission[0].Available)
+}
+
 function Show-RemovalSources {
     param([string[]]$Names,[switch]$ArchiveOnly)
     $dialog = New-Object Windows.Forms.Form
@@ -161,7 +169,10 @@ function Show-RemovalSources {
     $choices = New-Object Windows.Forms.FlowLayoutPanel; $choices.Dock = 'Fill'
     $checks = @()
     foreach ($name in @('AD', 'Entra', 'Intune')) {
-        $check = New-Object Windows.Forms.CheckBox; $check.Text = $name; $check.Checked = $true; $check.AutoSize = $true
+        $check = New-Object Windows.Forms.CheckBox; $check.Name='RemovalSource'+$name;$check.Tag=$name;$check.Text = $name; $check.Checked = $true; $check.AutoSize = $true
+        $permissionId='';if ($name -eq 'Entra') { $permissionId='entra-remove';if ($ArchiveOnly) { $permissionId='entra-read' } }
+        if ($name -eq 'Intune') { $permissionId='intune-remove';if ($ArchiveOnly) { $permissionId='intune-read' } }
+        if ($permissionId -and -not (Test-UiGraphPermission $permissionId)) { $check.Checked=$false;$check.Enabled=$false;$check.Text=$name+' (permesso mancante)' }
         $checks += @($check); $choices.Controls.Add($check)
     }
     $glpiLabel = New-Object Windows.Forms.Label; $glpiLabel.Text = 'GLPI: backup nelle Note'; $glpiLabel.AutoSize = $true
@@ -172,7 +183,7 @@ function Show-RemovalSources {
     $cancel = New-Object Windows.Forms.Button; $cancel.Text = 'Annulla'; $cancel.Width = 95; $cancel.DialogResult = 'Cancel'
     $verify = New-Object Windows.Forms.Button; $verify.Text = 'Verifica oggetti'; $verify.Width = 140
     $verify.Add_Click({
-        if (@($checks | Where-Object { $_.Checked }).Count -eq 0) {
+        if (@($checks | Where-Object { $_.Checked -and $_.Enabled }).Count -eq 0) {
             [void][Windows.Forms.MessageBox]::Show($dialog, 'Selezionare almeno una origine.', 'Elimina', 'OK', 'Information'); return
         }
         $dialog.DialogResult = 'OK'; $dialog.Close()
@@ -182,7 +193,7 @@ function Show-RemovalSources {
     $dialog.Controls.Add($panel); $dialog.AcceptButton = $verify; $dialog.CancelButton = $cancel
     try {
         if ($dialog.ShowDialog($form) -ne 'OK') { return $null }
-        return ,@($checks | Where-Object { $_.Checked } | ForEach-Object { $_.Text })
+        return ,@($checks | Where-Object { $_.Checked -and $_.Enabled } | ForEach-Object { [string]$_.Tag })
     }
     finally { $dialog.Dispose() }
 }
@@ -537,6 +548,7 @@ $glpiSettings = Get-UiSetting $config.Settings 'Glpi' $null
 foreach ($name in @('AD', 'Entra', 'Intune', 'GLPI')) {
     $check = New-Object Windows.Forms.CheckBox; $check.Text = $name; $check.AutoSize = $true; $check.Checked = $true
     if ($name -eq 'GLPI') { $check.Checked = [bool](Get-UiSetting $glpiSettings 'Enabled' $false) }
+    if ($name -in @('Entra','Intune') -and -not (Test-UiGraphPermission ($name.ToLowerInvariant()+'-read'))) { $check.Checked=$false;$check.Enabled=$false }
     $sourceChecks[$name] = $check; $options.Controls.Add($check)
 }
 $counterLabel = New-Object Windows.Forms.Label; $counterLabel.AutoSize = $true
@@ -676,7 +688,7 @@ function Set-SearchBusy {
     Update-ExplorerCounters
     $searchButton.Enabled = -not $Busy; $nameBox.Enabled = -not $Busy; $tokensButton.Enabled = -not $Busy
     $forceRefresh.Enabled = -not $Busy; $cancelButton.Enabled = $Busy
-    foreach ($check in $sourceChecks.Values) { $check.Enabled = -not $Busy }
+    foreach ($name in $sourceChecks.Keys) { $allowed=$true;if ($name -in @('Entra','Intune')) { $allowed=Test-UiGraphPermission ($name.ToLowerInvariant()+'-read') };$sourceChecks[$name].Enabled = -not $Busy -and $allowed }
 }
 
 function Stop-ExplorerSearch {

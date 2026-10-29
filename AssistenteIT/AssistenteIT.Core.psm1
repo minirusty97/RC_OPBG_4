@@ -15,6 +15,17 @@ function Read-AssistenteITManifest {
     foreach ($module in $manifest.Modules) {
         if ($module.Id -notmatch '^[a-z][a-z0-9-]{1,63}$' -or $ids.ContainsKey($module.Id)) { throw 'Identificativo di modulo non valido o duplicato.' }
         $ids[$module.Id] = $true
+        $permissions=Get-ExplorerGraphSetting $module 'GraphPermissions' @()
+        $permissionIds=@{}
+        foreach ($permission in @($permissions)) {
+            $id=[string](Get-ExplorerGraphSetting $permission 'Id')
+            $name=[string](Get-ExplorerGraphSetting $permission 'Name')
+            $alternatives=Get-ExplorerGraphSetting $permission 'AnyOf' @()
+            if ($id -notmatch '^[a-z][a-z0-9-]{1,63}$' -or $permissionIds.ContainsKey($id) -or
+                [string]::IsNullOrWhiteSpace($name) -or $name.Length -gt 120 -or -not ($alternatives -is [Array] -or $alternatives -is [Collections.IList]) -or $alternatives.Count -eq 0 -or $alternatives.Count -gt 16 -or
+                @($alternatives | Where-Object { $_ -notmatch '^[A-Za-z][A-Za-z0-9.]{1,127}$' }).Count) { throw 'Requisiti Graph del modulo non validi.' }
+            $permissionIds[$id]=$true
+        }
         if ([string]::IsNullOrWhiteSpace($module.EntryPoint) -or [IO.Path]::IsPathRooted($module.EntryPoint)) { throw 'Percorso del modulo non valido.' }
         $entry = [IO.Path]::GetFullPath((Join-Path $root $module.EntryPoint))
         if (-not $entry.StartsWith($root + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or
@@ -132,6 +143,27 @@ function Open-AssistenteITActivity {
     return New-Object Threading.EventWaitHandle($false, [Threading.EventResetMode]::ManualReset, 'Local\AssistenteIT.Running')
 }
 
+function Initialize-AssistenteITModuleAccess {
+    [CmdletBinding()]
+    param([Parameter(Mandatory=$true)]$Module,[Parameter(Mandatory=$true)][string]$ConfigPath,$ProgressQueue)
+    $settings=Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    $authentication=ConvertTo-ExplorerGraphAuthentication (Get-ExplorerGraphSetting $settings 'Graph')
+    $definitions=Get-ExplorerGraphSetting $Module 'GraphPermissions' @()
+    $scopes=@($definitions | ForEach-Object { $_.AnyOf[0] } | Sort-Object -Unique)
+    # Request a scope only if removing it would leave a declared requirement
+    # uncovered. For example Intune ReadWrite already covers its read requirement.
+    foreach ($candidate in @($scopes)) {
+        $remaining=@($scopes | Where-Object { $_ -ne $candidate })
+        $uncovered=@($definitions | Where-Object { @($_.AnyOf | Where-Object { $remaining -contains $_ }).Count -eq 0 })
+        if ($uncovered.Count -eq 0) { $scopes=$remaining }
+    }
+    $context=Initialize-ExplorerGraphSession -Scopes $scopes -GraphAuthentication $authentication -ProgressQueue $ProgressQueue
+    $permissions=@(Get-ExplorerGraphPermissionStatus -Definitions $definitions -Context $context -ProgressQueue $ProgressQueue -Probe)
+    $appName=[string](Get-ExplorerGraphSetting $context 'AppName' '')
+    if ([string]::IsNullOrWhiteSpace($appName)) { $appName=[string]$context.ClientId }
+    [pscustomobject]@{Account=[string]$context.Account;AppName=$appName;ClientId=[string]$context.ClientId;TenantId=[string]$context.TenantId;Permissions=$permissions}
+}
+
 function Get-AssistenteITModuleStartInfo {
     [CmdletBinding()]
     param([Parameter(Mandatory=$true)][string]$InstallRoot, [Parameter(Mandatory=$true)][string]$ModuleId, [Parameter(Mandatory=$true)]$Paths)
@@ -147,4 +179,4 @@ function Get-AssistenteITModuleStartInfo {
     return $info
 }
 
-Export-ModuleMember -Function ConvertTo-ExplorerGraphAuthentication, Read-AssistenteITManifest, Get-AssistenteITPaths, Initialize-AssistenteIT, Save-AssistenteITSettings, Enable-AssistenteITDependencies, Get-AssistenteITPrerequisites, Open-AssistenteITActivity, Get-AssistenteITModuleStartInfo, Move-AssistenteITUserData
+Export-ModuleMember -Function Initialize-AssistenteITModuleAccess, ConvertTo-ExplorerGraphAuthentication, Read-AssistenteITManifest, Get-AssistenteITPaths, Initialize-AssistenteIT, Save-AssistenteITSettings, Enable-AssistenteITDependencies, Get-AssistenteITPrerequisites, Open-AssistenteITActivity, Get-AssistenteITModuleStartInfo, Move-AssistenteITUserData
