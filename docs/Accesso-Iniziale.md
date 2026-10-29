@@ -42,7 +42,7 @@ Il manifest `assistente-it.json` puo dichiarare `GraphPermissions` per ogni modu
 ]
 ```
 
-`AnyOf` elenca ambiti alternativi sufficienti. Nel login con app Microsoft il primo elemento di ogni requisito viene incluso nell'accesso iniziale; l'app dedicata usa sempre `.default` e i consensi gia presenti. ID, nomi e ambiti vengono validati dal lettore del manifest.
+`AnyOf` elenca ambiti alternativi sufficienti. Nel login con app Microsoft il wrapper combina gli ambiti dei requisiti ed elimina quelli ridondanti gia coperti da un'alternativa piu ampia; l'app dedicata usa sempre `.default` e i consensi gia presenti. ID, nomi e ambiti vengono validati dal lettore del manifest.
 
 Con `UsesGraphAccess` il wrapper passa il riepilogo al parametro `GraphAccess` del modulo. I moduli senza `GraphPermissions` non avviano Graph. Il wrapper resta generico e non dipende da Computer Explorer.
 

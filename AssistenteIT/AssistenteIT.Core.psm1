@@ -150,6 +150,13 @@ function Initialize-AssistenteITModuleAccess {
     $authentication=ConvertTo-ExplorerGraphAuthentication (Get-ExplorerGraphSetting $settings 'Graph')
     $definitions=Get-ExplorerGraphSetting $Module 'GraphPermissions' @()
     $scopes=@($definitions | ForEach-Object { $_.AnyOf[0] } | Sort-Object -Unique)
+    # Request a scope only if removing it would leave a declared requirement
+    # uncovered. For example Intune ReadWrite already covers its read requirement.
+    foreach ($candidate in @($scopes)) {
+        $remaining=@($scopes | Where-Object { $_ -ne $candidate })
+        $uncovered=@($definitions | Where-Object { @($_.AnyOf | Where-Object { $remaining -contains $_ }).Count -eq 0 })
+        if ($uncovered.Count -eq 0) { $scopes=$remaining }
+    }
     $context=Initialize-ExplorerGraphSession -Scopes $scopes -GraphAuthentication $authentication -ProgressQueue $ProgressQueue
     $permissions=@(Get-ExplorerGraphPermissionStatus -Definitions $definitions -Context $context -ProgressQueue $ProgressQueue -Probe)
     $appName=[string](Get-ExplorerGraphSetting $context 'AppName' '')
