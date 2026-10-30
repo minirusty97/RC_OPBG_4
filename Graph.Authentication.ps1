@@ -270,12 +270,12 @@ function Get-ExplorerGraphPermissionStatus {
         $available=@($alternatives | Where-Object { $scopes -contains $_ }).Count -gt 0
         $detail='Ambito concesso; fattibilita dell''operazione non verificata.'
         $verification='ScopeOnly';$checkStatus='Solo ambito'
-        if ([string]$definition.Id -in @('entra-remove','intune-remove')) { $verification='NotTestable';$checkStatus='Non verificabile';$detail='Ambito concesso. Cancellazione non provata: ruolo e diritti sul dispositivo non verificati.' }
+        if ([string]$definition.Id -in @('entra-remove','intune-remove','groups-write')) { $verification='NotTestable';$checkStatus='Non verificabile';$detail='Ambito concesso. Scrittura non provata: ruolo e diritti sul singolo oggetto non verificati.' }
         if (-not $available) { $detail='Consenso mancante: '+($alternatives -join ' oppure ');$verification='MissingScope';$checkStatus='Non disponibile' }
         [void]$statuses.Add([pscustomobject]@{Id=[string]$definition.Id;Name=[string]$definition.Name;Available=$available;ScopeGranted=$available;Verification=$verification;OperationVerified=$false;CheckStatus=$checkStatus;Detail=$detail})
     }
     if ($Probe) {
-        foreach ($readProbe in @(@{Id='entra-read';Uri='https://graph.microsoft.com/v1.0/devices?$top=1&$select=id'},@{Id='intune-read';Uri='https://graph.microsoft.com/v1.0/deviceManagement/managedDevices?$top=1&$select=id'},@{Id='bitlocker-read';Uri='https://graph.microsoft.com/v1.0/informationProtection/bitlocker/recoveryKeys'})) {
+        foreach ($readProbe in @(@{Id='entra-read';Uri='https://graph.microsoft.com/v1.0/devices?$top=1&$select=id'},@{Id='intune-read';Uri='https://graph.microsoft.com/v1.0/deviceManagement/managedDevices?$top=1&$select=id'},@{Id='groups-read';Uri='https://graph.microsoft.com/v1.0/groups?$top=1&$select=id'},@{Id='bitlocker-read';Uri='https://graph.microsoft.com/v1.0/informationProtection/bitlocker/recoveryKeys'})) {
             $status=@($statuses | Where-Object Id -eq $readProbe.Id)
             if ($status.Count -ne 1 -or -not $status[0].Available) { continue }
             if ($null -ne $ProgressQueue) { $ProgressQueue.Enqueue([pscustomobject]@{Kind='Verification';Message=('Verifica lettura: '+$status[0].Name)}) }
@@ -301,7 +301,7 @@ function Get-ExplorerGraphPermissionStatus {
             }
         }
     }
-    foreach ($pair in @(@{Read='entra-read';Remove='entra-remove'},@{Read='intune-read';Remove='intune-remove'})) {
+    foreach ($pair in @(@{Read='entra-read';Remove='entra-remove'},@{Read='intune-read';Remove='intune-remove'},@{Read='groups-read';Remove='groups-write'})) {
         $readStatus=@($statuses | Where-Object Id -eq $pair.Read)
         $removeStatus=@($statuses | Where-Object Id -eq $pair.Remove)
         if ($readStatus.Count -eq 1 -and -not $readStatus[0].Available -and $removeStatus.Count -eq 1 -and $removeStatus[0].Available) {

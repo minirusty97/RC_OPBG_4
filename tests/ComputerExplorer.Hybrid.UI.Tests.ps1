@@ -13,7 +13,8 @@ Add-Type -AssemblyName System.Drawing
 [Windows.Forms.Application]::EnableVisualStyles()
 [Windows.Forms.Application]::SetCompatibleTextRenderingDefault($false)
 $tokens=$null;$errors=$null;$ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $Root 'Start-ComputerExplorer.ps1'),[ref]$tokens,[ref]$errors)
-foreach ($name in @('Get-UiSetting','Show-RemovalPreview','Show-ArchivedBitLockerKeys')) { $definition=$ast.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name},$true);Set-Item ('Function:'+$name) $definition.Body.GetScriptBlock() }
+. (Join-Path $Root 'ComputerExplorer.Removal.UI.ps1')
+ foreach ($name in @('Get-UiSetting','Show-RemovalPreview','Show-ArchivedBitLockerKeys')) { $definition=$ast.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name},$true);Set-Item ('Function:'+$name) $definition.Body.GetScriptBlock() }
 function Write-UiImage {
  param($Window,[string]$Prefix)
  $bitmap=New-Object Drawing.Bitmap($Window.Width,$Window.Height)

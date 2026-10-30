@@ -101,7 +101,7 @@ function Save-AssistenteITSettings {
         [Parameter(Mandatory=$true)]$Paths,
         [Parameter(Mandatory=$true)][string[]]$DomainControllers,
         [string]$GlpiBaseUri='', [bool]$GlpiEnabled, [bool]$UseAppToken=$true,
-        [string]$UserToken, [string]$AppToken, $GraphAuthentication
+        [string]$UserToken, [string]$AppToken, $GraphAuthentication, $HybridJoinSettings, $RingManagerSettings
     )
     $graph=$null
     if ($PSBoundParameters.ContainsKey('GraphAuthentication')) { $graph=ConvertTo-ExplorerGraphAuthentication $GraphAuthentication }
@@ -116,8 +116,33 @@ function Save-AssistenteITSettings {
     foreach ($value in @($UserToken,$AppToken)) {
         if ($null -ne $value -and $value.IndexOfAny([char[]]@([char]0,[char]10,[char]13)) -ge 0) { throw 'Il token deve occupare una sola riga.' }
     }
+    if ($null -ne $HybridJoinSettings) {
+        $ous=@($HybridJoinSettings.TargetOus | ForEach-Object { ([string]$_).Trim().TrimEnd(',') } | Sort-Object -Unique)
+        if (@($ous | Where-Object { -not $_ -or $_ -notmatch '^OU=' -or $_ -match '[\r\n\x00]' }).Count -or $HybridJoinSettings.SearchScope -notin @('Base','OneLevel','Subtree')) { throw 'Configurazione OU Hybrid Join non valida.' }
+        $server=([string]$HybridJoinSettings.AdServer).Trim()
+        if ($server -and $server -notmatch '^[a-zA-Z0-9][a-zA-Z0-9.-]*$') { throw 'Server AD Hybrid Join non valido.' }
+        $HybridJoinSettings=[pscustomobject]@{AdServer=$server;SearchScope=$HybridJoinSettings.SearchScope;TargetOus=$ous}
+    }
+    if ($null -ne $RingManagerSettings) {
+        $groups=Get-ExplorerGraphSetting $RingManagerSettings 'Groups' @();$ids=@{};$labels=@{}
+        # An empty selection keeps this module unconfigured without blocking other settings.
+        foreach ($group in $groups) {
+            $id=([string]$group.Id).Trim();$name=([string]$group.Name).Trim();$label=([string]$group.Label).Trim()
+            if (-not $name -or -not $label -or $label.Length -gt 120 -or $name -match '[\r\n\x00]' -or $label -match '[\r\n\x00]' -or $labels.ContainsKey($label)) { throw 'Nomi o etichette dei gruppi non validi o duplicati.' }
+            if ($id) { $parsed=[guid]::Empty;if (-not [guid]::TryParse($id,[ref]$parsed) -or $parsed -eq [guid]::Empty -or $ids.ContainsKey($parsed.ToString())) { throw 'ID dei gruppi non validi o duplicati.' };$ids[$parsed.ToString()]=$true }
+            $labels[$label]=$true
+        }
+        $RingManagerSettings=[pscustomobject]@{Groups=@($groups | Select-Object Id,Name,Label,CanAssign)}
+    }
     $configuration = Get-Content -LiteralPath $Paths.ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($null -ne $graph) { $configuration | Add-Member -NotePropertyName Graph -NotePropertyValue $graph -Force }
+    foreach ($section in @(@{Name='HybridJoin';Value=$HybridJoinSettings},@{Name='RingManager';Value=$RingManagerSettings})) {
+        if ($null -ne $section.Value) {
+            $existing=Get-ExplorerGraphSetting $configuration $section.Name ([pscustomobject]@{})
+            foreach ($property in $section.Value.PSObject.Properties) { $existing | Add-Member -Force NoteProperty $property.Name $property.Value }
+            $configuration | Add-Member -Force NoteProperty $section.Name $existing
+        }
+    }
     $configuration.DomainControllers = $controllers
     $configuration.Glpi.Enabled = $GlpiEnabled; $configuration.Glpi.BaseUri = $uriText; $configuration.Glpi.UseAppToken = $UseAppToken
     $user=$null; $app=$null
@@ -237,6 +262,7 @@ function Get-AssistenteITModuleAccess {
     $readIds=Get-ExplorerGraphSetting $Module 'ReadPermissionIds' @($definitions | Where-Object { $_.Id -notmatch '-remove$' } | ForEach-Object { $_.Id })
     $writeIds=Get-ExplorerGraphSetting $Module 'WritePermissionIds' @($definitions | Where-Object { $_.Id -match '-remove$' } | ForEach-Object { $_.Id })
     $canOpen=$null -ne $Access -and (@($definitions).Count -eq 0 -or @($permissions | Where-Object { $_.Available -and $_.Id -in $readIds }).Count -gt 0)
+    if ([bool](Get-ExplorerGraphSetting $Module 'RequireAllReadPermissions' $false)) { $canOpen=$canOpen -and @($readIds | Where-Object { $required=$_;@($permissions | Where-Object { $_.Id -eq $required -and $_.Available }).Count -ne 1 }).Count -eq 0 }
     $canWrite=$canOpen -and @($permissions | Where-Object { $_.Available -and $_.Id -in $writeIds }).Count -gt 0
     $reason='Eseguire Accesso';if ($null -ne $Access) { $reason='Permessi di lettura non disponibili' }
     $readGroups=Get-ExplorerGraphSetting $Module 'ReadGroupIds' @()

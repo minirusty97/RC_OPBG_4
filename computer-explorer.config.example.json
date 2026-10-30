@@ -1,10 +1,10 @@
 {
   "DomainControllers": [
-    "srvDC1.opbg.dom",
-    "srvDC2.opbg.dom",
-    "srvDCBA1.opbg.dom",
-    "srvDCPA1.opbg.dom",
-    "srvDCSM1.opbg.dom"
+    "dc1.example.invalid",
+    "dc2.example.invalid",
+    "dc3.example.invalid",
+    "dc4.example.invalid",
+    "dc5.example.invalid"
   ],
   "Graph": {
     "AuthenticationMode": "Interactive",
@@ -26,5 +26,13 @@
     "TimeoutSeconds": 20,
     "CredentialsProvider": "Prompt",
     "StateColors": {}
+  },
+  "HybridJoin": {
+    "AdServer": "",
+    "SearchScope": "Subtree",
+    "TargetOus": []
+  },
+  "RingManager": {
+    "Groups": []
   }
 }

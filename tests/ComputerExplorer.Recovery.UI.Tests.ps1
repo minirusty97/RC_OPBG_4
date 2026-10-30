@@ -70,6 +70,7 @@ try {
  'PASS: native risk dialog starts unconfirmed, supports optional download and print with one cached snapshot, and allows explicit acceptance without forcing a copy.'
  'PASS: cancellation, key reread failures and zero-key cases do not bypass consent or leave a worker running.'
  $tokens=$null;$parseErrors=$null;$uiAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $Root 'Start-ComputerExplorer.ps1'),[ref]$tokens,[ref]$parseErrors)
+ . (Join-Path $Root 'ComputerExplorer.Removal.UI.ps1')
  foreach ($name in @('Get-UiSetting','Show-RemovalPreview')) { $definition=$uiAst.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name},$true);Set-Item ('Function:'+$name) $definition.Body.GetScriptBlock() }
  $entry.Backup.KeyCount=1;$entry.Targets=@([pscustomobject]@{Source='AD';DomainController='synthetic.invalid';Id='computer-id';DistinguishedName='CN=PC-UNMAPPED,DC=invalid';AdChildren=@([pscustomobject]@{Id='child-id';DistinguishedName='CN=Recovery,CN=PC-UNMAPPED,DC=invalid';ObjectClass='msFVE-RecoveryInformation'})})
  $plan.Sources=@('AD');$recoveryProbe.Mode='Accept';$recoveryProbe.Stage=0;$recoveryProbe.Seen=$false;$recoveryProbe.Watch.Restart()

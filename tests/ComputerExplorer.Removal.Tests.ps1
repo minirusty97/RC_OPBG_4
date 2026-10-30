@@ -424,6 +424,26 @@ try {
             $plan=New-ExplorerRemovalPlan -Names 'PC*(ONE)' -Sources AD -ConfigPath $configPath
             if (@($script:Fixture.Reads | Where-Object { $_.Filter -ne '(name=PC\2a\28ONE\29)' }).Count -gt 0 -or $plan.Entries[0].Targets.Count -ne 0) { throw 'Literal name widened LDAP filter.' }
             'PASS: exact AD filters escape wildcard input.'
+            Reset-Fixture
+            foreach ($record in $script:Fixture.Entra) { $record | Add-Member -Force NoteProperty TrustType 'ServerAd';$record | Add-Member -Force NoteProperty onPremisesSyncEnabled $false;$record | Add-Member -Force NoteProperty isManaged $false }
+            $script:Fixture.Entra[0].TrustType='Workplace'
+            $plan=New-ExplorerRemovalPlan -Names PC-ONE -Sources Entra -RegisteredObjectIds @((New-TestId 21)) -ConfigPath $configPath
+            if ($plan.Entries[0].Targets.Count -ne 1 -or $plan.Entries[0].Targets[0].Id -ne (New-TestId 21)) { throw 'Registered cleanup included another same-name Entra object.' }
+            $result=Invoke-ExplorerRemovalPlan -PlanId $plan.PlanId -Confirm:$false
+            if ($result.Deleted -ne 1 -or $script:Fixture.Writes.Count -ne 1 -or $script:Fixture.Writes[0].Id -ne (New-TestId 21)) { throw 'Registered cleanup deleted a hybrid or unselected registration.' }
+            'PASS: Registered cleanup shares the verified BitLocker pipeline while deleting only explicitly selected Workplace Object IDs, preserving same-name hybrid/other registrations.'
+            foreach ($change in @('Synced','TrustChanged','MdmChanged')) {
+                Reset-Fixture
+                foreach ($record in $script:Fixture.Entra) { $record | Add-Member -Force NoteProperty TrustType 'Workplace';$record | Add-Member -Force NoteProperty onPremisesSyncEnabled $false;$record | Add-Member -Force NoteProperty isManaged $false }
+                $plan=New-ExplorerRemovalPlan -Names PC-ONE -Sources Entra -RegisteredObjectIds @((New-TestId 21)) -ConfigPath $configPath
+                if ($change -eq 'Synced') { $script:Fixture.Entra[0].onPremisesSyncEnabled=$true }
+                elseif ($change -eq 'TrustChanged') { $script:Fixture.Entra[0].TrustType='ServerAd' }
+                else { $script:Fixture.Entra[0].isManaged=$true }
+                $result=Invoke-ExplorerRemovalPlan -PlanId $plan.PlanId -Confirm:$false
+                if ($result.Deleted -ne 0 -or $script:Fixture.Writes.Count -ne 0 -or $result.Failed -ne 1) { throw ('Registered guard did not reject: '+$change) }
+            }
+            'PASS: new AD synchronization, trust-type changes and changed MDM state block Registered deletion after preview, before any device write.'
+
         }
         finally { Remove-Item -LiteralPath $configPath -Force -ErrorAction SilentlyContinue }
     }

@@ -131,7 +131,7 @@ function Get-RemovalTargets {
         $safeName = $Name.Replace("'", "''")
         if ($source -eq 'Entra') {
             $path = '/v1.0/devices'; $nameProperty = 'displayName'
-            $select = 'id,displayName,deviceId,trustType'
+            $select = 'id,displayName,deviceId,trustType,onPremisesSyncEnabled,isManaged'
         }
         else {
             $path = '/v1.0/deviceManagement/managedDevices'; $nameProperty = 'deviceName'
@@ -153,12 +153,23 @@ function Get-RemovalTargets {
             }
             [void]$targets.Add([pscustomobject]@{
                 Source = $source; Name = $recordName; Id = ConvertTo-RemovalId (Get-RemovalValue $record 'id') -Context ($source+' | Computer: '+$Name+' | Campo: id'); DomainController = ''
-                DistinguishedName = ''; LinkId = $link; SerialNumber = $serial; OperatingSystem = $os; TrustType=[string](Get-RemovalValue $record 'trustType' '')
+                DistinguishedName = ''; LinkId = $link; SerialNumber = $serial; OperatingSystem = $os; TrustType=[string](Get-RemovalValue $record 'trustType' '');OnPremisesSyncEnabled=(Get-RemovalValue $record 'onPremisesSyncEnabled');IsManaged=(Get-RemovalValue $record 'isManaged')
             })
         }
     }
     # Emettere dati solo al termine di tutte le letture per questa macchina.
     return @($targets.ToArray() | Sort-Object Source, DomainController, Id -Unique)
+}
+
+function Select-RemovalRegisteredTargets {
+    param([object[]]$Targets,[string[]]$RegisteredObjectIds)
+    if ($RegisteredObjectIds.Count -eq 0) { return $Targets }
+    foreach ($target in $Targets) {
+        if ($RegisteredObjectIds -notcontains $target.Id) { continue }
+        if ($target.Source -ne 'Entra' -or $target.TrustType -ine 'Workplace' -or $target.OnPremisesSyncEnabled -eq $true) { throw 'La selezione non e piu Workplace oppure e sincronizzata da AD. Ripetere la verifica.' }
+        $target | Add-Member -Force NoteProperty RegisteredOnly $true
+        $target
+    }
 }
 
 function Get-RemovalTargetKey {
@@ -173,6 +184,9 @@ function Test-RemovalSameTarget {
     }
     if ([bool](Get-RemovalValue $Expected 'RecoveryOnly' $false) -ne [bool](Get-RemovalValue $Current 'RecoveryOnly' $false)) { return $false }
     if ([string](Get-RemovalValue $Expected 'TrustType' '') -ine [string](Get-RemovalValue $Current 'TrustType' '')) { return $false }
+    if ([bool](Get-RemovalValue $Expected 'RegisteredOnly' $false)) {
+        if ($Current.Source -ne 'Entra' -or $Current.TrustType -ine 'Workplace' -or (Get-RemovalValue $Current 'OnPremisesSyncEnabled') -eq $true -or [string](Get-RemovalValue $Expected 'IsManaged') -ine [string](Get-RemovalValue $Current 'IsManaged')) { return $false }
+    }
     if ($Expected.Source -eq 'AD') {
         $expectedChildren = @{}
         foreach ($child in $Expected.AdChildren) { $expectedChildren[$child.Id] = $child }
@@ -242,6 +256,7 @@ function New-ExplorerRemovalPlan {
         [Parameter(Mandatory = $true)][string]$ConfigPath,
         $GlpiCredentials,
         [switch]$ArchiveOnly,
+        [string[]]$RegisteredObjectIds=@(),
         $ProgressQueue
     )
     Assert-ExplorerRemovalWriteAccess
@@ -252,6 +267,8 @@ function New-ExplorerRemovalPlan {
         $name
     } | Sort-Object -Unique)
     $selectedSources = @($Sources | Sort-Object -Unique)
+    $registeredIds=@($RegisteredObjectIds | ForEach-Object { ConvertTo-RemovalId $_ } | Sort-Object -Unique)
+    if ($registeredIds.Count -gt 0 -and ($selectedSources.Count -ne 1 -or $selectedSources[0] -ne 'Entra' -or $ArchiveOnly)) { throw 'La selezione puntuale Registered ammette soltanto eliminazioni Entra.' }
     if ($namesToRead.Count -eq 0 -or $selectedSources.Count -eq 0) { throw 'Selezionare computer e origini da eliminare.' }
     $config = Read-ExplorerConfiguration $ConfigPath
     $controllersProperty = $config.Settings.PSObject.Properties['DomainControllers']
@@ -266,6 +283,7 @@ function New-ExplorerRemovalPlan {
         $targets = @(); $errorText = $null; $backup=$null;$hybrid=$null
         try {
             $targets = @(Get-RemovalTargets -Name $name -Sources $selectedSources -Controllers $controllers -ArchiveOnly:$ArchiveOnly)
+            $targets=@(Select-RemovalRegisteredTargets -Targets $targets -RegisteredObjectIds $registeredIds)
             $hybrid=Get-RemovalHybridIdentity -Name $name -Targets $targets -Sources $selectedSources -Controllers $controllers
             if ($targets.Count -gt 0) { $backup=Get-RemovalBitLockerPreview -Name $name -Targets $targets -Settings (Get-RemovalValue $config.Settings 'Glpi') -Credentials $GlpiCredentials -AllowUnmappedGlpi:(-not $ArchiveOnly) }
         }
@@ -277,12 +295,12 @@ function New-ExplorerRemovalPlan {
     $created = [datetimeoffset]::UtcNow
     $script:RemovalPlans[$planId] = [pscustomobject]@{
         Id = $planId; CreatedAtUtc = $created; Sources = $selectedSources; Controllers = $controllers
-        ContextKey = $contextKey; Entries = $entries.ToArray(); ArchiveOnly=[bool]$ArchiveOnly; GraphAuthentication=$config.GraphAuthentication; GlpiSettings=(Get-RemovalValue $config.Settings 'Glpi'); Credentials=$GlpiCredentials
+        RegisteredObjectIds=$registeredIds;ContextKey = $contextKey; Entries = $entries.ToArray(); ArchiveOnly=[bool]$ArchiveOnly; GraphAuthentication=$config.GraphAuthentication; GlpiSettings=(Get-RemovalValue $config.Settings 'Glpi'); Credentials=$GlpiCredentials
     }
     # La vista passata alla UI non contiene gli oggetti interni del piano.
     $view = @($entries | ForEach-Object {
         [pscustomobject]@{ Name = $_.Name; Error = $_.Error; HybridIdentity=(ConvertTo-RemovalHybridView $_.HybridIdentity); Backup=$_.Backup | Select-Object ComputerId,Name,GlpiName,Serial,EntityId,RequiresMappingConfirmation,Warning,MatchBy,@{Name='ArchiveAvailable';Expression={[bool](Get-RemovalValue $_ 'ArchiveAvailable' $true)}},@{Name='GlpiMatchCount';Expression={[int](Get-RemovalValue $_ 'GlpiMatchCount' 1)}},@{Name='KeyCount';Expression={$_.Keys.Count}},@{Name='Keys';Expression={@($_.Keys | Select-Object KeyId,Volume,CreatedAt,@{Name='Origins';Expression={@($_.Origins | ForEach-Object {[string]$_})}})}}; Targets = @($_.Targets | ForEach-Object {
-            $copy = $_ | Select-Object Source, Name, Id, DomainController, DistinguishedName, LinkId, SerialNumber, OperatingSystem, TrustType, RecoveryOnly
+            $copy = $_ | Select-Object Source, Name, Id, DomainController, DistinguishedName, LinkId, SerialNumber, OperatingSystem, TrustType, RecoveryOnly, RegisteredOnly, OnPremisesSyncEnabled, IsManaged
             $children = @((Get-RemovalValue $_ 'AdChildren' @()) | ForEach-Object { $_ | Select-Object Id, DistinguishedName, ObjectClass })
             $copy | Add-Member -NotePropertyName AdChildren -NotePropertyValue $children
             $copy
@@ -318,7 +336,7 @@ function Read-RemovalTargetById {
                 RecoveryOnly=[bool](Get-RemovalValue $Target 'RecoveryOnly' $false);AdChildren = @(Get-RemovalAdChildren -Computer $record -Server $Target.DomainController -RecoveryOnly:([bool](Get-RemovalValue $Target 'RecoveryOnly' $false)))
             }
         }
-        $path = '/v1.0/devices'; $nameField = 'displayName'; $linkField = 'deviceId'; $select = 'id,displayName,deviceId,trustType'
+        $path = '/v1.0/devices'; $nameField = 'displayName'; $linkField = 'deviceId'; $select = 'id,displayName,deviceId,trustType,onPremisesSyncEnabled,isManaged'
         if ($Target.Source -eq 'Intune') {
             $path = '/v1.0/deviceManagement/managedDevices'; $nameField = 'deviceName'; $linkField = 'azureADDeviceId'
             $select = 'id,deviceName,azureADDeviceId,serialNumber,operatingSystem'
@@ -329,7 +347,7 @@ function Read-RemovalTargetById {
         if ($Target.Source -eq 'Intune') { $os = [string](Get-RemovalValue $record 'operatingSystem'); $serial = [string](Get-RemovalValue $record 'serialNumber') }
         return [pscustomobject]@{
             Source = $Target.Source; Name = [string](Get-RemovalValue $record $nameField); Id = ConvertTo-RemovalId (Get-RemovalValue $record 'id') -Context ($Target.Source+' | Computer: '+$Target.Name+' | Campo: id')
-            DomainController = ''; DistinguishedName = ''; LinkId = [string](Get-RemovalValue $record $linkField); SerialNumber = $serial; OperatingSystem = $os; TrustType=[string](Get-RemovalValue $record 'trustType' '')
+            DomainController = ''; DistinguishedName = ''; LinkId = [string](Get-RemovalValue $record $linkField); SerialNumber = $serial; OperatingSystem = $os; TrustType=[string](Get-RemovalValue $record 'trustType' '');OnPremisesSyncEnabled=(Get-RemovalValue $record 'onPremisesSyncEnabled');IsManaged=(Get-RemovalValue $record 'isManaged')
         }
     }
     catch { if (Test-RemovalNotFound $_) { return $null }; throw }
@@ -419,6 +437,7 @@ function Invoke-ExplorerRemovalPlan {
                     if ((Get-RemovalContextKey $plan.Sources) -ne $plan.ContextKey) { throw 'Sessione Graph cambiata.' }
                     Send-RemovalProgress $ProgressQueue ($(if ($plan.ArchiveOnly) { "Rilettura prima di archiviare: " } else { "Rilettura prima di eliminare: " }) + $entry.Name)
                     $current = @(Get-RemovalTargets -Name $entry.Name -Sources $plan.Sources -Controllers $plan.Controllers -ArchiveOnly:$plan.ArchiveOnly)
+                    $current=@(Select-RemovalRegisteredTargets -Targets $current -RegisteredObjectIds $plan.RegisteredObjectIds)
                     $expected = @{}
                     foreach ($target in $entry.Targets) { $expected[(Get-RemovalTargetKey $target)] = $target }
                     foreach ($target in $current) {

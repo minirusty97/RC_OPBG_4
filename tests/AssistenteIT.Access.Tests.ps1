@@ -5,7 +5,7 @@ $module=Import-Module (Join-Path $root 'AssistenteIT/AssistenteIT.Core.psm1') -F
 $manifest=Read-AssistenteITManifest $root
 $entry=$manifest.Modules[0]
 $definition=Get-AssistenteITAccessDefinition $manifest.Modules
-if ($definition.GraphPermissions.Count -ne 5 -or $definition.NeedsGroupMembership) { throw 'Common login definition duplicated scopes or required unconfigured group discovery.' }
+if ($definition.GraphPermissions.Count -ne 7 -or $definition.NeedsGroupMembership) { throw 'Common login definition duplicated scopes or required unconfigured group discovery.' }
 $permissions=@($entry.GraphPermissions | ForEach-Object { [pscustomobject]@{Id=$_.Id;Name=$_.Name;Available=($_.Id -notmatch '-remove$');Detail='Synthetic'} })
 $access=[pscustomobject]@{Account='synthetic@example.invalid';ClientId='22222222-2222-4222-8222-222222222222';TenantId='11111111-1111-4111-8111-111111111111';Permissions=$permissions;GroupIds=@();GroupMembershipVerified=$false}
 if ((Get-AssistenteITModuleAccess $entry $null).CanOpen) { throw 'Module opened before login.' }
@@ -14,6 +14,15 @@ if (-not $mode.CanOpen -or -not $mode.ReadOnly -or $mode.AccessMode -ne 'ReadOnl
 $permissions | Where-Object Id -eq 'intune-remove' | ForEach-Object { $_.Available=$true }
 if ((Get-AssistenteITModuleAccess $entry $access).AccessMode -ne 'ReadWrite') { throw 'Verified write permission did not enable the module write mode.' }
 'PASS: modules remain disabled before login; verified read and write requirements independently select read-only or read/write access.'
+$ring=@($manifest.Modules | Where-Object Id -eq 'ring-manager')[0]
+$ringPermissions=@($ring.GraphPermissions | ForEach-Object { [pscustomobject]@{Id=$_.Id;Name=$_.Name;Available=($_.Id -eq 'entra-read');Detail='Synthetic'} })
+$ringAccess=[pscustomobject]@{Account=$access.Account;ClientId=$access.ClientId;TenantId=$access.TenantId;Permissions=$ringPermissions}
+if ((Get-AssistenteITModuleAccess $ring $ringAccess).CanOpen) { throw 'Ring opened without group read authorization.' }
+$ringPermissions | Where-Object Id -eq 'groups-read' | ForEach-Object { $_.Available=$true }
+if ((Get-AssistenteITModuleAccess $ring $ringAccess).AccessMode -ne 'ReadOnly') { throw 'Complete read scopes did not enable read-only Ring mode.' }
+$ringPermissions | Where-Object Id -eq 'groups-write' | ForEach-Object { $_.Available=$true }
+if ((Get-AssistenteITModuleAccess $ring $ringAccess).AccessMode -ne 'ReadWrite') { throw 'Dedicated group write permission did not enable Ring assignments.' }
+'PASS: Ring requires both device and group reads; group write authorization independently enables assignments without granting device deletion.'
 $grouped=$entry | Select-Object *
 $grouped | Add-Member NoteProperty ReadGroupIds @('33333333-3333-4333-8333-333333333333')
 $grouped | Add-Member NoteProperty WriteGroupIds @('44444444-4444-4444-8444-444444444444')
