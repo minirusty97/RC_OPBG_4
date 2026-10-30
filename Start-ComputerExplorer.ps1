@@ -17,6 +17,7 @@ Add-Type -AssemblyName System.Drawing
 [Windows.Forms.Application]::EnableVisualStyles()
 Import-Module (Join-Path $PSScriptRoot 'ComputerExplorer.Core.psm1') -Force -ErrorAction Stop
 Import-Module (Join-Path $PSScriptRoot 'BitLocker.Archive.psm1') -ErrorAction Stop
+. (Join-Path $PSScriptRoot 'ComputerExplorer.Recovery.UI.ps1')
 $config = Read-ExplorerConfiguration $ConfigPath
 $ConfigPath = (Resolve-Path -LiteralPath $ConfigPath).ProviderPath
 
@@ -139,7 +140,13 @@ function Update-ExplorerCounters {
     if ($complete) { $complete = @($script:Latest.Sources | Where-Object { $_.State -notin @('OK','Errore','Esclusa') }).Count -eq 0 }
     $conflicts=@($grid.SelectedRows | Where-Object { $null -ne $_.Tag -and $null -ne $_.Tag.PSObject.Properties['SerialConflict'] -and $_.Tag.SerialConflict }).Count
     if ($conflicts -gt 0) { $counterLabel.Text+=' | Conflitti seriale: '+$conflicts }
-    $deleteButton.Enabled = $conflicts -eq 0 -and $selected -gt 0 -and $complete -and -not $script:Busy -and -not $script:RemovalNeedsRefresh
+    $blockingConflicts=@($grid.SelectedRows | Where-Object {
+        if ($null -eq $_.Tag) { return $false }
+        $property=$_.Tag.PSObject.Properties['DeletionIdentityConflict']
+        if ($null -ne $property) { return [bool]$property.Value }
+        return ($null -ne $_.Tag.PSObject.Properties['SerialConflict'] -and $_.Tag.SerialConflict)
+    }).Count
+    $deleteButton.Enabled = $blockingConflicts -eq 0 -and $selected -gt 0 -and $complete -and -not $script:Busy -and -not $script:RemovalNeedsRefresh
     if (Test-UiReadOnly) { $deleteButton.Enabled=$false }
     $archiveButton.Enabled=$deleteButton.Enabled
     $readArchiveButton.Enabled=$selected -eq 1 -and $complete -and -not $script:Busy
@@ -209,7 +216,7 @@ function Show-RemovalPreview {
     $dialog.Icon = $form.Icon
     $archiveOnly=[bool](Get-UiSetting $Plan 'ArchiveOnly' $false)
     $dialog.Text = 'Conferma eliminazione - oggetti verificati'; if ($archiveOnly) { $dialog.Text='Conferma archiviazione BitLocker' }; $dialog.Size = New-Object Drawing.Size(1000, 680)
-    $dialog.MinimumSize = New-Object Drawing.Size(750, 450); $dialog.StartPosition = 'CenterParent'
+    $dialog.MinimumSize = New-Object Drawing.Size(750, 450); $dialog.StartPosition = 'CenterParent';$dialog.Font=$form.Font
     $panel = New-Object Windows.Forms.TableLayoutPanel
     $panel.Dock = 'Fill'; $panel.ColumnCount = 1; $panel.RowCount = 4; $panel.Padding = New-Object Windows.Forms.Padding(10)
     [void]$panel.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 65)))
@@ -224,6 +231,12 @@ function Show-RemovalPreview {
     if ($Plan.Sources -contains 'Intune') { $intro.Text += [Environment]::NewLine + 'Intune: eliminare una registrazione Windows avvia anche il ritiro dalla gestione.' }
     $intro.Text += [Environment]::NewLine + 'Prima di eliminare: archivio BitLocker aggiunto alle Note GLPI e riletto dalle Note GLPI. Un errore blocca il computer.'
     if ($archiveOnly) { $intro.Text='Archiviazione delle chiavi in chiaro nelle Note GLPI. Nessun computer verra eliminato. Verificare scheda GLPI, seriale e origini.' }
+    $unmapped=@($Plan.Entries | Where-Object { [string]::IsNullOrWhiteSpace($_.Error) -and $_.Targets.Count -gt 0 -and $null -ne (Get-UiSetting $_ 'Backup' $null) -and -not [bool](Get-UiSetting $_.Backup 'ArchiveAvailable' $true) })
+    if ($unmapped.Count) {
+        $panel.RowStyles[0].Height=95
+        $intro.Text='Origini: '+($Plan.Sources -join ', ')+'. PC pronti: '+$ready+'/'+$Plan.Entries.Count+'.'+[Environment]::NewLine+'Per '+$unmapped.Count+' PC manca una scheda GLPI univoca: seguono download/stampa e conferma separata. Gli altri PC mantengono il backup GLPI.'
+        if ($Plan.Sources -contains 'Intune') { $intro.Text+=[Environment]::NewLine+'Intune: eliminare la registrazione Windows avvia anche il ritiro dalla gestione.' }
+    }
     $preview = New-Object Windows.Forms.RichTextBox; $preview.Dock = 'Fill'; $preview.ReadOnly = $true
     $preview.WordWrap = $false; $preview.Font = New-Object Drawing.Font('Consolas', 9)
     $lines = New-Object 'System.Collections.Generic.List[string]'
@@ -233,7 +246,11 @@ function Show-RemovalPreview {
         elseif ($entry.Targets.Count -eq 0) { [void]$lines.Add('  Nessun oggetto presente nelle origini selezionate.') }
         $backup=Get-UiSetting $entry 'Backup' $null
         if ($null -ne $backup) {
+            if (-not [bool](Get-UiSetting $backup 'ArchiveAvailable' $true)) { [void]$lines.Add('  AVVISO: '+$backup.Warning+' Chiavi da conservare: '+$backup.KeyCount) }
+            else {
             [void]$lines.Add(('  BACKUP GLPI | Computer ID: {0} | Seriale: {1} | Chiavi: {2}' -f $backup.ComputerId,$backup.Serial,$backup.KeyCount))
+            if ((Get-UiSetting $backup 'MatchBy' 'Name') -eq 'Serial') { [void]$lines.Add('  Associazione per seriale Intune | Nome GLPI: '+$backup.GlpiName) }
+            }
             foreach ($key in $backup.Keys) { [void]$lines.Add(('    Key ID: {0} | Volume: {1} | Origine: {2}' -f $key.KeyId,$key.Volume,($key.Origins -join ', '))) }
         }
         foreach ($target in $entry.Targets) {
@@ -255,7 +272,7 @@ function Show-RemovalPreview {
     $preview.Text = $lines -join [Environment]::NewLine
     $buttons = New-Object Windows.Forms.FlowLayoutPanel; $buttons.Dock = 'Fill'; $buttons.FlowDirection = 'RightToLeft'
     $cancel = New-Object Windows.Forms.Button; $cancel.Text = 'Annulla'; $cancel.Width = 100; $cancel.DialogResult = 'Cancel'
-    $confirm = New-Object Windows.Forms.Button; $confirm.Name = 'ConfirmRemoval'; $confirm.Text = 'Elimina definitivamente'; $confirm.Width = 185; $confirm.DialogResult = 'OK'; $confirm.Enabled = $ready -gt 0 -and -not $hasAdChildren
+    $confirm = New-Object Windows.Forms.Button; $confirm.Name = 'ConfirmRemoval'; $confirm.Text = 'Elimina definitivamente'; $confirm.Width = 185; $confirm.Enabled = $ready -gt 0 -and -not $hasAdChildren
     $childConsent = New-Object Windows.Forms.CheckBox; $childConsent.Name = 'AdChildrenConsent'; $childConsent.Dock = 'Fill'; $childConsent.Visible = $hasAdChildren
     $childConsent.Text = 'Autorizzo anche l''eliminazione degli oggetti figli AD elencati. Le eventuali informazioni di recupero BitLocker salvate in AD verranno eliminate.'
     $childConsent.Tag = [pscustomobject]@{ Button = $confirm; Ready = ($ready -gt 0) }
@@ -266,11 +283,20 @@ function Show-RemovalPreview {
         $panel.RowStyles[2].Height=80; $childConsent.Visible=$true; $confirm.Enabled=$false
         $childConsent.Text='Confermo di aver verificato le schede GLPI e i seriali elencati: alcune associazioni sono basate sul nome. Autorizzo il backup e, per l''eliminazione, anche la rimozione degli eventuali figli AD e record BitLocker.'
     }
+    $previewDecision=@{LossNames=@()}
+    $confirm.Add_Click({
+        if ($unmapped.Count -gt 0) {
+            $loss=Show-ExplorerBitLockerLossConfirmation -Plan $Plan -Entries $unmapped -Owner $dialog
+            if ($null -eq $loss) { return }
+            $previewDecision.LossNames=$loss.Names
+        }
+        $dialog.DialogResult='OK';$dialog.Close()
+    })
     $buttons.Controls.AddRange(@($cancel, $confirm))
     $panel.Controls.Add($intro, 0, 0); $panel.Controls.Add($preview, 0, 1); $panel.Controls.Add($childConsent, 0, 2); $panel.Controls.Add($buttons, 0, 3)
     $dialog.Controls.Add($panel); $dialog.AcceptButton = $cancel; $dialog.CancelButton = $cancel
     try {
-        if ($dialog.ShowDialog($form) -eq 'OK') { return [pscustomobject]@{ IncludeAdChildren = ($hasAdChildren -and $childConsent.Checked); ConfirmGlpiMapping=($requiresMapping -and $childConsent.Checked) } }
+        if ($dialog.ShowDialog($form) -eq 'OK') { return [pscustomobject]@{ IncludeAdChildren = ($hasAdChildren -and $childConsent.Checked); ConfirmGlpiMapping=($requiresMapping -and $childConsent.Checked);ConfirmBitLockerLossFor=[string[]]$previewDecision.LossNames } }
         return $null
     }
     finally { $dialog.Dispose() }
@@ -282,7 +308,7 @@ function Add-RemovalReportRow {
 }
 
 function Start-RemovalOperation {
-    param([ValidateSet('PrepareRemoval','Remove','PrepareArchive','Archive','ReadArchive','ReadKeys')][string]$Operation, [string[]]$Names, [string[]]$Sources, [string]$PlanId, [switch]$IncludeAdChildren, [switch]$ConfirmGlpiMapping, [int]$ComputerId)
+    param([ValidateSet('PrepareRemoval','Remove','PrepareArchive','Archive','ReadArchive','ReadKeys')][string]$Operation, [string[]]$Names, [string[]]$Sources, [string]$PlanId, [switch]$IncludeAdChildren, [switch]$ConfirmGlpiMapping, [int]$ComputerId, [string[]]$ConfirmBitLockerLossFor=@())
     if ((Test-UiReadOnly) -and $Operation -in @('PrepareRemoval','Remove','PrepareArchive','Archive')) { throw 'Modulo in sola lettura: modifiche e archiviazioni non consentite.' }
     try {
         $script:Operation = $Operation; $script:Stopping = $false
@@ -294,7 +320,7 @@ function Start-RemovalOperation {
             $removalGrid.Rows.Clear(); $tabs.SelectedTab = $removalTab
         }
         $workerCode = {
-            param($ModulePath, $OperationName, $Names, $Sources, $ConfigFile, $PlanId, $Queue, $Cancellation, $IncludeAdChildren, $Credentials, $ConfirmMapping, $ComputerId, $SessionReadOnly)
+            param($ModulePath, $OperationName, $Names, $Sources, $ConfigFile, $PlanId, $Queue, $Cancellation, $IncludeAdChildren, $Credentials, $ConfirmMapping, $ComputerId, $SessionReadOnly, $ConfirmLossNames)
             $ErrorActionPreference = 'Stop'
             Import-Module $ModulePath -ErrorAction Stop
             Set-ExplorerRemovalReadOnly -ReadOnly:$SessionReadOnly
@@ -318,10 +344,11 @@ function Start-RemovalOperation {
             else {
                 $arguments=@{PlanId=$PlanId;ProgressQueue=$Queue;Cancellation=$Cancellation;IncludeAdChildren=[bool]$IncludeAdChildren;Confirm=$false}
                 if ($ConfirmMapping) { $arguments.ConfirmGlpiMapping=$true }
+                if ($null -ne $ConfirmLossNames -and @($ConfirmLossNames).Count -gt 0) { $arguments.ConfirmBitLockerLossFor=$ConfirmLossNames }
                 Invoke-ExplorerRemovalPlan @arguments
             }
         }
-        [void]$script:Pipeline.AddScript($workerCode.ToString()).AddArgument((Join-Path $PSScriptRoot 'ComputerExplorer.Removal.psm1')).AddArgument($Operation).AddArgument($Names).AddArgument($Sources).AddArgument($ConfigPath).AddArgument($PlanId).AddArgument($script:Queue).AddArgument($script:RemovalCancellation).AddArgument([bool]$IncludeAdChildren).AddArgument($script:GlpiCredentials).AddArgument([bool]$ConfirmGlpiMapping).AddArgument($ComputerId).AddArgument((Test-UiReadOnly))
+        [void]$script:Pipeline.AddScript($workerCode.ToString()).AddArgument((Join-Path $PSScriptRoot 'ComputerExplorer.Removal.psm1')).AddArgument($Operation).AddArgument($Names).AddArgument($Sources).AddArgument($ConfigPath).AddArgument($PlanId).AddArgument($script:Queue).AddArgument($script:RemovalCancellation).AddArgument([bool]$IncludeAdChildren).AddArgument($script:GlpiCredentials).AddArgument([bool]$ConfirmGlpiMapping).AddArgument($ComputerId).AddArgument((Test-UiReadOnly)).AddArgument($ConfirmBitLockerLossFor)
         $script:StartedAt = [datetime]::Now; $script:StageMessage = 'Verifica degli oggetti selezionati...'
         if ($Operation -eq 'Remove') { $script:StageMessage = 'Backup BitLocker, verifica e successiva eliminazione...' }
         elseif ($Operation -eq 'Archive') { $script:StageMessage='Archiviazione BitLocker su GLPI...' }
@@ -887,7 +914,7 @@ $timer.Add_Tick({
             $decision = Show-RemovalPreview $output[0]
             if ($null -ne $decision) {
                 $operation='Remove'; if ($finishedOperation -eq 'PrepareArchive') { $operation='Archive' }
-                Start-RemovalOperation -Operation $operation -PlanId $output[0].PlanId -IncludeAdChildren:$decision.IncludeAdChildren -ConfirmGlpiMapping:$decision.ConfirmGlpiMapping
+                Start-RemovalOperation -Operation $operation -PlanId $output[0].PlanId -IncludeAdChildren:$decision.IncludeAdChildren -ConfirmGlpiMapping:$decision.ConfirmGlpiMapping -ConfirmBitLockerLossFor $decision.ConfirmBitLockerLossFor
             }
         }
         elseif ($finishedOperation -eq 'ReadKeys' -and -not $failed -and $output.Count -eq 1) {

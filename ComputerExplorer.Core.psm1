@@ -146,7 +146,7 @@ function Get-ExplorerCloudInventory {
 
 function New-ExplorerSource {
     param([string]$Name, [string]$State = 'In attesa')
-    [pscustomobject]@{ Name = $Name; State = $State; Records = @(); DcSources = @(); CheckedAtUtc = $null; FromCache = $false; Error = $null }
+    [pscustomobject]@{ Name = $Name; State = $State; Records = @(); DcSources = @(); CheckedAtUtc = $null; FromCache = $false; Error = $null; Progress='';CurrentTarget='' }
 }
 
 function Get-ExplorerPresence {
@@ -217,7 +217,7 @@ function Merge-ExplorerResults {
     [CmdletBinding()]
     param([System.Collections.IDictionary]$Sources, [string[]]$DomainControllers)
     $groups = @{}
-    foreach ($sourceName in @('AD', 'Entra', 'Intune', 'GLPI')) {
+    foreach ($sourceName in @('AD', 'Entra', 'Intune')) {
         foreach ($record in $Sources[$sourceName].Records) {
             $name = ([string](Get-ExplorerValue $record 'Name')).Trim()
             if ($name.Length -eq 0) { continue }
@@ -227,6 +227,21 @@ function Merge-ExplorerResults {
             }
             $groups[$key][$sourceName] += @($record)
         }
+    }
+    $excludedGlpi=@{}
+    foreach ($record in $Sources.GLPI.Records) {
+        $name=([string](Get-ExplorerValue $record 'Name')).Trim();if (-not $name) { continue }
+        $nameKey=$name.ToUpperInvariant();$serials=@(Get-ExplorerSerials @($record));$matches=@()
+        if ($Sources.Intune.State -eq 'OK' -and $serials.Count -eq 1) {
+            $matches=@($groups.Keys | Where-Object { @(Get-ExplorerSerials $groups[$_].Intune) -contains $serials[0] })
+        }
+        if ($matches.Count) { foreach ($key in $matches) { $groups[$key].GLPI+=@($record) };continue }
+        if ($Sources.Intune.State -eq 'OK' -and $groups.ContainsKey($nameKey) -and @(Get-ExplorerSerials $groups[$nameKey].Intune).Count -gt 0) {
+            if (-not $excludedGlpi.ContainsKey($nameKey)) { $excludedGlpi[$nameKey]=@() }
+            $excludedGlpi[$nameKey]+=@($record);continue
+        }
+        if (-not $groups.ContainsKey($nameKey)) { $groups[$nameKey]=@{Name=$name;AD=@();Entra=@();Intune=@();GLPI=@()} }
+        $groups[$nameKey].GLPI+=@($record)
     }
     $verified = @($Sources.AD.DcSources | Where-Object { $_.Verificato }).Count
     foreach ($group in @($groups.Values | Sort-Object { $_.Name })) {
@@ -248,6 +263,9 @@ function Merge-ExplorerResults {
         $intunePresence = Get-ExplorerPresence $Sources.Intune $intune.Count
         $glpiPresence = Get-ExplorerPresence $Sources.GLPI $glpi.Count
         $notes = New-Object 'System.Collections.Generic.List[string]'
+        $groupKey=$group.Name.ToUpperInvariant()
+        if ($excludedGlpi.ContainsKey($groupKey)) { [void]$notes.Add('Schede GLPI omonime escluse: seriale diverso o non disponibile (#'+(@($excludedGlpi[$groupKey] | ForEach-Object { $_.GlpiId }) -join ', #')+').') }
+        if (@($glpi | Where-Object { $_.Name -ine $group.Name }).Count) { [void]$notes.Add('GLPI associato tramite seriale Intune; nome GLPI: '+(@($glpi | ForEach-Object { $_.Name } | Sort-Object -Unique) -join ', ')) }
         if ($guids.Count -gt 1) { [void]$notes.Add('GUID AD diversi') }
         if ($paths.Count -gt 1) { [void]$notes.Add('Percorsi AD diversi') }
         $intuneSerials=@(Get-ExplorerSerials $intune | Sort-Object -Unique)
@@ -291,7 +309,7 @@ function Merge-ExplorerResults {
             Entra = $entraPresence.Text; EntraColor = $entraPresence.Color; Intune = $intunePresence.Text; IntuneColor = $intunePresence.Color
             Censito=$censito; CensitoColor=$censitoColor; CensitoInfo=$censitoInfo
             IntuneSerial=($intuneSerials -join ' | '); GlpiSerial=($glpiSerials -join ' | ')
-            SerialCheck=$serialCheck; SerialColor=$serialColor; SerialConflict=$serialConflict
+            SerialCheck=$serialCheck; SerialColor=$serialColor; SerialConflict=$serialConflict; DeletionIdentityConflict=($intuneSerials.Count -gt 1)
             GLPI = $glpiPresence.Text; GLPIColor = $glpiPresence.Color
             ADLastModified = Get-ExplorerLatestDate -Records @($group.AD) -Property 'LastModified'
             EntraLastActivity = Get-ExplorerLatestDate -Records $entra -Property 'LastSignIn'
@@ -322,7 +340,7 @@ function Read-ExplorerSource {
     param(
         [ValidateSet('AD', 'Entra', 'Intune', 'GLPI')][string]$Source,
         [string]$NameFragment, [string]$ConfigPath, $Configuration,
-        [string]$DomainController,
+        [string]$DomainController, [object[]]$IntuneDevices=@(),
         [System.Collections.IDictionary]$CloudCache = $script:CloudCache,
         [Security.SecureString]$GlpiUserToken, [Security.SecureString]$GlpiAppToken,
         [switch]$ForceCloudRefresh, $ProgressQueue
@@ -359,6 +377,8 @@ function Read-ExplorerSource {
                     if ($null -eq $GlpiAppToken -or $GlpiAppToken.Length -eq 0) { throw 'App token GLPI mancante.' }
                     $query.AppToken = $GlpiAppToken
                 }
+                $serials=@(Get-ExplorerSerials $IntuneDevices | Sort-Object -Unique)
+                if ($serials.Count) { $query.Remove('NameFragment');$query.SerialNumber=$serials }
                 $result.Records = @(Find-GlpiComputer @query)
                 $result.CheckedAtUtc = [datetimeoffset]::UtcNow; $result.State = 'OK'
             }
@@ -413,6 +433,10 @@ function Invoke-ComputerExplorerSearch {
             $sources[$name] = Read-ExplorerSource -Source $name -NameFragment $fragment -ConfigPath $ConfigPath -Configuration $config -GlpiUserToken $GlpiUserToken -GlpiAppToken $GlpiAppToken -ForceCloudRefresh:$ForceCloudRefresh
         }
     }
+    if ($sources.Intune.State -eq 'OK' -and $sources.GLPI.State -eq 'OK' -and @(Get-ExplorerSerials $sources.Intune.Records).Count) {
+        $extra=Read-ExplorerSource -Source GLPI -NameFragment $fragment -ConfigPath $ConfigPath -Configuration $config -IntuneDevices $sources.Intune.Records -GlpiUserToken $GlpiUserToken -GlpiAppToken $GlpiAppToken
+        $extra.Records=@(@($sources.GLPI.Records)+@($extra.Records) | Sort-Object GlpiId -Unique);$sources.GLPI=$extra
+    }
     Send-ExplorerUpdate $sources $controllers 'Ricerca completata.' $ProgressQueue -Complete
 }
 
@@ -420,4 +444,4 @@ function Get-ExplorerCloudCache { return $script:CloudCache }
 
 function Clear-ExplorerCloudCache { $script:CloudCache.Clear() }
 
-Export-ModuleMember -Function New-ExplorerGraphOperationError, Initialize-ExplorerGraphSession, Get-ExplorerGraphPermissionStatus, Read-ExplorerSource, Get-ExplorerCloudCache, Connect-ExplorerGraph, Get-ExplorerGraphCollection, Clear-ExplorerCloudCache, Read-ExplorerConfiguration, Invoke-ComputerExplorerSearch, Merge-ExplorerResults, Format-ExplorerDate, Read-ExplorerGlpiCredentials, Save-ExplorerGlpiCredentials
+Export-ModuleMember -Function Get-ExplorerSerials, New-ExplorerGraphOperationError, Initialize-ExplorerGraphSession, Get-ExplorerGraphPermissionStatus, Read-ExplorerSource, Get-ExplorerCloudCache, Connect-ExplorerGraph, Get-ExplorerGraphCollection, Clear-ExplorerCloudCache, Read-ExplorerConfiguration, Invoke-ComputerExplorerSearch, Merge-ExplorerResults, Format-ExplorerDate, Read-ExplorerGlpiCredentials, Save-ExplorerGlpiCredentials

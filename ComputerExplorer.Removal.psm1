@@ -181,8 +181,8 @@ function Send-RemovalProgress {
 }
 
 function Get-RemovalBitLockerPreview {
-    param([string]$Name,$Targets,$Settings,$Credentials)
-    Get-ExplorerBitLockerPreview -Name $Name -Targets $Targets -Settings $Settings -UserToken (Get-RemovalValue $Credentials 'User') -AppToken (Get-RemovalValue $Credentials 'App')
+    param([string]$Name,$Targets,$Settings,$Credentials,[switch]$AllowUnmappedGlpi)
+    Get-ExplorerBitLockerPreview -Name $Name -Targets $Targets -Settings $Settings -UserToken (Get-RemovalValue $Credentials 'User') -AppToken (Get-RemovalValue $Credentials 'App') -AllowUnmappedGlpi:$AllowUnmappedGlpi
 }
 
 function Save-RemovalBitLockerBackup {
@@ -194,7 +194,10 @@ function Test-RemovalBitLockerCoverage {
     param($Target,$Receipt)
     foreach ($key in @(Get-ExplorerBitLockerKeys -Targets @($Target))) {
         $saved=@($Receipt.Keys | Where-Object { $_.KeyId -eq $key.KeyId -and $_.Fingerprint -eq $key.Fingerprint })
-        if ($saved.Count -ne 1) { throw 'Una chiave BitLocker non e coperta dal backup verificato. Ripetere archiviazione e anteprima.' }
+        if ($saved.Count -ne 1) {
+            if ([bool](Get-RemovalValue $Receipt 'WithoutGlpi' $false)) { throw 'Chiavi BitLocker cambiate dopo la conferma senza archivio GLPI. Ripetere anteprima e conferma.' }
+            throw 'Una chiave BitLocker non e coperta dal backup verificato. Ripetere archiviazione e anteprima.'
+        }
     }
 }
 
@@ -230,7 +233,7 @@ function New-ExplorerRemovalPlan {
         $targets = @(); $errorText = $null; $backup=$null
         try {
             $targets = @(Get-RemovalTargets -Name $name -Sources $selectedSources -Controllers $controllers)
-            if ($targets.Count -gt 0) { $backup=Get-RemovalBitLockerPreview -Name $name -Targets $targets -Settings (Get-RemovalValue $config.Settings 'Glpi') -Credentials $GlpiCredentials }
+            if ($targets.Count -gt 0) { $backup=Get-RemovalBitLockerPreview -Name $name -Targets $targets -Settings (Get-RemovalValue $config.Settings 'Glpi') -Credentials $GlpiCredentials -AllowUnmappedGlpi:(-not $ArchiveOnly) }
         }
         catch { $errorText = $_.Exception.Message }
         [void]$entries.Add([pscustomobject]@{ Name = $name; Targets = $targets; Error = $errorText; Backup=$backup })
@@ -244,7 +247,7 @@ function New-ExplorerRemovalPlan {
     }
     # La vista passata alla UI non contiene gli oggetti interni del piano.
     $view = @($entries | ForEach-Object {
-        [pscustomobject]@{ Name = $_.Name; Error = $_.Error; Backup=$_.Backup | Select-Object ComputerId,Name,Serial,EntityId,RequiresMappingConfirmation,@{Name='KeyCount';Expression={$_.Keys.Count}},@{Name='Keys';Expression={@($_.Keys | Select-Object KeyId,Volume,CreatedAt,@{Name='Origins';Expression={@($_.Origins | ForEach-Object {[string]$_})}})}}; Targets = @($_.Targets | ForEach-Object {
+        [pscustomobject]@{ Name = $_.Name; Error = $_.Error; Backup=$_.Backup | Select-Object ComputerId,Name,GlpiName,Serial,EntityId,RequiresMappingConfirmation,Warning,MatchBy,@{Name='ArchiveAvailable';Expression={[bool](Get-RemovalValue $_ 'ArchiveAvailable' $true)}},@{Name='GlpiMatchCount';Expression={[int](Get-RemovalValue $_ 'GlpiMatchCount' 1)}},@{Name='KeyCount';Expression={$_.Keys.Count}},@{Name='Keys';Expression={@($_.Keys | Select-Object KeyId,Volume,CreatedAt,@{Name='Origins';Expression={@($_.Origins | ForEach-Object {[string]$_})}})}}; Targets = @($_.Targets | ForEach-Object {
             $copy = $_ | Select-Object Source, Name, Id, DomainController, DistinguishedName, LinkId, SerialNumber, OperatingSystem
             $children = @((Get-RemovalValue $_ 'AdChildren' @()) | ForEach-Object { $_ | Select-Object Id, DistinguishedName, ObjectClass })
             $copy | Add-Member -NotePropertyName AdChildren -NotePropertyValue $children
@@ -344,7 +347,8 @@ function Invoke-ExplorerRemovalPlan {
         $ProgressQueue,
         [Threading.CancellationTokenSource]$Cancellation,
         [switch]$IncludeAdChildren,
-        [switch]$ConfirmGlpiMapping
+        [switch]$ConfirmGlpiMapping,
+        [string[]]$ConfirmBitLockerLossFor=@()
     )
     Assert-ExplorerRemovalWriteAccess
     if (-not $script:RemovalPlans.ContainsKey($PlanId)) { throw 'Anteprima non valida o già utilizzata. Ripetere la verifica.' }
@@ -364,6 +368,10 @@ function Invoke-ExplorerRemovalPlan {
             if ([string]::IsNullOrWhiteSpace($reason) -and -not $IncludeAdChildren -and -not $plan.ArchiveOnly -and
                 @($entry.Targets | Where-Object { $_.Source -eq 'AD' -and $_.AdChildren.Count -gt 0 }).Count -gt 0) {
                 $reason = 'Il computer contiene oggetti figli AD. Confermare esplicitamente la loro eliminazione nell''anteprima, incluse eventuali informazioni di recupero BitLocker.'
+            }
+            $withoutGlpi=$null -ne $entry.Backup -and -not [bool](Get-RemovalValue $entry.Backup 'ArchiveAvailable' $true)
+            if ([string]::IsNullOrWhiteSpace($reason) -and $withoutGlpi -and ($plan.ArchiveOnly -or $ConfirmBitLockerLossFor -notcontains $entry.Name)) {
+                $reason='Confermare esplicitamente per questo computer la cancellazione senza archivio GLPI e il rischio di perdita delle chiavi BitLocker.'
             }
             if ([string]::IsNullOrWhiteSpace($reason) -and $null -ne $entry.Backup -and $entry.Backup.RequiresMappingConfirmation -and -not $ConfirmGlpiMapping) { $reason='Confermare esplicitamente l''abbinamento alla scheda GLPI: le fonti selezionate non consentono un confronto completo dei seriali.' }
             if ([string]::IsNullOrWhiteSpace($reason)) {
@@ -389,7 +397,7 @@ function Invoke-ExplorerRemovalPlan {
                         }
                     }
                     if ($null -ne $entry.Backup) {
-                        $freshBackup=Get-RemovalBitLockerPreview -Name $entry.Name -Targets $current -Settings $plan.GlpiSettings -Credentials $plan.Credentials
+                        $freshBackup=Get-RemovalBitLockerPreview -Name $entry.Name -Targets $current -Settings $plan.GlpiSettings -Credentials $plan.Credentials -AllowUnmappedGlpi:(-not $plan.ArchiveOnly)
                         if (-not (Test-ExplorerBitLockerSnapshot $entry.Backup $freshBackup)) { throw 'Identita GLPI o chiavi BitLocker cambiate dopo l''anteprima.' }
                     }
                     if ((Get-RemovalContextKey $plan.Sources) -ne $plan.ContextKey) { throw 'Sessione Graph cambiata durante la verifica.' }
@@ -406,20 +414,31 @@ function Invoke-ExplorerRemovalPlan {
                 [void]$results.Add($result); Send-RemovalProgress $ProgressQueue $entry.Name $result
                 continue
             }
-            if (-not $PSCmdlet.ShouldProcess(('GLPI: '+$entry.Name+' / '+$entry.Backup.ComputerId), 'Archivia e verifica le chiavi BitLocker')) {
-                foreach ($target in $entry.Targets) { [void]$results.Add((New-RemovalResult $entry.Name $target.Source $target.DomainController $target.Id 'Simulato' '')) }
-                continue
+            if ($withoutGlpi) {
+                if (-not $PSCmdlet.ShouldProcess($entry.Name,'Prosegui senza archivio GLPI dopo conferma del rischio BitLocker')) {
+                    foreach ($target in $entry.Targets) { [void]$results.Add((New-RemovalResult $entry.Name $target.Source $target.DomainController $target.Id 'Simulato' '')) }
+                    continue
+                }
+                $receipt=[pscustomobject]@{Count=$entry.Backup.Keys.Count;Keys=$entry.Backup.Keys;WithoutGlpi=$true}
+                $backupResult=New-RemovalResult $entry.Name 'BitLocker' '' '' 'Senza archivio GLPI' 'Rischio di perdita chiavi confermato dall''operatore; nessuna nota GLPI creata.'
+                [void]$results.Add($backupResult);Send-RemovalProgress $ProgressQueue $entry.Name $backupResult
             }
-            try {
-                $receipt=Save-RemovalBitLockerBackup -Preview $entry.Backup -Targets $current -Plan $plan -ProgressQueue $ProgressQueue
-                $archived+=$receipt.Count
-                $backupResult=New-RemovalResult $entry.Name 'BitLocker' ('GLPI '+$entry.Backup.ComputerId) '' 'Archiviato' ($receipt.Count.ToString()+' chiavi verificate')
-                [void]$results.Add($backupResult); Send-RemovalProgress $ProgressQueue $entry.Name $backupResult
-            }
-            catch {
-                $backupResult=New-RemovalResult $entry.Name 'BitLocker' '' '' 'Bloccato' $_.Exception.Message
-                [void]$results.Add($backupResult); Send-RemovalProgress $ProgressQueue $entry.Name $backupResult
-                continue
+            else {
+                if (-not $PSCmdlet.ShouldProcess(('GLPI: '+$entry.Name+' / '+$entry.Backup.ComputerId), 'Archivia e verifica le chiavi BitLocker')) {
+                    foreach ($target in $entry.Targets) { [void]$results.Add((New-RemovalResult $entry.Name $target.Source $target.DomainController $target.Id 'Simulato' '')) }
+                    continue
+                }
+                try {
+                    $receipt=Save-RemovalBitLockerBackup -Preview $entry.Backup -Targets $current -Plan $plan -ProgressQueue $ProgressQueue
+                    $archived+=$receipt.Count
+                    $backupResult=New-RemovalResult $entry.Name 'BitLocker' ('GLPI '+$entry.Backup.ComputerId) '' 'Archiviato' ($receipt.Count.ToString()+' chiavi verificate')
+                    [void]$results.Add($backupResult); Send-RemovalProgress $ProgressQueue $entry.Name $backupResult
+                }
+                catch {
+                    $backupResult=New-RemovalResult $entry.Name 'BitLocker' '' '' 'Bloccato' $_.Exception.Message
+                    [void]$results.Add($backupResult); Send-RemovalProgress $ProgressQueue $entry.Name $backupResult
+                    continue
+                }
             }
             if ($plan.ArchiveOnly) { continue }
             $blocked = $false
@@ -454,4 +473,26 @@ function Invoke-ExplorerRemovalPlan {
     }
 }
 
-Export-ModuleMember -Function Set-ExplorerRemovalReadOnly, New-ExplorerRemovalPlan, Invoke-ExplorerRemovalPlan
+function Get-ExplorerRemovalPlanKeys {
+    [CmdletBinding()]
+    param([Parameter(Mandatory=$true)][string]$PlanId,[Parameter(Mandatory=$true)][string[]]$Names)
+    if (-not $script:RemovalPlans.ContainsKey($PlanId)) { throw 'Anteprima non valida. Ripetere la verifica.' }
+    $plan=$script:RemovalPlans[$PlanId]
+    if (([datetimeoffset]::UtcNow-$plan.CreatedAtUtc).TotalMinutes -gt 5) { throw 'Anteprima scaduta. Ripetere la verifica.' }
+    if ((Get-RemovalContextKey $plan.Sources) -ne $plan.ContextKey) { throw 'Sessione cambiata. Ripetere la verifica.' }
+    $records=New-Object 'Collections.Generic.List[object]'
+    foreach ($name in @($Names | Sort-Object -Unique)) {
+        $entries=@($plan.Entries | Where-Object Name -eq $name)
+        if ($entries.Count -ne 1 -or $entries[0].Error -or $null -eq $entries[0].Backup -or [bool](Get-RemovalValue $entries[0].Backup 'ArchiveAvailable' $true)) { throw 'Computer non incluso nella conferma senza archivio GLPI.' }
+        $entry=$entries[0]
+        foreach ($target in $entry.Targets) { $live=Read-RemovalTargetById $target;if ($null -eq $live -or -not (Test-RemovalSameTarget $target $live)) { throw 'Oggetti cambiati dopo l''anteprima. Ripetere la verifica.' } }
+        $keys=@(Get-ExplorerBitLockerKeys -Targets $entry.Targets)
+        $snapshot=$entry.Backup | Select-Object *;$snapshot.Keys=$keys
+        if (-not (Test-ExplorerBitLockerSnapshot $entry.Backup $snapshot)) { throw 'Chiavi BitLocker cambiate. Ripetere anteprima e conferma.' }
+        foreach ($key in $keys) { [void]$records.Add([pscustomobject]@{Name=$entry.Name;Serial=$entry.Backup.Serial;KeyId=$key.KeyId;Password=$key.Password;Volume=$key.Volume;Origins=@($key.Origins)}) }
+    }
+    if ((Get-RemovalContextKey $plan.Sources) -ne $plan.ContextKey) { throw 'Sessione cambiata durante la lettura. Ripetere la verifica.' }
+    return $records.ToArray()
+}
+
+Export-ModuleMember -Function Get-ExplorerRemovalPlanKeys, Set-ExplorerRemovalReadOnly, New-ExplorerRemovalPlan, Invoke-ExplorerRemovalPlan

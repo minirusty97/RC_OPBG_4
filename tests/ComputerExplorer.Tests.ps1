@@ -126,18 +126,19 @@ try {
         $sources.Intune.Records=@([pscustomobject]@{Name='PORT-001';ManagedDeviceId='intune-1';AzureADDeviceId='device-1';SerialNumber='SERIAL-A'})
         $sources.GLPI.Records=@(
             [pscustomobject]@{Name='PORT-001';GlpiId=1;State='Assegnato';SerialNumber='SERIAL-A'},
-            [pscustomobject]@{Name='PORT-001';GlpiId=2;State='Dismesso';SerialNumber='SERIAL-B'},
-            [pscustomobject]@{Name='PORT-001 (999)';GlpiId=3;State='Assegnato';SerialNumber='SERIAL-C'}
+            [pscustomobject]@{Name='PORT-001';GlpiId=2;State='Dismesso';SerialNumber='SERIAL-A'},
+            [pscustomobject]@{Name='PORT-001 (999)';GlpiId=3;State='Assegnato';SerialNumber='SERIAL-C'},
+            [pscustomobject]@{Name='PORT-001';GlpiId=4;State='Assegnato';SerialNumber='SERIAL-B'}
         )
         $rows=@(Merge-ExplorerResults $sources $controllers)
         $row=@($rows | Where-Object { $_.Name -eq 'PORT-001' })[0]
         $only=@($rows | Where-Object { $_.Name -eq 'CLOUD-ONLY' })[0]
         if ($rows.Count -ne 3 -or $row.AD -ne '5/5' -or $row.ADColor -ne 'Verde' -or $row.Entra -ne '2' -or $row.EntraColor -ne 'Giallo' -or
             $row.IntuneColor -ne 'Verde' -or $row.GLPI -ne '2' -or $row.GLPIColor -ne 'Giallo' -or $row.GlpiRecords.Count -ne 2 -or
-            $row.StatoGLPI -notlike '*Dismesso*' -or $row.Note -notlike '*Seriali diversi*' -or $only.ADColor -ne 'Rosso' -or $only.IntuneColor -ne 'Rosso') {
+            $row.StatoGLPI -notlike '*Dismesso*' -or $row.Note -notlike '*omonime escluse*' -or $only.ADColor -ne 'Rosso' -or $only.IntuneColor -ne 'Rosso') {
             throw 'Unified presence, duplicate records, aliases or ambiguity incorrect.'
         }
-        'PASS: four-source union, exact case-insensitive names, duplicates, raw states and serial conflict.'
+        'PASS: four-source union, exact names, duplicates, raw states and serial-based exclusion of homonymous assets.'
         foreach ($record in $sources.AD.Records) { $record | Add-Member NoteProperty LastModified ([datetime]'2026-10-13T18:00:00') }
         $sources.AD.Records[4].LastModified=[datetime]'2026-10-15T09:00:00'
         $sources.Entra.Records[0] | Add-Member NoteProperty LastSignIn '2026-10-14T23:30:00+02:00'

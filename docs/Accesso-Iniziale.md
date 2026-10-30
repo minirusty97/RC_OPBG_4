@@ -76,3 +76,14 @@ Gli errori della ricerca chiavi distinguono ricerca Intune, Azure AD Device ID, 
 Riferimenti per i controlli: [elenco metadati BitLocker](https://learn.microsoft.com/en-us/graph/api/bitlocker-list-recoverykeys), [permessi distinti per metadati e password](https://learn.microsoft.com/en-us/entra/identity/role-based-access-control/custom-device-permissions), [cancellazione Entra](https://learn.microsoft.com/en-us/graph/api/device-delete), [WhatIf nel cmdlet](https://learn.microsoft.com/en-us/powershell/module/microsoft.graph.identity.directorymanagement/remove-mgdevice).
 
 Riferimenti: [AppUserModelID](https://learn.microsoft.com/en-us/windows/win32/shell/appids), [scope .default](https://learn.microsoft.com/en-us/entra/identity-platform/scopes-oidc#the-default-scope), [appartenenze dell'utente](https://learn.microsoft.com/en-us/graph/api/user-list-transitivememberof).
+
+
+## Ricerca GLPI per seriale e conferma senza archivio (1.0.21)
+
+Quando Intune fornisce un seriale hardware valido, GLPI viene interrogato per quel seriale e l'asset e associato al PC anche se il nome GLPI e diverso. Il nome GLPI originale resta visibile nei dettagli. Le schede omonime con seriale diverso non sono associate al PC Intune; senza seriale valido si conserva la ricerca per nome. I seriali generici del firmware non sono usati come identita. La ricerca per seriale usa il campo scoperto nelle opzioni GLPI, controlli esatti sul dettaglio e criteri suddivisi in lotti nella stessa sessione.
+
+La ricerca iniziale delle quattro fonti rimane parallela. Dopo la lettura Intune, un secondo passaggio GLPI integra le schede trovate per seriale; la ricerca non e completa finche anche questo passaggio non termina. Un errore non viene presentato come assenza del PC.
+
+Se per il seriale Intune (o per il nome, quando manca il seriale) risultano zero o piu schede GLPI attive, la cancellazione mostra un avviso e una seconda conferma esplicita per i soli PC interessati. **Scarica chiavi** salva un file di testo con computer, seriale, ID e password di recupero; **Stampa chiavi** apre la scelta della stampante e gestisce report su piu pagine. La copia e facoltativa: l'operatore puo confermare il rischio di perdita senza crearla. Le password sono rilette soltanto su richiesta di copia/stampa e non compaiono nell'anteprima o negli eventi di avanzamento.
+
+La conferma senza GLPI non sceglie una scheda a caso e non scrive Note GLPI. Gli altri PC del lotto conservano il backup verificato. Errori di recupero, identita cambiate, chiavi cambiate e oggetti AD protetti non vengono ignorati. Il backend richiede i nomi esatti dei PC confermati e ripete i controlli prima delle cancellazioni. **Archivia BitLocker** continua a richiedere una scheda GLPI univoca; una conferma di perdita non viene trattata come archiviazione riuscita. Le Note GLPI preesistenti restano inalterate.
