@@ -89,6 +89,48 @@ function ConvertTo-BlDiagnosticText {
     return $lines -join [Environment]::NewLine
 }
 
+function Test-BlField {
+    param($Object,[string]$Name)
+    if ($null -eq $Object) { return $false }
+    if ($Object -is [Collections.IDictionary]) { return $Object.Contains($Name) }
+    return $null -ne $Object.PSObject.Properties[$Name]
+}
+
+function Read-BlRecoveryResponse {
+    param($Response,$Metadata,[string]$ExpectedDeviceId,$DiagnosticQueue)
+    $keyId=ConvertTo-BlId (Get-BlValue $Metadata 'id')
+    if ((ConvertTo-BlId (Get-BlValue $Metadata 'deviceId')) -ne $ExpectedDeviceId) { throw 'Chiave Graph esterna al dispositivo richiesto.' }
+    $entity=$Response;$shape='Oggetto'
+    if (Test-BlField $Response 'value') { $entity=Get-BlValue $Response 'value';$shape='value' }
+    if ($entity -is [Array] -or $entity -is [Collections.IList]) {
+        if ($entity.Count -ne 1) { throw 'Risposta Graph della singola chiave non valida: occorre un solo oggetto.' }
+        $entity=$entity[0];$shape+=' singolo'
+    }
+    if ($null -eq $entity -or $entity -is [string] -or $entity -is [Array] -or $entity -is [Collections.IList]) { throw 'Risposta Graph della singola chiave non valida: occorre un solo oggetto.' }
+    $hasKey=Test-BlField $entity 'key'
+    $raw=Get-BlValue $entity 'key'
+    $keyState='Assente'
+    if ($hasKey) {
+        $keyState='Vuoto'
+        if ($null -ne $raw -and $raw -isnot [string]) { $keyState='Tipo inatteso' }
+        elseif (-not [string]::IsNullOrWhiteSpace([string]$raw)) { $keyState='Testo' }
+    }
+    Write-BlDiagnostic $DiagnosticQueue -Stage BitLockerResponse -State Ricevuta -Id $keyId -Detail ('Struttura='+$shape+'; campo key='+[string]$hasKey+'; contenuto='+$keyState+'; campo id='+[string](Test-BlField $entity 'id')+'; campo deviceId='+[string](Test-BlField $entity 'deviceId')+'.')
+    # $select=key may return only that property. The exact key-ID request is
+    # bound to the already validated metadata for this device. If the service
+    # also returns identity fields, they must agree; they are never substituted.
+    if (Test-BlField $entity 'id') { if ((ConvertTo-BlId (Get-BlValue $entity 'id')) -ne $keyId) { throw 'Identita della chiave Graph cambiata.' } }
+    if (Test-BlField $entity 'deviceId') { if ((ConvertTo-BlId (Get-BlValue $entity 'deviceId')) -ne $ExpectedDeviceId) { throw 'Identita della chiave Graph cambiata.' } }
+    if (-not $hasKey) { throw 'Risposta Graph senza il campo key richiesto con $select=key.' }
+    if ($null -eq $raw -or ($raw -is [string] -and [string]::IsNullOrWhiteSpace($raw))) { throw 'Risposta Graph con campo key vuoto.' }
+    if ($raw -isnot [string]) { throw 'Risposta Graph con campo key di tipo inatteso.' }
+    if ($raw.Trim() -notmatch '^[0-9]{6}(-[0-9]{6}){7}$') { throw 'Risposta Graph con password di recupero in formato non valido.' }
+    $password=ConvertTo-BlPassword $raw
+    $volume=Get-BlValue $entity 'volumeType' (Get-BlValue $Metadata 'volumeType' '')
+    $created=Get-BlValue $entity 'createdDateTime' (Get-BlValue $Metadata 'createdDateTime' '')
+    [pscustomobject]@{Password=$password;Volume=[string]$volume;CreatedAt=[string]$created}
+}
+
 function Get-ExplorerBitLockerKeys {
     [CmdletBinding()]
     param([object[]]$Targets,$DiagnosticQueue)
@@ -106,15 +148,14 @@ function Get-ExplorerBitLockerKeys {
                 $stage='BitLockerResponse'
                 $keyId=ConvertTo-BlId $record.id
                 if ((ConvertTo-BlId $record.deviceId) -ne $deviceId) { throw 'Chiave Graph esterna al dispositivo richiesto.' }
-                $keyUri='https://graph.microsoft.com'+$path+'/'+$keyId+'?$select=id,deviceId,key,createdDateTime,volumeType'
+                $keyUri='https://graph.microsoft.com'+$path+'/'+$keyId+'?$select=key'
                 $stage='BitLockerSecret'
                 Write-BlDiagnostic $DiagnosticQueue -Stage BitLockerSecret -State Avviata -Id $keyId -Detail 'Richiesta esplicita della password di recupero.'
                 $response=Invoke-MgGraphRequest -Method GET -Uri $keyUri -OutputType PSObject -Headers @{'User-Agent'='AssistenteIT-BitLocker'} -ErrorAction Stop
                 Write-BlDiagnostic $DiagnosticQueue -Stage BitLockerSecret -State OK -Id $keyId -Detail 'Risposta alla richiesta ricevuta.'
                 $stage='BitLockerResponse'
-                $secret=Get-BlValue $response 'value' $response
-                if ((ConvertTo-BlId $secret.id) -ne $keyId -or (ConvertTo-BlId $secret.deviceId) -ne $deviceId) { throw 'Identita della chiave Graph cambiata.' }
-                $key=ConvertTo-BlPassword (Get-BlValue $secret 'key')
+                $secret=Read-BlRecoveryResponse -Response $response -Metadata $record -ExpectedDeviceId $deviceId -DiagnosticQueue $DiagnosticQueue
+                $key=$secret.Password
                 Write-BlDiagnostic $DiagnosticQueue -Stage BitLockerResponse -State OK -Id $keyId -Detail 'Identificativi e password validati.'
                 $origin='Entra:'+ $deviceId
                 if (@($Targets | Where-Object { $_.Source -eq 'Intune' -and (ConvertTo-BlId $_.LinkId) -eq $deviceId }).Count -gt 0) { $origin='Intune:'+ $deviceId }
@@ -122,7 +163,7 @@ function Get-ExplorerBitLockerKeys {
                     if ($keys[$keyId].Password -cne $key) { throw 'Chiavi discordanti per lo stesso Recovery Key ID.' }
                     $keys[$keyId].Origins=@(@($keys[$keyId].Origins)+$origin | Sort-Object -Unique)
                 }
-                else { $keys[$keyId]=[pscustomobject]@{KeyId=$keyId;Password=$key;Volume=[string](Get-BlValue $secret 'volumeType');CreatedAt=[string](Get-BlValue $secret 'createdDateTime');Origins=@($origin);Fingerprint=(Get-BlFingerprint $key)} }
+                else { $keys[$keyId]=[pscustomobject]@{KeyId=$keyId;Password=$key;Volume=$secret.Volume;CreatedAt=$secret.CreatedAt;Origins=@($origin);Fingerprint=(Get-BlFingerprint $key)} }
             }
         }
         catch {

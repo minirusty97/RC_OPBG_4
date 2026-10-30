@@ -23,7 +23,7 @@ try {
         }
         function script:Invoke-MgGraphRequest {
             [CmdletBinding()]param($Method,$Uri,$OutputType,$Headers)
-            if ($Method -ne 'GET' -or $Uri -notlike '*$select=id,deviceId,key*' -or -not $Headers['User-Agent']) { throw 'Secret read not explicit.' }
+            if ($Method -ne 'GET' -or -not $Uri.EndsWith('?$select=key',[StringComparison]::Ordinal) -or -not $Headers['User-Agent']) { throw 'Secret read not explicit.' }
             [pscustomobject]@{value=[pscustomobject]@{id='33333333-3333-4333-8333-333333333333';deviceId='11111111-1111-4111-8111-111111111111';key=$script:Lookup.Password;volumeType='operatingSystemVolume';createdDateTime='2026-10-26T10:00:00Z'}}
         }
         $records=@(Read-BlKeysBySource -Source Intune -Name PC-LOOKUP)
