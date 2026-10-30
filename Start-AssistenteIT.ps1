@@ -75,6 +75,42 @@ function Show-AssistenteITSettings {
     $modeBox.Add_SelectedIndexChanged($updateGraphMode);& $updateGraphMode
     $restrictionsHint=New-Object Windows.Forms.Label;$restrictionsHint.Name='GraphRestrictionsHint';$restrictionsHint.Text='Il wrapper verifica accesso e permessi prima di aprire ogni modulo. Con l''app dedicata vengono usati i consensi gia concessi; nessuna funzione richiede nuovi permessi durante l''uso.';$restrictionsHint.SetBounds(18,340,550,70)
     $graphPage.Controls.AddRange(@($modeLabel,$modeBox,$tenantLabel,$tenantBox,$clientLabel,$clientBox,$graphHint,$restrictionsHint))
+    Import-Module (Join-Path $PSScriptRoot 'DeviceModules.Core.psm1') -ErrorAction Stop
+    $hybridSettings=(Read-DmSettings $paths.ConfigPath HybridJoin -SettingsOnly).Options
+    $ringSettings=(Read-DmSettings $paths.ConfigPath RingManager -SettingsOnly).Options
+    $hybridPage=New-Object Windows.Forms.TabPage;$hybridPage.Text='Hybrid Join'
+    $ringPage=New-Object Windows.Forms.TabPage;$ringPage.Text='Ring Intune'
+    $settingsTabs.TabPages.AddRange(@($hybridPage,$ringPage))
+    $hybridServerLabel=New-Object Windows.Forms.Label;$hybridServerLabel.Text='Server AD (vuoto: primo DC configurato)';$hybridServerLabel.SetBounds(18,18,560,24)
+    $hybridServer=New-Object Windows.Forms.TextBox;$hybridServer.Name='HybridAdServer';$hybridServer.Text=[string]$hybridSettings.AdServer;$hybridServer.SetBounds(18,44,560,25)
+    $scopeLabel=New-Object Windows.Forms.Label;$scopeLabel.Text='Profondita ricerca OU';$scopeLabel.SetBounds(18,84,560,24)
+    $scopeBox=New-Object Windows.Forms.ComboBox;$scopeBox.Name='HybridSearchScope';$scopeBox.DropDownStyle='DropDownList';$scopeBox.SetBounds(18,110,560,25)
+    [void]$scopeBox.Items.AddRange(@('Subtree','OneLevel','Base'));$scopeBox.SelectedItem=[string]$hybridSettings.SearchScope
+    $ouLabel=New-Object Windows.Forms.Label;$ouLabel.Text='OU, una per riga (DN relativo al dominio oppure completo)';$ouLabel.SetBounds(18,151,325,24)
+    $ouBox=New-Object Windows.Forms.TextBox;$ouBox.Name='HybridTargetOus';$ouBox.Multiline=$true;$ouBox.ScrollBars='Vertical';$ouBox.SetBounds(18,178,560,230);$ouBox.Lines=[string[]]$hybridSettings.TargetOus
+    $hybridHint=New-Object Windows.Forms.Label;$hybridHint.Text='La lettura AD usa l''account Windows corrente. Le registrazioni Hybrid sono confrontate anche tramite GUID; la pulizia seleziona solo Workplace.';$hybridHint.SetBounds(18,423,560,52)
+    $importOus=New-Object Windows.Forms.Button;$importOus.Name='ImportHybridOus';$importOus.Text='Importa OU dallo script';$importOus.SetBounds(360,145,218,30)
+    $importOus.Add_Click({
+        $openScript=New-Object Windows.Forms.OpenFileDialog;$openScript.Filter='Script PowerShell (*.ps1)|*.ps1';$openScript.Title='Seleziona lo script Hybrid Join originale'
+        try { if ($openScript.ShowDialog($dialog) -eq 'OK') { $imported=Read-DmHybridScriptDefaults -Path $openScript.FileName;$ouBox.Lines=[string[]]$imported.TargetOus;if ($imported.AdServer) { $hybridServer.Text=$imported.AdServer } } }
+        catch { [void][Windows.Forms.MessageBox]::Show($dialog,$_.Exception.Message,'Importazione OU','OK','Error') }
+        finally { $openScript.Dispose() }
+    })
+    $hybridPage.Controls.AddRange(@($hybridServerLabel,$hybridServer,$scopeLabel,$scopeBox,$ouLabel,$ouBox,$importOus,$hybridHint))
+    . (Join-Path $PSScriptRoot 'AssistenteIT/GroupPicker.UI.ps1')
+    $ringSelection=@{Groups=@($ringSettings.Groups)}
+    $groupHint=New-Object Windows.Forms.Label;$groupHint.Text='Scegliere i gruppi da controllare e quelli utilizzabili come destinazione. I gruppi scelti vengono salvati per ID. Nessun gruppo e preselezionato; includi solo quelli che vuoi controllare.';$groupHint.SetBounds(18,18,560,65)
+    $chooseGroups=New-Object Windows.Forms.Button;$chooseGroups.Name='ChooseRingGroups';$chooseGroups.Text='Seleziona gruppi da Entra';$chooseGroups.SetBounds(18,94,270,34)
+    $selectedGroups=New-Object Windows.Forms.TextBox;$selectedGroups.Name='SelectedRingGroups';$selectedGroups.Multiline=$true;$selectedGroups.ReadOnly=$true;$selectedGroups.ScrollBars='Vertical';$selectedGroups.SetBounds(18,145,560,300)
+    $showSelectedGroups={ $selectedGroups.Text=(@($ringSelection.Groups | ForEach-Object { $mode='solo controllo';if ($_.CanAssign) { $mode='controllo e destinazione' };$_.Label+' | '+$_.Name+' | '+$mode }) -join [Environment]::NewLine) }
+    & $showSelectedGroups
+    $chooseGroups.Add_Click({
+        $entry=@($manifest.Modules | Where-Object Id -eq 'ring-manager')[0]
+        $verified=Get-AssistenteITModuleAccess -Module $entry -Access $script:Access
+        $picked=Show-AssistenteITGroupPicker -Configured $ringSelection.Groups -Access $verified -Owner $dialog -InstallRoot $PSScriptRoot
+        if ($null -ne $picked) { $ringSelection.Groups=@($picked);& $showSelectedGroups }
+    })
+    $ringPage.Controls.AddRange(@($groupHint,$chooseGroups,$selectedGroups))
     $save = New-Object Windows.Forms.Button; $save.Name='SaveSettings';$save.Text='Salva'; $save.SetBounds(388, 540, 105, 32)
     $cancel = New-Object Windows.Forms.Button; $cancel.Text='Annulla'; $cancel.DialogResult='Cancel'; $cancel.SetBounds(503, 540, 105, 32)
     $dialog.AcceptButton=$save; $dialog.CancelButton=$cancel
@@ -82,7 +118,7 @@ function Show-AssistenteITSettings {
         try {
             $mode='Interactive';if ($modeBox.SelectedIndex -eq 1) { $mode='Delegated' }
             $graphAuthentication=[pscustomobject]@{AuthenticationMode=$mode;TenantId=$tenantBox.Text;ClientId=$clientBox.Text}
-            Save-AssistenteITSettings -GraphAuthentication $graphAuthentication -Paths $paths -DomainControllers $dcBox.Lines -GlpiBaseUri $urlBox.Text -GlpiEnabled $glpiCheck.Checked -UseAppToken $appCheck.Checked -UserToken $userBox.Text -AppToken $appBox.Text
+            Save-AssistenteITSettings -HybridJoinSettings ([pscustomobject]@{AdServer=$hybridServer.Text;SearchScope=[string]$scopeBox.SelectedItem;TargetOus=@($ouBox.Lines | Where-Object { $_.Trim() })}) -RingManagerSettings ([pscustomobject]@{Groups=@($ringSelection.Groups)}) -GraphAuthentication $graphAuthentication -Paths $paths -DomainControllers $dcBox.Lines -GlpiBaseUri $urlBox.Text -GlpiEnabled $glpiCheck.Checked -UseAppToken $appCheck.Checked -UserToken $userBox.Text -AppToken $appBox.Text
             $dialog.DialogResult='OK'; $dialog.Close()
         }
         catch { [void][Windows.Forms.MessageBox]::Show($dialog, $_.Exception.Message, 'Impostazioni', 'OK', 'Error') }
@@ -171,7 +207,7 @@ $form = New-Object Windows.Forms.Form
 $applicationIcon = New-Object Drawing.Icon((Join-Path $PSScriptRoot 'assets/AssistenteIT.ico'))
 $form.Icon = $applicationIcon
 $form.Text = '{0} - {1}' -f $manifest.Product, $manifest.Version
-$form.Size = New-Object Drawing.Size(880, 680); $form.MinimumSize=New-Object Drawing.Size(800, 600)
+$form.Size = New-Object Drawing.Size(940, 850); $form.MinimumSize=New-Object Drawing.Size(800, 600)
 $form.StartPosition='CenterScreen'; $form.Font=New-Object Drawing.Font('Segoe UI', 10)
 $layout = New-Object Windows.Forms.TableLayoutPanel
 $layout.Dock='Fill'; $layout.Padding=New-Object Windows.Forms.Padding(20); $layout.ColumnCount=1; $layout.RowCount=5

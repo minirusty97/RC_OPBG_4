@@ -38,6 +38,12 @@ try {
    $rows=@(Find-GlpiComputer -BaseUri https://example.invalid/apirest.php -SerialNumber $serials -UserToken $token)
    if ($rows.Count -ne 0 -or $script:SerialFixture.Opens -ne 1 -or $script:SerialFixture.Closes -ne 1 -or $script:SerialFixture.Searches.Count -ne 2 -or $script:SerialFixture.Searches[0]['criteria[1][link]'] -ne 'OR') { throw 'Bulk serial lookup did not batch criteria within one session.' }
    'PASS: serial enrichment uses bounded OR batches in one GLPI session, retaining normal pagination and cleanup.'
+   $script:SerialFixture.Searches.Clear()
+   $rows=@(Find-GlpiComputer -BaseUri https://example.invalid/apirest.php -ExactName @('PC-ONE','PC-TWO') -UserToken $token)
+   $query=$script:SerialFixture.Searches[0]
+   if ($query['criteria[0][field]'] -ne '12' -or $query['criteria[0][value]'] -ne '^PC-ONE$' -or $query['criteria[1][value]'] -ne '^PC-TWO$' -or $query['criteria[1][link]'] -ne 'OR') { throw 'Exact-name batches did not use the resolved name field and anchored criteria.' }
+   'PASS: module GLPI enrichment batches exact names through the resolved name field, preserving one-session pagination behavior.'
+
   }
   finally { $token.Dispose() }
  }

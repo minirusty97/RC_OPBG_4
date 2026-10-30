@@ -125,6 +125,7 @@ function Find-GlpiComputer {
         [Parameter(Mandatory = $true)][Uri]$BaseUri,
         [Parameter(Mandatory=$true,ParameterSetName='Name')][ValidateNotNullOrEmpty()][string]$NameFragment,
         [Parameter(Mandatory=$true,ParameterSetName='Serial')][ValidateNotNullOrEmpty()][string[]]$SerialNumber,
+        [Parameter(Mandatory=$true,ParameterSetName='ExactName')][ValidateNotNullOrEmpty()][string[]]$ExactName,
         [Parameter(Mandatory = $true)][Security.SecureString]$UserToken,
         [Security.SecureString]$AppToken,
         [ValidateRange(1, 500)][int]$PageSize = 100,
@@ -140,10 +141,13 @@ function Find-GlpiComputer {
         throw "L'URL GLPI deve terminare con /apirest.php."
     }
     $bySerial=$PSCmdlet.ParameterSetName -eq 'Serial'
+    $byExactName=$PSCmdlet.ParameterSetName -eq 'ExactName'
+    $exactNames=@()
+    if ($byExactName) { $exactNames=@($ExactName | ForEach-Object { $text=([string]$_).Trim();if (-not $text -or $text.Length -gt 255 -or $text -match '[\x00-\x1f]') { throw 'Nome esatto GLPI non valido.' };$text } | Sort-Object -Unique) }
     $fragment=([string]$NameFragment).Trim()
     $serials=@()
     if ($bySerial) { $serials=@($SerialNumber | ForEach-Object { $value=([string]$_).Trim().ToUpperInvariant();if (-not $value -or $value.Length -gt 255 -or $value -match '[\x00-\x1f]') { throw 'Seriale GLPI non valido.' };$value } | Sort-Object -Unique) }
-    if (-not $bySerial -and -not $fragment) { throw 'Inserire una parte del nome macchina.' }
+    if (-not $bySerial -and -not $byExactName -and -not $fragment) { throw 'Inserire una parte del nome macchina.' }
     if ($UserToken.Length -eq 0) { throw "User token GLPI vuoto." }
 
     $session = @{
@@ -189,6 +193,7 @@ function Find-GlpiComputer {
         if ($bySerial -and $null -eq $serialOption) { throw 'Campo Seriale non identificato nelle opzioni di ricerca GLPI Computer.' }
         $batches=New-Object 'Collections.Generic.List[object]'
         if ($bySerial) { for ($start=0;$start -lt $serials.Count;$start+=20) { [void]$batches.Add(@($serials[$start..([Math]::Min($start+19,$serials.Count-1))])) } }
+        elseif ($byExactName) { for ($start=0;$start -lt $exactNames.Count;$start+=20) { [void]$batches.Add(@($exactNames[$start..([Math]::Min($start+19,$exactNames.Count-1))])) } }
         else { [void]$batches.Add(@($fragment)) }
         foreach ($batch in $batches) {
         $offset = 0
@@ -206,11 +211,12 @@ function Find-GlpiComputer {
                 'is_deleted' = '0'
                 'range' = "$offset-$($offset + $PageSize - 1)"
             }
-            if ($bySerial) {
+            if ($bySerial -or $byExactName) {
                 # GLPI 10 string searches use contains with ^/$ anchors; equals
                 # is intended for dropdowns. Validate the detail serial as well.
                 for ($i=0;$i -lt $batch.Count;$i++) {
-                    $query['criteria['+$i+'][field]']=$serialOption
+                    $query['criteria['+$i+'][field]']=$nameOption
+                    if ($bySerial) { $query['criteria['+$i+'][field]']=$serialOption }
                     $query['criteria['+$i+'][searchtype]']='contains'
                     $query['criteria['+$i+'][value]']='^'+$batch[$i]+'$'
                     if ($i -gt 0) { $query['criteria['+$i+'][link]']='OR' }
@@ -237,6 +243,7 @@ function Find-GlpiComputer {
                 $name = [string](Get-GlpiValue $computer 'name')
                 if ([string](Get-GlpiValue $computer 'is_deleted') -in @('1','true')) { continue }
                 if ($bySerial) { if ($serials -notcontains ([string](Get-GlpiValue $computer 'serial')).Trim().ToUpperInvariant()) { continue } }
+                elseif ($byExactName) { if ($exactNames -notcontains $name) { continue } }
                 elseif ($name.IndexOf($fragment, [StringComparison]::OrdinalIgnoreCase) -lt 0) { continue }
 
                 $stateId = [int](Get-GlpiValue $computer 'states_id')

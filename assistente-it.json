@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 1,
   "Product": "Assistente IT",
-  "Version": "1.0.24",
+  "Version": "1.1.0",
   "ReleasesUrl": "https://github.com/minirusty97/RC_OPBG_4/releases/latest",
   "GraphVersion": "2.41.1",
   "Modules": [
@@ -61,6 +61,114 @@
         "entra-remove",
         "intune-remove"
       ]
+    },
+    {
+      "Id": "hybrid-join",
+      "Name": "Verifica Hybrid Join",
+      "Description": "Confronto OU AD, identita Entra e GLPI; pulizia selettiva delle registrazioni Workplace.",
+      "EntryPoint": "Start-HybridJoin.ps1",
+      "UsesAppSettings": true,
+      "UsesGraphAccess": true,
+      "GraphPermissions": [
+        {
+          "Id": "entra-read",
+          "Name": "Ricerca Entra ID",
+          "AnyOf": [
+            "Device.Read.All",
+            "Directory.Read.All",
+            "Directory.ReadWrite.All",
+            "Directory.AccessAsUser.All"
+          ]
+        },
+        {
+          "Id": "intune-read",
+          "Name": "Ricerca Intune",
+          "AnyOf": [
+            "DeviceManagementManagedDevices.Read.All",
+            "DeviceManagementManagedDevices.ReadWrite.All"
+          ]
+        },
+        {
+          "Id": "bitlocker-read",
+          "Name": "Lettura chiavi BitLocker cloud",
+          "AnyOf": [
+            "BitlockerKey.Read.All"
+          ]
+        },
+        {
+          "Id": "entra-remove",
+          "Name": "Eliminazione Entra ID",
+          "AnyOf": [
+            "Directory.AccessAsUser.All"
+          ]
+        }
+      ],
+      "ReadPermissionIds": [
+        "entra-read"
+      ],
+      "WritePermissionIds": [
+        "entra-remove"
+      ],
+      "RequireAllReadPermissions": true
+    },
+    {
+      "Id": "ring-manager",
+      "Name": "Gestione Ring Intune",
+      "Description": "PC Hybrid senza Ring, inventario GLPI e assegnazione manuale ai gruppi di aggiornamento.",
+      "EntryPoint": "Start-RingManager.ps1",
+      "UsesAppSettings": true,
+      "UsesGraphAccess": true,
+      "GraphPermissions": [
+        {
+          "Id": "entra-read",
+          "Name": "Ricerca Entra ID",
+          "AnyOf": [
+            "Device.Read.All",
+            "Directory.Read.All",
+            "Directory.ReadWrite.All",
+            "Directory.AccessAsUser.All"
+          ]
+        },
+        {
+          "Id": "groups-read",
+          "Name": "Lettura gruppi e appartenenze",
+          "AnyOf": [
+            "GroupMember.Read.All",
+            "GroupMember.ReadWrite.All",
+            "Group.Read.All",
+            "Group.ReadWrite.All",
+            "Directory.Read.All",
+            "Directory.ReadWrite.All",
+            "Directory.AccessAsUser.All"
+          ]
+        },
+        {
+          "Id": "groups-write",
+          "Name": "Assegnazione Ring",
+          "AnyOf": [
+            "GroupMember.ReadWrite.All",
+            "Group.ReadWrite.All",
+            "Directory.ReadWrite.All",
+            "Directory.AccessAsUser.All"
+          ]
+        },
+        {
+          "Id": "intune-read",
+          "Name": "Ricerca Intune",
+          "AnyOf": [
+            "DeviceManagementManagedDevices.Read.All",
+            "DeviceManagementManagedDevices.ReadWrite.All"
+          ]
+        }
+      ],
+      "ReadPermissionIds": [
+        "entra-read",
+        "groups-read"
+      ],
+      "WritePermissionIds": [
+        "groups-write"
+      ],
+      "RequireAllReadPermissions": true
     }
   ]
 }
