@@ -46,8 +46,9 @@ function Assert-DmSession {
 }
 
 function Read-DmSettings {
-    param([string]$ConfigPath,[ValidateSet('HybridJoin','RingManager')][string]$Section)
-    $config=Read-ExplorerConfiguration $ConfigPath
+    param([string]$ConfigPath,[ValidateSet('HybridJoin','RingManager')][string]$Section,[switch]$SettingsOnly)
+    if ($SettingsOnly) { $config=[pscustomobject]@{Settings=(Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop)} }
+    else { $config=Read-ExplorerConfiguration $ConfigPath }
     $defaults=Get-Content (Join-Path $PSScriptRoot 'computer-explorer.config.example.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     $sectionDefaults=Get-DmValue $defaults $Section
     $custom=Get-DmValue $config.Settings $Section

@@ -76,8 +76,8 @@ function Show-AssistenteITSettings {
     $restrictionsHint=New-Object Windows.Forms.Label;$restrictionsHint.Name='GraphRestrictionsHint';$restrictionsHint.Text='Il wrapper verifica accesso e permessi prima di aprire ogni modulo. Con l''app dedicata vengono usati i consensi gia concessi; nessuna funzione richiede nuovi permessi durante l''uso.';$restrictionsHint.SetBounds(18,340,550,70)
     $graphPage.Controls.AddRange(@($modeLabel,$modeBox,$tenantLabel,$tenantBox,$clientLabel,$clientBox,$graphHint,$restrictionsHint))
     Import-Module (Join-Path $PSScriptRoot 'DeviceModules.Core.psm1') -ErrorAction Stop
-    $hybridSettings=(Read-DmSettings $paths.ConfigPath HybridJoin).Options
-    $ringSettings=(Read-DmSettings $paths.ConfigPath RingManager).Options
+    $hybridSettings=(Read-DmSettings $paths.ConfigPath HybridJoin -SettingsOnly).Options
+    $ringSettings=(Read-DmSettings $paths.ConfigPath RingManager -SettingsOnly).Options
     $hybridPage=New-Object Windows.Forms.TabPage;$hybridPage.Text='Hybrid Join'
     $ringPage=New-Object Windows.Forms.TabPage;$ringPage.Text='Ring Intune'
     $settingsTabs.TabPages.AddRange(@($hybridPage,$ringPage))
