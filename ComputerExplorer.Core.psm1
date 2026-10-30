@@ -2,6 +2,7 @@
 Set-StrictMode -Version 2.0
 . (Join-Path $PSScriptRoot 'Glpi.Credentials.ps1')
 . (Join-Path $PSScriptRoot 'Graph.Authentication.ps1')
+. (Join-Path $PSScriptRoot 'ComputerExplorer.Identity.ps1')
 $script:CloudCache = [hashtable]::Synchronized(@{})
 
 function Get-ExplorerValue {
@@ -55,7 +56,9 @@ function Get-ExplorerGraphCollection {
         if ($null -ne $ProgressQueue) {
             $ProgressQueue.Enqueue([pscustomobject]@{Source=$Source; Progress=('Pagina {0}, {1} record letti' -f $pageNumber,$records.Count)})
         }
-        $page = Invoke-MgGraphRequest -Method GET -Uri $next -OutputType PSObject -ErrorAction Stop
+        $request=@{Method='GET';Uri=$next;OutputType='PSObject';ErrorAction='Stop'}
+        if ($ResourcePath -eq '/v1.0/informationProtection/bitlocker/recoveryKeys') { $request.Headers=@{'User-Agent'='AssistenteIT-BitLocker'} }
+        $page = Invoke-MgGraphRequest @request
         $values = Get-ExplorerValue $page 'value'
         if ($null -eq $values -or -not ($values -is [Array] -or $values -is [System.Collections.IList])) {
             throw 'Risposta Graph non valida: raccolta value assente.'
@@ -304,9 +307,14 @@ function Merge-ExplorerResults {
                 break
             }
         }
+        $hybridRecords=Get-ExplorerValue $Sources.AD 'HybridRecords' @()
+        $hybridState=[string](Get-ExplorerValue $Sources.AD 'HybridLookupState' '')
+        $hybrid=Get-ExplorerHybridIdentity -Name $group.Name -AdRecords $group.AD -EntraRecords $entra -AllAdRecords @(@($Sources.AD.Records)+@($hybridRecords)) -AdComplete:($Sources.AD.State -eq 'OK' -and $verified -eq $DomainControllers.Count -and $DomainControllers.Count -gt 0) -EntraComplete:($Sources.Entra.State -eq 'OK') -LookupComplete:($hybridState -eq 'OK') -LookupError:([string](Get-ExplorerValue $Sources.AD 'HybridLookupError' ''))
+        if ($hybrid.RequiresConfirmation) { [void]$notes.Add('Identita hybrid AD/Entra discordante: verificare i GUID prima di eliminare.') }
         [pscustomobject]@{
             Name = $group.Name; AD = $adText; ADColor = $adColor; Verificati = ('{0}/{1}' -f $verified, $DomainControllers.Count)
             Entra = $entraPresence.Text; EntraColor = $entraPresence.Color; Intune = $intunePresence.Text; IntuneColor = $intunePresence.Color
+            HybridCheck=$hybrid.State;HybridColor=$hybrid.Color;HybridIdentity=$hybrid
             Censito=$censito; CensitoColor=$censitoColor; CensitoInfo=$censitoInfo
             IntuneSerial=($intuneSerials -join ' | '); GlpiSerial=($glpiSerials -join ' | ')
             SerialCheck=$serialCheck; SerialColor=$serialColor; SerialConflict=$serialConflict; DeletionIdentityConflict=($intuneSerials.Count -gt 1)
@@ -437,6 +445,17 @@ function Invoke-ComputerExplorerSearch {
         $extra=Read-ExplorerSource -Source GLPI -NameFragment $fragment -ConfigPath $ConfigPath -Configuration $config -IntuneDevices $sources.Intune.Records -GlpiUserToken $GlpiUserToken -GlpiAppToken $GlpiAppToken
         $extra.Records=@(@($sources.GLPI.Records)+@($extra.Records) | Sort-Object GlpiId -Unique);$sources.GLPI=$extra
     }
+    if ($sources.AD.State -eq 'OK' -and $sources.Entra.State -eq 'OK') {
+        $lookupIds=@(Get-ExplorerHybridLookupIds -EntraRecords $sources.Entra.Records -AdRecords $sources.AD.Records -Controllers $controllers | Sort-Object -Unique)
+        if ($lookupIds.Count) {
+            Send-ExplorerUpdate $sources $controllers 'Verifica hybrid AD tramite GUID...' $ProgressQueue
+            $lookup=Read-ExplorerHybridAd -DeviceIds $lookupIds -Controllers $controllers
+            $sources.AD | Add-Member -NotePropertyName HybridRecords -NotePropertyValue @($lookup.Records) -Force
+            $sources.AD | Add-Member -NotePropertyName HybridLookupState -NotePropertyValue $lookup.State -Force
+            $sources.AD | Add-Member -NotePropertyName HybridLookupError -NotePropertyValue ([string]$lookup.Error) -Force
+            if ($lookup.State -eq 'Errore') { $sources.AD.State='Errore';$sources.AD.Error=[string]$lookup.Error }
+        }
+    }
     Send-ExplorerUpdate $sources $controllers 'Ricerca completata.' $ProgressQueue -Complete
 }
 
@@ -444,4 +463,4 @@ function Get-ExplorerCloudCache { return $script:CloudCache }
 
 function Clear-ExplorerCloudCache { $script:CloudCache.Clear() }
 
-Export-ModuleMember -Function Get-ExplorerSerials, New-ExplorerGraphOperationError, Initialize-ExplorerGraphSession, Get-ExplorerGraphPermissionStatus, Read-ExplorerSource, Get-ExplorerCloudCache, Connect-ExplorerGraph, Get-ExplorerGraphCollection, Clear-ExplorerCloudCache, Read-ExplorerConfiguration, Invoke-ComputerExplorerSearch, Merge-ExplorerResults, Format-ExplorerDate, Read-ExplorerGlpiCredentials, Save-ExplorerGlpiCredentials
+Export-ModuleMember -Function Get-ExplorerHybridIdentity, Get-ExplorerHybridLookupIds, Read-ExplorerHybridAd, Get-ExplorerSerials, New-ExplorerGraphOperationError, Initialize-ExplorerGraphSession, Get-ExplorerGraphPermissionStatus, Read-ExplorerSource, Get-ExplorerCloudCache, Connect-ExplorerGraph, Get-ExplorerGraphCollection, Clear-ExplorerCloudCache, Read-ExplorerConfiguration, Invoke-ComputerExplorerSearch, Merge-ExplorerResults, Format-ExplorerDate, Read-ExplorerGlpiCredentials, Save-ExplorerGlpiCredentials

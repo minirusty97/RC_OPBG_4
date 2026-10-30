@@ -130,39 +130,100 @@ function Connect-ExplorerGraph {
 function New-ExplorerGraphOperationError {
     [CmdletBinding()]
     param([Parameter(Mandatory=$true)]$Failure,[ValidateSet('InitialRead','IntuneLookup','IntuneIdentity','BitLockerMetadata','BitLockerSecret','BitLockerResponse','Timeout')][string]$Stage='InitialRead')
-    # Keep only diagnostic identifiers. Never copy Graph messages, bodies,
-    # authorization headers or recovery passwords into the public error.
-    $http=0;$code='';$requestId='';$savedStage=''
+    # ErrorDetails from the real Graph SDK is an HTTP transcript, not just JSON.
+    # Extract allowlisted identifiers only; never copy the raw body or headers.
+    $http=0;$code='';$requestId='';$savedStage='';$localCode='';$exceptionType=''
+    $localLabels=@{
+        InvalidIdentifier='Identificativo BitLocker assente o non valido.'
+        MissingPassword='Password di recupero assente nella risposta o formato non valido.'
+        InvalidPassword='Password di recupero non valida: controllo dei gruppi numerici fallito.'
+        ForeignKey='La chiave ricevuta appartiene a un dispositivo diverso da quello richiesto.'
+        ChangedKey='Identificativi della chiave cambiati tra elenco e lettura.'
+        ConflictingKey='Password discordanti per lo stesso Recovery Key ID.'
+        MissingCollection='Risposta Graph senza una raccolta value valida.'
+        InvalidRecordId='Risposta Graph con ID del record assente o non valido.'
+        InvalidPagination='Link di paginazione Graph non valido.'
+        RepeatedPage='Graph ha ripetuto una pagina: lettura incompleta.'
+        ConflictingRecord='Nomi discordanti per lo stesso identificativo Graph.'
+        SessionMismatch='Sessione Graph assente o diversa da quella configurata: tornare al pulsante Accesso.'
+        MissingScope='Permesso richiesto assente dalla sessione corrente: ripetere la verifica dal pulsante Accesso.'
+        MissingProperty='La risposta non contiene una proprieta richiesta dal programma.'
+        MissingCommand='Un comando richiesto non e disponibile nel processo di lettura.'
+        ParameterBinding='Parametri della richiesta non accettati dal comando PowerShell.'
+        AuthenticationFailure='Il SDK non ha completato l''autenticazione della richiesta.'
+        ConnectionFailure='Connessione HTTPS non completata: verificare rete, proxy e TLS.'
+    }
+    $knownMessages=@{
+        'Identificativo BitLocker non valido.'='InvalidIdentifier'
+        'Password di recupero BitLocker assente, non leggibile o non valida.'='MissingPassword'
+        'Password di recupero BitLocker non valida.'='InvalidPassword'
+        'Chiave Graph esterna al dispositivo richiesto.'='ForeignKey'
+        'Identita della chiave Graph cambiata.'='ChangedKey'
+        'Chiavi discordanti per lo stesso Recovery Key ID.'='ConflictingKey'
+        'Risposta Graph non valida: raccolta value assente.'='MissingCollection'
+        'Risposta Graph con ID non valido.'='InvalidRecordId'
+        'Link di paginazione Graph non valido.'='InvalidPagination'
+        'Graph ha ripetuto una pagina: raccolta incompleta.'='RepeatedPage'
+        'Graph ha restituito nomi discordanti per lo stesso ID.'='ConflictingRecord'
+    }
     $nodes=New-Object 'Collections.Generic.Queue[object]';$nodes.Enqueue($Failure)
-    for ($i=0;$i -lt 16 -and $nodes.Count -gt 0;$i++) {
-        $node=$nodes.Dequeue()
-        if ($null -eq $node) { continue }
+    for ($i=0;$i -lt 32 -and $nodes.Count -gt 0;$i++) {
+        $node=$nodes.Dequeue();if ($null -eq $node) { continue }
         $data=Get-ExplorerGraphSetting $node 'Data'
         foreach ($candidate in @((Get-ExplorerGraphSetting $data 'AssistenteIT.HttpStatus' 0),(Get-ExplorerGraphSetting $node 'ResponseStatusCode' 0),(Get-ExplorerGraphSetting $node 'StatusCode' 0),(Get-ExplorerGraphSetting (Get-ExplorerGraphSetting $node 'Response') 'StatusCode' 0))) {
             try { $value=[int]$candidate;if ($value -ge 400 -and $value -le 599) { $http=$value } } catch { }
         }
         $saved=Get-ExplorerGraphSetting $data 'AssistenteIT.GraphStage' ''
         if ($saved -in @('InitialRead','IntuneLookup','IntuneIdentity','BitLockerMetadata','BitLockerSecret','BitLockerResponse','Timeout')) { $savedStage=[string]$saved }
-        if ($node -is [TimeoutException] -or [string](Get-ExplorerGraphSetting $node 'Message' '') -match '^Tempo massimo di lettura BitLocker') { $savedStage='Timeout' }
-        $diagnostic=Get-ExplorerGraphSetting $data 'AssistenteIT.GraphCode' ''
-        if ([string]$diagnostic -cmatch '^[A-Za-z][A-Za-z0-9_.]{0,79}$') { $code=[string]$diagnostic }
+        $message=[string](Get-ExplorerGraphSetting $node 'Message' '')
+        if ($node -is [TimeoutException] -or $message -match '^Tempo massimo di lettura BitLocker') { $savedStage='Timeout' }
+        if ($knownMessages.ContainsKey($message)) { $localCode=$knownMessages[$message] }
+        if ($message -like 'Sessione Graph assente*') { $localCode='SessionMismatch' }
+        if ($message -like 'Permessi non disponibili nella verifica iniziale:*') { $localCode='MissingScope' }
+        $savedLocal=[string](Get-ExplorerGraphSetting $data 'AssistenteIT.LocalCode' '')
+        if ($localLabels.ContainsKey($savedLocal)) { $localCode=$savedLocal }
+        $type=[string](Get-ExplorerGraphSetting $data 'AssistenteIT.ExceptionType' '')
+        if ($node -is [Exception]) { $type=$node.GetType().FullName }
+        if ($type -cmatch '^[A-Za-z][A-Za-z0-9_.+`]{0,179}$') {
+            if (-not $exceptionType -or $type -notmatch '(MethodInvocationException|RuntimeException|InvalidOperationException)$') { $exceptionType=$type }
+            if (-not $localCode) {
+                if ($type -like '*PropertyNotFoundException') { $localCode='MissingProperty' }
+                elseif ($type -like '*CommandNotFoundException') { $localCode='MissingCommand' }
+                elseif ($type -like '*ParameterBinding*Exception') { $localCode='ParameterBinding' }
+                elseif ($type -match '(Msal|Authentication).*Exception$') { $localCode='AuthenticationFailure' }
+                elseif ($type -match '(HttpRequest|Socket|Web|Authentication)Exception$') { $localCode='ConnectionFailure' }
+            }
+        }
+        $diagnostic=[string](Get-ExplorerGraphSetting $data 'AssistenteIT.GraphCode' '')
+        if ($diagnostic -cmatch '^[A-Za-z][A-Za-z0-9_.]{0,79}$') { $code=$diagnostic }
         $correlation=[string](Get-ExplorerGraphSetting $data 'AssistenteIT.RequestId' '')
-        $details=Get-ExplorerGraphSetting (Get-ExplorerGraphSetting $node 'ErrorDetails') 'Message' ''
-        if ($details -and ([string]$details).Length -le 65536) {
-            try {
-                $body=ConvertFrom-Json -InputObject ([string]$details) -ErrorAction Stop
-                $errorBody=Get-ExplorerGraphSetting $body 'error'
-                $diagnostic=[string](Get-ExplorerGraphSetting $errorBody 'code' '')
-                if ($diagnostic -cmatch '^[A-Za-z][A-Za-z0-9_.]{0,79}$') { $code=$diagnostic }
-                $correlation=[string](Get-ExplorerGraphSetting (Get-ExplorerGraphSetting $errorBody 'innerError') 'request-id' $correlation)
-            } catch { }
+        $details=[string](Get-ExplorerGraphSetting (Get-ExplorerGraphSetting $node 'ErrorDetails') 'Message' '')
+        if ($details -and $details.Length -le 65536) {
+            $json=$details.Trim()
+            if (-not $json.StartsWith('{')) {
+                $parts=[regex]::Split($details,'\r?\n\r?\n',2)
+                $header=$parts[0]
+                if ($header -match '(?m)^HTTP/\d+(?:\.\d+)?\s+([45]\d\d)(?:\s|$)') { $http=[int]$Matches[1] }
+                if ($header -match '(?im)^request-id:\s*([0-9a-f-]{36})\s*$') { $correlation=$Matches[1] }
+                if ($parts.Count -eq 2) { $json=$parts[1].Trim() }
+            }
+            if ($json.StartsWith('{')) {
+                try {
+                    $body=ConvertFrom-Json -InputObject $json -ErrorAction Stop
+                    $errorBody=Get-ExplorerGraphSetting $body 'error'
+                    $diagnostic=[string](Get-ExplorerGraphSetting $errorBody 'code' '')
+                    if ($diagnostic -cmatch '^[A-Za-z][A-Za-z0-9_.]{0,79}$') { $code=$diagnostic }
+                    $correlation=[string](Get-ExplorerGraphSetting (Get-ExplorerGraphSetting $errorBody 'innerError') 'request-id' $correlation)
+                } catch { }
+            }
+        }
+        $headers=Get-ExplorerGraphSetting (Get-ExplorerGraphSetting $node 'Response') 'Headers'
+        if ($null -ne $headers -and $null -ne $headers.PSObject.Methods['TryGetValues']) {
+            try { $values=$null;if ($headers.TryGetValues('request-id',[ref]$values)) { $correlation=[string](@($values)[0]) } } catch { }
         }
         $id=[guid]::Empty
         if ([guid]::TryParse($correlation,[ref]$id) -and $id -ne [guid]::Empty) { $requestId=$id.ToString() }
-        foreach ($name in @('Exception','InnerException','ErrorRecord')) {
-            $child=Get-ExplorerGraphSetting $node $name
-            if ($null -ne $child) { $nodes.Enqueue($child) }
-        }
+        foreach ($name in @('Exception','InnerException','ErrorRecord')) { $child=Get-ExplorerGraphSetting $node $name;if ($null -ne $child) { $nodes.Enqueue($child) } }
     }
     if ($savedStage) { $Stage=$savedStage }
     $stages=@{InitialRead='Verifica accesso';IntuneLookup='Ricerca dispositivo Intune';IntuneIdentity='Verifica Azure AD Device ID';BitLockerMetadata='Elenco metadati BitLocker';BitLockerSecret='Lettura password BitLocker';BitLockerResponse='Verifica risposta BitLocker';Timeout='Tempo massimo di lettura BitLocker superato'}
@@ -175,11 +236,16 @@ function New-ExplorerGraphOperationError {
     elseif ($http -eq 404) { [void]$parts.Add('Risorsa non trovata') }
     elseif ($http -eq 429) { [void]$parts.Add('Limite richieste raggiunto; riprovare piu tardi') }
     elseif ($http -ge 500) { [void]$parts.Add('Errore del servizio Microsoft') }
-    elseif (-not $http -and $Stage -ne 'Timeout') { [void]$parts.Add('Verifica connessione, sessione, identificativi o risposta del servizio necessaria') }
+    if (-not $http -and $Stage -ne 'Timeout') {
+        if ($localCode) { [void]$parts.Add('Diagnosi '+$localCode+': '+$localLabels[$localCode]) }
+        else { [void]$parts.Add('Errore locale o del SDK senza stato HTTP; consultare Copia diagnostica') }
+    }
+    if ($exceptionType) { [void]$parts.Add('Tipo '+$exceptionType) }
     if ($requestId) { [void]$parts.Add('request-id '+$requestId) }
     $exception=New-Object InvalidOperationException(($parts.ToArray() -join '; '))
     $exception.Data['AssistenteIT.HttpStatus']=$http;$exception.Data['AssistenteIT.GraphCode']=$code
     $exception.Data['AssistenteIT.RequestId']=$requestId;$exception.Data['AssistenteIT.GraphStage']=$Stage
+    $exception.Data['AssistenteIT.LocalCode']=$localCode;$exception.Data['AssistenteIT.ExceptionType']=$exceptionType
     return $exception
 }
 

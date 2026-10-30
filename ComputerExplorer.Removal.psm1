@@ -124,7 +124,7 @@ function Get-RemovalTargets {
         $safeName = $Name.Replace("'", "''")
         if ($source -eq 'Entra') {
             $path = '/v1.0/devices'; $nameProperty = 'displayName'
-            $select = 'id,displayName,deviceId'
+            $select = 'id,displayName,deviceId,trustType'
         }
         else {
             $path = '/v1.0/deviceManagement/managedDevices'; $nameProperty = 'deviceName'
@@ -146,7 +146,7 @@ function Get-RemovalTargets {
             }
             [void]$targets.Add([pscustomobject]@{
                 Source = $source; Name = $recordName; Id = ConvertTo-RemovalId (Get-RemovalValue $record 'id'); DomainController = ''
-                DistinguishedName = ''; LinkId = $link; SerialNumber = $serial; OperatingSystem = $os
+                DistinguishedName = ''; LinkId = $link; SerialNumber = $serial; OperatingSystem = $os; TrustType=[string](Get-RemovalValue $record 'trustType' '')
             })
         }
     }
@@ -164,6 +164,7 @@ function Test-RemovalSameTarget {
     foreach ($field in @('Source', 'Name', 'Id', 'DomainController', 'DistinguishedName', 'LinkId', 'SerialNumber', 'OperatingSystem')) {
         if (-not [string]::Equals([string]$Expected.$field, [string]$Current.$field, [StringComparison]::OrdinalIgnoreCase)) { return $false }
     }
+    if ([string](Get-RemovalValue $Expected 'TrustType' '') -ine [string](Get-RemovalValue $Current 'TrustType' '')) { return $false }
     if ($Expected.Source -eq 'AD') {
         $expectedChildren = @{}
         foreach ($child in $Expected.AdChildren) { $expectedChildren[$child.Id] = $child }
@@ -201,6 +202,30 @@ function Test-RemovalBitLockerCoverage {
     }
 }
 
+function Get-RemovalHybridIdentity {
+    param([string]$Name,[object[]]$Targets,[string[]]$Sources,[string[]]$Controllers)
+    $entra=@($Targets | Where-Object Source -eq 'Entra' | ForEach-Object { [pscustomobject]@{Name=$_.Name;ObjectId=$_.Id;DeviceId=$_.LinkId;TrustType=[string](Get-RemovalValue $_ 'TrustType' '')} })
+    $ad=@($Targets | Where-Object Source -eq 'AD' | ForEach-Object { [pscustomobject]@{Name=$_.Name;ObjectGUID=$_.Id;DomainController=$_.DomainController;DistinguishedName=$_.DistinguishedName} })
+    $hybrids=@($entra | Where-Object TrustType -eq 'ServerAd')
+    $complete=$false;$lookupComplete=$false;$lookupError='';$lookupRecords=@()
+    if ($hybrids.Count) {
+        $ids=@($hybrids | ForEach-Object { $_.DeviceId } | Sort-Object -Unique)
+        # Read metadata even if AD is not a deletion destination. This never adds
+        # an AD object to Targets or authorizes deletion of a renamed match.
+        $lookup=Read-ExplorerHybridAd -DeviceIds $ids -Controllers $Controllers -Name $Name
+        $lookupRecords=@($lookup.Records);$complete=$lookup.State -eq 'OK';$lookupComplete=$complete;$lookupError=[string]$lookup.Error
+    }
+    Get-ExplorerHybridIdentity -Name $Name -AdRecords $ad -AllAdRecords $lookupRecords -EntraRecords $entra -AdComplete:$complete -EntraComplete:($Sources -contains 'Entra') -LookupComplete:$lookupComplete -LookupError:$lookupError
+}
+
+function ConvertTo-RemovalHybridView {
+    param($Identity)
+    if ($null -eq $Identity) { return $null }
+    [pscustomobject]@{State=$Identity.State;Color=$Identity.Color;RequiresConfirmation=$Identity.RequiresConfirmation;Records=@($Identity.Records | ForEach-Object {
+        $_ | Select-Object EntraObjectId,DeviceId,TrustType,State,Color,Detail,RequiresConfirmation,@{Name='AdMatches';Expression={@($_.AdMatches | Select-Object Name,ObjectGUID,DomainController,DistinguishedName)}}
+    })}
+}
+
 function New-ExplorerRemovalPlan {
     [CmdletBinding()]
     param(
@@ -230,13 +255,14 @@ function New-ExplorerRemovalPlan {
     $entries = New-Object 'System.Collections.Generic.List[object]'
     foreach ($name in $namesToRead) {
         Send-RemovalProgress $ProgressQueue ("Verifica oggetti: $name")
-        $targets = @(); $errorText = $null; $backup=$null
+        $targets = @(); $errorText = $null; $backup=$null;$hybrid=$null
         try {
             $targets = @(Get-RemovalTargets -Name $name -Sources $selectedSources -Controllers $controllers)
+            $hybrid=Get-RemovalHybridIdentity -Name $name -Targets $targets -Sources $selectedSources -Controllers $controllers
             if ($targets.Count -gt 0) { $backup=Get-RemovalBitLockerPreview -Name $name -Targets $targets -Settings (Get-RemovalValue $config.Settings 'Glpi') -Credentials $GlpiCredentials -AllowUnmappedGlpi:(-not $ArchiveOnly) }
         }
         catch { $errorText = $_.Exception.Message }
-        [void]$entries.Add([pscustomobject]@{ Name = $name; Targets = $targets; Error = $errorText; Backup=$backup })
+        [void]$entries.Add([pscustomobject]@{ Name = $name; Targets = $targets; Error = $errorText; Backup=$backup; HybridIdentity=$hybrid })
     }
     if ((Get-RemovalContextKey $selectedSources) -ne $contextKey) { throw 'La sessione Graph è cambiata durante la verifica. Ripetere la preparazione.' }
     $planId = [guid]::NewGuid().ToString()
@@ -247,8 +273,8 @@ function New-ExplorerRemovalPlan {
     }
     # La vista passata alla UI non contiene gli oggetti interni del piano.
     $view = @($entries | ForEach-Object {
-        [pscustomobject]@{ Name = $_.Name; Error = $_.Error; Backup=$_.Backup | Select-Object ComputerId,Name,GlpiName,Serial,EntityId,RequiresMappingConfirmation,Warning,MatchBy,@{Name='ArchiveAvailable';Expression={[bool](Get-RemovalValue $_ 'ArchiveAvailable' $true)}},@{Name='GlpiMatchCount';Expression={[int](Get-RemovalValue $_ 'GlpiMatchCount' 1)}},@{Name='KeyCount';Expression={$_.Keys.Count}},@{Name='Keys';Expression={@($_.Keys | Select-Object KeyId,Volume,CreatedAt,@{Name='Origins';Expression={@($_.Origins | ForEach-Object {[string]$_})}})}}; Targets = @($_.Targets | ForEach-Object {
-            $copy = $_ | Select-Object Source, Name, Id, DomainController, DistinguishedName, LinkId, SerialNumber, OperatingSystem
+        [pscustomobject]@{ Name = $_.Name; Error = $_.Error; HybridIdentity=(ConvertTo-RemovalHybridView $_.HybridIdentity); Backup=$_.Backup | Select-Object ComputerId,Name,GlpiName,Serial,EntityId,RequiresMappingConfirmation,Warning,MatchBy,@{Name='ArchiveAvailable';Expression={[bool](Get-RemovalValue $_ 'ArchiveAvailable' $true)}},@{Name='GlpiMatchCount';Expression={[int](Get-RemovalValue $_ 'GlpiMatchCount' 1)}},@{Name='KeyCount';Expression={$_.Keys.Count}},@{Name='Keys';Expression={@($_.Keys | Select-Object KeyId,Volume,CreatedAt,@{Name='Origins';Expression={@($_.Origins | ForEach-Object {[string]$_})}})}}; Targets = @($_.Targets | ForEach-Object {
+            $copy = $_ | Select-Object Source, Name, Id, DomainController, DistinguishedName, LinkId, SerialNumber, OperatingSystem, TrustType
             $children = @((Get-RemovalValue $_ 'AdChildren' @()) | ForEach-Object { $_ | Select-Object Id, DistinguishedName, ObjectClass })
             $copy | Add-Member -NotePropertyName AdChildren -NotePropertyValue $children
             $copy
@@ -283,7 +309,7 @@ function Read-RemovalTargetById {
                 AdChildren = @(Get-RemovalAdChildren -Computer $record -Server $Target.DomainController)
             }
         }
-        $path = '/v1.0/devices'; $nameField = 'displayName'; $linkField = 'deviceId'; $select = 'id,displayName,deviceId'
+        $path = '/v1.0/devices'; $nameField = 'displayName'; $linkField = 'deviceId'; $select = 'id,displayName,deviceId,trustType'
         if ($Target.Source -eq 'Intune') {
             $path = '/v1.0/deviceManagement/managedDevices'; $nameField = 'deviceName'; $linkField = 'azureADDeviceId'
             $select = 'id,deviceName,azureADDeviceId,serialNumber,operatingSystem'
@@ -294,7 +320,7 @@ function Read-RemovalTargetById {
         if ($Target.Source -eq 'Intune') { $os = [string](Get-RemovalValue $record 'operatingSystem'); $serial = [string](Get-RemovalValue $record 'serialNumber') }
         return [pscustomobject]@{
             Source = $Target.Source; Name = [string](Get-RemovalValue $record $nameField); Id = ConvertTo-RemovalId (Get-RemovalValue $record 'id')
-            DomainController = ''; DistinguishedName = ''; LinkId = [string](Get-RemovalValue $record $linkField); SerialNumber = $serial; OperatingSystem = $os
+            DomainController = ''; DistinguishedName = ''; LinkId = [string](Get-RemovalValue $record $linkField); SerialNumber = $serial; OperatingSystem = $os; TrustType=[string](Get-RemovalValue $record 'trustType' '')
         }
     }
     catch { if (Test-RemovalNotFound $_) { return $null }; throw }
@@ -348,7 +374,8 @@ function Invoke-ExplorerRemovalPlan {
         [Threading.CancellationTokenSource]$Cancellation,
         [switch]$IncludeAdChildren,
         [switch]$ConfirmGlpiMapping,
-        [string[]]$ConfirmBitLockerLossFor=@()
+        [string[]]$ConfirmBitLockerLossFor=@(),
+        [string[]]$ConfirmHybridMismatchFor=@()
     )
     Assert-ExplorerRemovalWriteAccess
     if (-not $script:RemovalPlans.ContainsKey($PlanId)) { throw 'Anteprima non valida o già utilizzata. Ripetere la verifica.' }
@@ -368,6 +395,10 @@ function Invoke-ExplorerRemovalPlan {
             if ([string]::IsNullOrWhiteSpace($reason) -and -not $IncludeAdChildren -and -not $plan.ArchiveOnly -and
                 @($entry.Targets | Where-Object { $_.Source -eq 'AD' -and $_.AdChildren.Count -gt 0 }).Count -gt 0) {
                 $reason = 'Il computer contiene oggetti figli AD. Confermare esplicitamente la loro eliminazione nell''anteprima, incluse eventuali informazioni di recupero BitLocker.'
+            }
+            $hybrid=Get-RemovalValue $entry 'HybridIdentity' $null
+            if ([string]::IsNullOrWhiteSpace($reason) -and -not $plan.ArchiveOnly -and $null -ne $hybrid -and $hybrid.RequiresConfirmation -and $ConfirmHybridMismatchFor -notcontains $entry.Name) {
+                $reason='Confermare esplicitamente per questo computer la discordanza tra GUID AD e Device ID Entra hybrid.'
             }
             $withoutGlpi=$null -ne $entry.Backup -and -not [bool](Get-RemovalValue $entry.Backup 'ArchiveAvailable' $true)
             if ([string]::IsNullOrWhiteSpace($reason) -and $withoutGlpi -and ($plan.ArchiveOnly -or $ConfirmBitLockerLossFor -notcontains $entry.Name)) {
@@ -395,6 +426,10 @@ function Invoke-ExplorerRemovalPlan {
                         if ($null -ne $live -and $target.Source -eq 'AD') {
                             foreach ($child in $target.AdChildren) { [void](Read-RemovalAdChildById $child $target) }
                         }
+                    }
+                    if (-not $plan.ArchiveOnly -and $null -ne $hybrid -and @($hybrid.Records | Where-Object TrustType -eq 'ServerAd').Count) {
+                        $freshHybrid=Get-RemovalHybridIdentity -Name $entry.Name -Targets $current -Sources $plan.Sources -Controllers $plan.Controllers
+                        if ($hybrid.Signature -ine $freshHybrid.Signature) { throw 'Identita hybrid AD/Entra cambiata dopo l''anteprima. Ripetere verifica e conferma.' }
                     }
                     if ($null -ne $entry.Backup) {
                         $freshBackup=Get-RemovalBitLockerPreview -Name $entry.Name -Targets $current -Settings $plan.GlpiSettings -Credentials $plan.Credentials -AllowUnmappedGlpi:(-not $plan.ArchiveOnly)

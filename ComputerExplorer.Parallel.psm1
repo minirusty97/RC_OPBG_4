@@ -16,6 +16,7 @@ function Get-ExplorerReadWorkerScript {
             Connect-ExplorerGraph -Sources $Job.CloudSources -ProgressQueue $Job.AuthQueue -GraphAuthentication $Configuration.GraphAuthentication
             return [pscustomobject]@{ State='OK'; Error=$null }
         }
+        if ($Job.Kind -eq 'HybridAD') { return Read-ExplorerHybridAd -DeviceIds $Job.DeviceIds -Controllers $Job.Controllers }
         $arguments = @{ Source=$Job.Kind; NameFragment=$Fragment; ConfigPath=$ConfigPath; Configuration=$Configuration; CloudCache=$Cache
             GlpiUserToken=$UserToken; GlpiAppToken=$AppToken; ForceCloudRefresh=$Refresh }
         if ($null -ne $Job.PSObject.Properties['SerialDevices']) { $arguments.IntuneDevices=$Job.SerialDevices }
@@ -115,7 +116,7 @@ function Invoke-ComputerExplorerParallelSearch {
     $readProgress=New-Object 'System.Collections.Concurrent.ConcurrentQueue[object]'
     $cache=Get-ExplorerCloudCache
     $body=Get-ExplorerReadWorkerScript
-    $adCompleted=0;$serialGlpiQueued=$false
+    $adCompleted=0;$serialGlpiQueued=$false;$hybridAdQueued=$false
     $watch=[Diagnostics.Stopwatch]::StartNew()
     try {
         $pool.Open(); $adPool.Open()
@@ -173,6 +174,14 @@ function Invoke-ComputerExplorerParallelSearch {
                         foreach ($name in $cloud) { $sources[$name]=New-ParallelSource $name 'Errore' $result.Error }
                     }
                 }
+                elseif ($job.Kind -eq 'HybridAD') {
+                    $sources.AD | Add-Member -NotePropertyName HybridRecords -NotePropertyValue @($result.Records) -Force
+                    $sources.AD | Add-Member -NotePropertyName HybridLookupState -NotePropertyValue $result.State -Force
+                    $sources.AD | Add-Member -NotePropertyName HybridLookupError -NotePropertyValue ([string]$result.Error) -Force
+                    $sources.AD.State=$result.State
+                    if ($result.State -eq 'Errore') { $sources.AD.Error=[string]$result.Error }
+                    $sources.AD.Progress='';$sources.AD.CurrentTarget=''
+                }
                 elseif ($job.Kind -eq 'AD') {
                     $adCompleted++
                     $sources.AD.Progress='{0}/{1} DC' -f $adCompleted,$controllers.Count
@@ -204,6 +213,17 @@ function Invoke-ComputerExplorerParallelSearch {
                 if (@(Get-ExplorerSerials $sources.Intune.Records).Count) {
                     $sources.GLPI.State='In attesa';$sources.GLPI | Add-Member -NotePropertyName Progress -NotePropertyValue 'Ricerca tramite seriali Intune' -Force
                     [void]$tasks.Add((Start-ExplorerReadTask -Job ([pscustomobject]@{Kind='GLPI';SerialDevices=@($sources.Intune.Records)}) @arguments))
+                    $updated=$true
+                }
+            }
+            if (-not $hybridAdQueued -and $sources.AD.State -eq 'OK' -and $sources.Entra.State -eq 'OK') {
+                $hybridAdQueued=$true
+                $lookupIds=@(Get-ExplorerHybridLookupIds -EntraRecords $sources.Entra.Records -AdRecords $sources.AD.Records -Controllers $controllers | Sort-Object -Unique)
+                if ($lookupIds.Count) {
+                    $sources.AD | Add-Member -NotePropertyName HybridLookupState -NotePropertyValue 'In attesa' -Force
+                    $sources.AD.State='In attesa'
+                    $sources.AD.Progress='Verifica GUID hybrid';$sources.AD.CurrentTarget='Confronto AD/Entra'
+                    [void]$tasks.Add((Start-ExplorerReadTask -Job ([pscustomobject]@{Kind='HybridAD';DeviceIds=$lookupIds;Controllers=$controllers}) @adArguments))
                     $updated=$true
                 }
             }

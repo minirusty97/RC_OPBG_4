@@ -20,6 +20,8 @@ powershell.exe -NoProfile -STA -File .\Start-AssistenteIT.ps1
 
 `Start-ComputerExplorer.ps1` apre una finestra con ricerca per frammento, griglia colorata e dettaglio degli oggetti. Usa i cinque DC configurati e riunisce tutti i nomi trovati in AD, Entra, Intune Windows e GLPI. Un nome presente in una sola fonte compare comunque nella lista.
 
+Dalla 1.0.22 la colonna **Identita AD/Entra** confronta GUID AD e Device ID dei soli dispositivi hybrid, con ricerca per GUID anche dopo una rinomina e conferma separata delle discordanze prima della cancellazione. **Leggi chiavi** mostra le fasi della richiesta e offre **Copia diagnostica**, con errori Graph/SDK e locali specifici. Dettagli in [Computer Explorer](docs/Computer-Explorer.md).
+
 Le colonne mostrano presenza AD, conteggi Entra/Intune/GLPI, stato GLPI, percorso AD e segnalazioni su GUID, percorsi, seriali o DeviceId discordanti. Accanto a ogni fonte compare la relativa data: modifica AD, attività Entra, check-in Intune e inventario GLPI. Il numero di DC verificati rimane nel dettaglio e nel suggerimento della cella AD. Il dettaglio conserva le singole registrazioni e i relativi ID. Nomi GLPI con suffissi fra parentesi restano distinti.
 
 | Colore | AD | Entra / Intune / GLPI |

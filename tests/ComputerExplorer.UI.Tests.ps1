@@ -25,7 +25,7 @@ try {
     if (@($options.Controls | Where-Object { $_.Text -like 'Verde:*' }).Count -gt 0) { throw 'Old legend still displayed.' }
     $rows = @(1..2 | ForEach-Object {
         [pscustomobject]@{
-            Censito='✓'; CensitoInfo='Gruppo: CENSITO'; IntuneSerial='ABC'; GlpiSerial='ABC'; SerialCheck='Coerente'; SerialColor='Verde'; SerialConflict=$false
+            Censito='✓'; CensitoInfo='Gruppo: CENSITO'; IntuneSerial='ABC'; GlpiSerial='ABC'; SerialCheck='Coerente'; SerialColor='Verde'; SerialConflict=$false; HybridCheck='Corrisponde'; HybridColor='Verde'
             Name = ('PC-UI-' + $_); AD = '5/5'; ADColor = 'Verde'; Verificati = '5/5'
             Entra = '12'; EntraColor = 'Giallo'; Intune = '1'; IntuneColor = 'Verde'; GLPI = '1'; GLPIColor = 'Verde'
             ADLastModified = [datetime]'2026-10-15T10:05:00'; EntraLastActivity = [datetime]'2026-10-14T23:50:00'
@@ -67,6 +67,12 @@ try {
         if ($sourceStatusLabels[$name].BackColor -ne [Drawing.Color]::Honeydew -or $sourceStatusLabels[$name].Text -notlike '*Terminata*') { throw ('Successful source did not turn green: '+$name) }
     }
     'PASS: all four successful sources show a separate green completed indicator in the footer.'
+    if ($grid.Rows[0].Cells['HybridCheck'].Value -ne 'Corrisponde' -or $grid.Rows[0].Cells['HybridCheck'].Style.BackColor -ne [Drawing.Color]::FromArgb(214,241,219) -or $grid.Rows[0].Cells['PercorsoAD'].Value -ne 'example.invalid/Lab') { throw 'Hybrid identity shifted grid columns or lost its color.' }
+    $rows[0].HybridCheck='Non corrisponde';$rows[0].HybridColor='Rosso';Show-ExplorerSnapshot $snapshot
+    if (-not $deleteButton.Enabled -or $grid.Rows[0].Cells['HybridCheck'].Value -ne 'Non corrisponde') { throw 'An informational hybrid mismatch blocked the grid instead of reaching confirmation.' }
+    $rows[0].HybridCheck='Corrisponde';$rows[0].HybridColor='Verde';Show-ExplorerSnapshot $snapshot
+    'PASS: the hybrid identity column preserves row alignment and color, and a mismatch remains actionable for explicit preview confirmation.'
+
     foreach ($name in @('AD', 'ADLastModified', 'Entra', 'EntraLastActivity', 'Intune', 'IntuneLastCheckIn', 'GLPI', 'GlpiLastInventory')) {
         $column = $grid.Columns[$name]
         $preferred = $column.GetPreferredWidth([Windows.Forms.DataGridViewAutoSizeColumnMode]::AllCells, $true)

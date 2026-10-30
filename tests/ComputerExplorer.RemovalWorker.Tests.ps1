@@ -22,8 +22,8 @@ function New-ExplorerRemovalPlan {
 }
 function Invoke-ExplorerRemovalPlan {
     [CmdletBinding(SupportsShouldProcess=$true)]
-    param([string]$PlanId, $ProgressQueue, $Cancellation, [switch]$IncludeAdChildren,[string[]]$ConfirmBitLockerLossFor=@())
-    [pscustomobject]@{Operation='Remove';PlanId=$PlanId;IncludeAdChildren=[bool]$IncludeAdChildren;LossNames=$ConfirmBitLockerLossFor}
+    param([string]$PlanId, $ProgressQueue, $Cancellation, [switch]$IncludeAdChildren,[string[]]$ConfirmBitLockerLossFor=@(),[string[]]$ConfirmHybridMismatchFor=@())
+    [pscustomobject]@{Operation='Remove';PlanId=$PlanId;IncludeAdChildren=[bool]$IncludeAdChildren;LossNames=$ConfirmBitLockerLossFor;HybridNames=$ConfirmHybridMismatchFor}
 }
 Export-ModuleMember -Function Set-ExplorerRemovalReadOnly, New-ExplorerRemovalPlan, Invoke-ExplorerRemovalPlan
 '@
@@ -41,9 +41,9 @@ try {
     'PASS: production asynchronous worker passes true and false child consent as booleans to the removal module.'
     $pipeline=[PowerShell]::Create()
     try {
-        [void]$pipeline.AddScript($workerSource).AddArgument($modulePath).AddArgument('Remove').AddArgument(@('PC-TEST')).AddArgument(@('AD')).AddArgument('synthetic.json').AddArgument('confirmed-plan').AddArgument($null).AddArgument($null).AddArgument($false).AddArgument($null).AddArgument($false).AddArgument(0).AddArgument($false).AddArgument(@('PC-TEST'))
+        [void]$pipeline.AddScript($workerSource).AddArgument($modulePath).AddArgument('Remove').AddArgument(@('PC-TEST')).AddArgument(@('AD')).AddArgument('synthetic.json').AddArgument('confirmed-plan').AddArgument($null).AddArgument($null).AddArgument($false).AddArgument($null).AddArgument($false).AddArgument(0).AddArgument($false).AddArgument(@('PC-TEST')).AddArgument(@('PC-TEST'))
         $output=@($pipeline.Invoke())
-        if ($pipeline.HadErrors -or $output.Count -ne 1 -or $output[0].LossNames.Count -ne 1 -or $output[0].LossNames[0] -ne 'PC-TEST') { throw 'Production worker lost per-computer BitLocker loss confirmation.' }
+        if ($pipeline.HadErrors -or $output.Count -ne 1 -or $output[0].LossNames.Count -ne 1 -or $output[0].LossNames[0] -ne 'PC-TEST' -or $output[0].HybridNames.Count -ne 1 -or $output[0].HybridNames[0] -ne 'PC-TEST') { throw 'Production worker lost per-computer BitLocker loss confirmation.' }
     }
     finally { $pipeline.Dispose() }
     'PASS: production worker preserves the exact names explicitly confirmed for deletion without a GLPI archive.'
