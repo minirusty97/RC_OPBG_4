@@ -314,34 +314,50 @@ function Read-BlNote {
 
 function Get-ExplorerBitLockerPreview {
     [CmdletBinding()]
-    param([string]$Name,[object[]]$Targets,$Settings,[Security.SecureString]$UserToken,[Security.SecureString]$AppToken)
+    param([string]$Name,[object[]]$Targets,$Settings,[Security.SecureString]$UserToken,[Security.SecureString]$AppToken,[switch]$AllowUnmappedGlpi)
     if (-not [bool](Get-BlValue $Settings 'Enabled' $false)) { throw 'GLPI deve essere configurato e abilitato prima di archiviare o eliminare i dispositivi.' }
-    $query=@{BaseUri=([Uri]$Settings.BaseUri);NameFragment=$Name;UserToken=$UserToken;TimeoutSeconds=[int](Get-BlValue $Settings 'TimeoutSeconds' 20)}
-    if ([bool](Get-BlValue $Settings 'UseAppToken' $true)) { $query.AppToken=$AppToken }
-    $computers=@(Find-GlpiComputer @query | Where-Object { [string]::Equals([string]$_.Name,$Name,[StringComparison]::OrdinalIgnoreCase) -and -not (Test-BlDeleted $_.IsDeleted) })
-    if ($computers.Count -ne 1) { throw 'Occorre una sola scheda GLPI attiva con il nome esatto. Risolvere assenze o duplicati prima dell''archiviazione.' }
-    $computer=$computers[0]; $serial=Get-BlSerial $computer.SerialNumber
-    if (-not $serial) { throw 'Seriale GLPI assente o generico: associazione dell''archivio non verificabile.' }
     $intune=@($Targets | Where-Object Source -eq 'Intune')
-    foreach ($target in $intune) { if ((Get-BlSerial $target.SerialNumber) -cne $serial) { throw 'Seriale Intune diverso da GLPI, assente o generico. Archiviazione ed eliminazione bloccate.' } }
+    $serials=@($intune | ForEach-Object { Get-BlSerial $_.SerialNumber } | Where-Object { $_ } | Sort-Object -Unique)
+    if ($serials.Count -gt 1) { throw 'Piu seriali Intune per lo stesso nome: verificare l''identita dei dispositivi prima di procedere.' }
+    $query=@{BaseUri=([Uri]$Settings.BaseUri);UserToken=$UserToken;TimeoutSeconds=[int](Get-BlValue $Settings 'TimeoutSeconds' 20)}
+    $matchBy='Name'
+    if ($serials.Count -eq 1) { $query.SerialNumber=$serials;$matchBy='Serial' } else { $query.NameFragment=$Name }
+    if ([bool](Get-BlValue $Settings 'UseAppToken' $true)) { $query.AppToken=$AppToken }
+    $computers=@(Find-GlpiComputer @query | Where-Object {
+        -not (Test-BlDeleted $_.IsDeleted) -and (($matchBy -eq 'Serial' -and (Get-BlSerial $_.SerialNumber) -ceq $serials[0]) -or ($matchBy -eq 'Name' -and [string]::Equals([string]$_.Name,$Name,[StringComparison]::OrdinalIgnoreCase)))
+    } | Sort-Object GlpiId -Unique)
+    if ($computers.Count -ne 1) {
+        $criterion='nome esatto '+$Name;if ($matchBy -eq 'Serial') { $criterion='seriale Intune '+$serials[0] }
+        $warning='GLPI: '+$computers.Count+' schede attive trovate per '+$criterion+'. Impossibile scegliere un archivio univoco.'
+        if (-not $AllowUnmappedGlpi) { throw ($warning+' Per archiviare occorre una sola scheda.') }
+        $keys=@(Get-ExplorerBitLockerKeys -Targets $Targets)
+        return [pscustomobject]@{ComputerId=0;Name=$Name;GlpiName='';Serial=($serials -join ', ');EntityId=0;RequiresMappingConfirmation=$false
+            ArchiveAvailable=$false;GlpiMatchCount=$computers.Count;MatchBy=$matchBy;Warning=$warning;Keys=@($keys | Select-Object KeyId,Fingerprint,Volume,CreatedAt,Origins)}
+    }
+    $computer=$computers[0];$serial=Get-BlSerial $computer.SerialNumber
+    if (-not $serial) { throw 'Seriale GLPI assente o generico: associazione dell''archivio non verificabile.' }
+    foreach ($target in $intune) { $value=Get-BlSerial $target.SerialNumber;if ($value -and $value -cne $serial) { throw 'Seriale Intune diverso da GLPI. Archiviazione ed eliminazione bloccate.' } }
     $cloudIds=@($Targets | Where-Object Source -eq 'Entra' | ForEach-Object { ConvertTo-BlId $_.LinkId } | Sort-Object -Unique)
     $intuneIds=@($intune | ForEach-Object { ConvertTo-BlId $_.LinkId } | Sort-Object -Unique)
-    $manual=$intune.Count -eq 0 -or @($cloudIds | Where-Object { $intuneIds -notcontains $_ }).Count -gt 0
-    $keys=@(Get-ExplorerBitLockerKeys -Targets $Targets)
-    $session=$null
+    $manual=$intune.Count -eq 0 -or @($intune | Where-Object { -not (Get-BlSerial $_.SerialNumber) }).Count -gt 0 -or @($cloudIds | Where-Object { $intuneIds -notcontains $_ }).Count -gt 0
+    $keys=@(Get-ExplorerBitLockerKeys -Targets $Targets);$session=$null
     try {
         $session=Open-BlGlpiSession $Settings $UserToken $AppToken
         $live=(Invoke-BlGlpiRequest -Session $session -Method GET -Path ('Computer/'+$computer.GlpiId)).Data
-        if ([int]$live.id -ne [int]$computer.GlpiId -or (Get-BlSerial $live.serial) -cne $serial -or -not [string]::Equals([string]$live.name,$Name,[StringComparison]::OrdinalIgnoreCase) -or (Test-BlDeleted $live.is_deleted)) { throw 'La scheda GLPI e cambiata durante la verifica.' }
+        if ([int]$live.id -ne [int]$computer.GlpiId -or (Get-BlSerial $live.serial) -cne $serial -or -not [string]::Equals([string]$live.name,[string]$computer.Name,[StringComparison]::OrdinalIgnoreCase) -or (Test-BlDeleted $live.is_deleted)) { throw 'La scheda GLPI e cambiata durante la verifica.' }
         [void](Get-BlGlpiNotes -Session $session -ComputerId $computer.GlpiId)
     }
     finally { Close-BlGlpiSession $session }
-    return [pscustomobject]@{ComputerId=[int]$computer.GlpiId;Name=[string]$computer.Name;Serial=$serial;EntityId=[int]$computer.EntityId;RequiresMappingConfirmation=$manual
-        Keys=@($keys | Select-Object KeyId,Fingerprint,Volume,CreatedAt,Origins)}
+    [pscustomobject]@{ComputerId=[int]$computer.GlpiId;Name=$Name;GlpiName=[string]$computer.Name;Serial=$serial;EntityId=[int]$computer.EntityId;RequiresMappingConfirmation=$manual
+        ArchiveAvailable=$true;GlpiMatchCount=1;MatchBy=$matchBy;Warning='';Keys=@($keys | Select-Object KeyId,Fingerprint,Volume,CreatedAt,Origins)}
 }
 
 function Test-ExplorerBitLockerSnapshot {
     param($Expected,$Current)
+    foreach ($field in @('ArchiveAvailable','GlpiMatchCount','MatchBy','GlpiName')) {
+        $default=@{ArchiveAvailable=$true;GlpiMatchCount=1;MatchBy='Name';GlpiName=$Expected.Name}[$field]
+        if ([string](Get-BlValue $Expected $field $default) -ine [string](Get-BlValue $Current $field $default)) { return $false }
+    }
     foreach ($field in @('ComputerId','Name','Serial','EntityId')) { if ([string]$Expected.$field -ine [string]$Current.$field) { return $false } }
     if ($Expected.Keys.Count -ne $Current.Keys.Count) { return $false }
     foreach ($key in $Current.Keys) {
@@ -355,13 +371,14 @@ function Save-ExplorerBitLockerArchive {
     [CmdletBinding()]
     param($Preview,[object[]]$Targets,$Settings,[Security.SecureString]$UserToken,[Security.SecureString]$AppToken,$ProgressQueue)
     $keys=@(Get-ExplorerBitLockerKeys -Targets $Targets)
-    $current=[pscustomobject]@{ComputerId=$Preview.ComputerId;Name=$Preview.Name;Serial=$Preview.Serial;EntityId=$Preview.EntityId;Keys=$keys}
+    if (-not [bool](Get-BlValue $Preview 'ArchiveAvailable' $true)) { throw 'Nessuna scheda GLPI univoca per l''archiviazione.' }
+    $current=$Preview | Select-Object *;$current.Keys=$keys
     if (-not (Test-ExplorerBitLockerSnapshot $Preview $current)) { throw 'Le chiavi BitLocker sono cambiate dopo l''anteprima. Ripetere la verifica.' }
     $session=$null; $verified=New-Object 'Collections.Generic.List[object]'
     try {
         $session=Open-BlGlpiSession $Settings $UserToken $AppToken
         $live=(Invoke-BlGlpiRequest -Session $session -Method GET -Path ('Computer/'+$Preview.ComputerId)).Data
-        if ([int]$live.id -ne $Preview.ComputerId -or (Get-BlSerial $live.serial) -cne $Preview.Serial -or [string]$live.name -ine $Preview.Name -or [int]$live.entities_id -ne $Preview.EntityId -or (Test-BlDeleted $live.is_deleted)) { throw 'Identita della scheda GLPI cambiata: salvataggio interrotto.' }
+        if ([int]$live.id -ne $Preview.ComputerId -or (Get-BlSerial $live.serial) -cne $Preview.Serial -or [string]$live.name -ine [string](Get-BlValue $Preview 'GlpiName' $Preview.Name) -or [int]$live.entities_id -ne $Preview.EntityId -or (Test-BlDeleted $live.is_deleted)) { throw 'Identita della scheda GLPI cambiata: salvataggio interrotto.' }
         $existing=@{}
         foreach ($note in @(Get-BlGlpiNotes $session $Preview.ComputerId)) {
             $record=Read-BlNote $note $Preview.ComputerId
@@ -410,4 +427,22 @@ function Read-ExplorerBitLockerArchive {
     return @($records.ToArray())
 }
 
-Export-ModuleMember -Function Find-ExplorerBitLockerKeys,Get-ExplorerBitLockerKeys,Get-ExplorerBitLockerPreview,Test-ExplorerBitLockerSnapshot,Save-ExplorerBitLockerArchive,Read-ExplorerBitLockerArchive
+function ConvertTo-ExplorerBitLockerRecoveryText {
+    [CmdletBinding()]
+    param([Parameter(Mandatory=$true)][object[]]$Records)
+    $lines=New-Object 'Collections.Generic.List[string]'
+    [void]$lines.Add('Assistente IT - Copia di recupero BitLocker')
+    [void]$lines.Add('Creata: '+[datetime]::Now.ToString('yyyy-MM-dd HH:mm:ss'))
+    foreach ($record in @($Records | Sort-Object Name,KeyId)) {
+        $password=ConvertTo-BlPassword $record.Password
+        [void]$lines.Add('');[void]$lines.Add('Computer: '+([string]$record.Name -replace '[\x00-\x1f]',' '))
+        [void]$lines.Add('Seriale: '+([string]$record.Serial -replace '[\x00-\x1f]',' '))
+        [void]$lines.Add('ID chiave: '+(ConvertTo-BlId $record.KeyId))
+        [void]$lines.Add('Chiave di recupero: '+$password)
+        [void]$lines.Add('Volume: '+([string]$record.Volume -replace '[\x00-\x1f]',' '))
+        foreach ($origin in $record.Origins) { [void]$lines.Add('Origine: '+([string]$origin -replace '[\x00-\x1f]',' ')) }
+    }
+    return ($lines.ToArray() -join [Environment]::NewLine)
+}
+
+Export-ModuleMember -Function ConvertTo-ExplorerBitLockerRecoveryText,Find-ExplorerBitLockerKeys,Get-ExplorerBitLockerKeys,Get-ExplorerBitLockerPreview,Test-ExplorerBitLockerSnapshot,Save-ExplorerBitLockerArchive,Read-ExplorerBitLockerArchive

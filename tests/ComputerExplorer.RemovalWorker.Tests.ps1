@@ -22,8 +22,8 @@ function New-ExplorerRemovalPlan {
 }
 function Invoke-ExplorerRemovalPlan {
     [CmdletBinding(SupportsShouldProcess=$true)]
-    param([string]$PlanId, $ProgressQueue, $Cancellation, [switch]$IncludeAdChildren)
-    [pscustomobject]@{Operation='Remove';PlanId=$PlanId;IncludeAdChildren=[bool]$IncludeAdChildren}
+    param([string]$PlanId, $ProgressQueue, $Cancellation, [switch]$IncludeAdChildren,[string[]]$ConfirmBitLockerLossFor=@())
+    [pscustomobject]@{Operation='Remove';PlanId=$PlanId;IncludeAdChildren=[bool]$IncludeAdChildren;LossNames=$ConfirmBitLockerLossFor}
 }
 Export-ModuleMember -Function Set-ExplorerRemovalReadOnly, New-ExplorerRemovalPlan, Invoke-ExplorerRemovalPlan
 '@
@@ -39,6 +39,15 @@ try {
         finally { $pipeline.Dispose() }
     }
     'PASS: production asynchronous worker passes true and false child consent as booleans to the removal module.'
+    $pipeline=[PowerShell]::Create()
+    try {
+        [void]$pipeline.AddScript($workerSource).AddArgument($modulePath).AddArgument('Remove').AddArgument(@('PC-TEST')).AddArgument(@('AD')).AddArgument('synthetic.json').AddArgument('confirmed-plan').AddArgument($null).AddArgument($null).AddArgument($false).AddArgument($null).AddArgument($false).AddArgument(0).AddArgument($false).AddArgument(@('PC-TEST'))
+        $output=@($pipeline.Invoke())
+        if ($pipeline.HadErrors -or $output.Count -ne 1 -or $output[0].LossNames.Count -ne 1 -or $output[0].LossNames[0] -ne 'PC-TEST') { throw 'Production worker lost per-computer BitLocker loss confirmation.' }
+    }
+    finally { $pipeline.Dispose() }
+    'PASS: production worker preserves the exact names explicitly confirmed for deletion without a GLPI archive.'
+
     $pipeline = [PowerShell]::Create()
     try {
         [void]$pipeline.AddScript($workerSource).AddArgument($modulePath).AddArgument('PrepareRemoval').AddArgument(@('PC-TEST')).AddArgument(@('AD')).AddArgument('synthetic.json').AddArgument('').AddArgument($null).AddArgument($null).AddArgument($false)

@@ -40,7 +40,7 @@ try {
         'AssistenteIT/Graph.Access.ps1', 'AssistenteIT/Window.Identity.cs', 'AssistenteIT/LegacyMigration.ps1', 'AssistenteIT/Import-UserData.ps1',
         'AssistenteIT/AssistenteIT.Update.psm1', 'AssistenteIT/Install-Update.ps1',
         'Graph.Authentication.ps1', 'Graph.LoginBridge.cs', 'Start-ComputerExplorer.ps1', 'ComputerExplorer.Core.psm1', 'ComputerExplorer.Parallel.psm1', 'ComputerExplorer.Removal.psm1',
-        'BitLocker.Archive.psm1', 'GLPI.Inventory.psm1', 'Glpi.Credentials.ps1', 'Test-AdLookup.ps1', 'computer-explorer.config.example.json', '.env.example',
+        'BitLocker.Archive.psm1', 'ComputerExplorer.Recovery.UI.ps1', 'AssistenteIT/Recovery.Print.cs', 'GLPI.Inventory.psm1', 'Glpi.Credentials.ps1', 'Test-AdLookup.ps1', 'computer-explorer.config.example.json', '.env.example',
         'docs/Autenticazione-Graph-Delegata.md', 'docs/Accesso-Iniziale.md', 'docs/Installazione-AssistenteIT.md', 'docs/Third-Party-Notices.txt', 'assets/AssistenteIT.ico'
     )
     foreach ($file in $files) {

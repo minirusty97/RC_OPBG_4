@@ -69,7 +69,7 @@ try {
         function script:Close-BlGlpiSession { param($Session) $script:BlFixture.Closes++ }
         function script:Find-GlpiComputer { param($BaseUri,$NameFragment,$UserToken,$AppToken,$TimeoutSeconds)
             $row=[pscustomobject]@{GlpiId=901;Name='PC-ONE';SerialNumber='SERIAL-ONE';EntityId=0;IsDeleted='0'}
-            if ($script:BlFixture.Mode -eq 'AmbiguousAsset') { return @($row,$row) }
+            if ($script:BlFixture.Mode -eq 'AmbiguousAsset') { $duplicate=$row | Select-Object *;$duplicate.GlpiId=902;return @($row,$duplicate) }
             return $row
         }
         function script:Invoke-BlGlpiRequest {

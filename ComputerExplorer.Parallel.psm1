@@ -18,6 +18,7 @@ function Get-ExplorerReadWorkerScript {
         }
         $arguments = @{ Source=$Job.Kind; NameFragment=$Fragment; ConfigPath=$ConfigPath; Configuration=$Configuration; CloudCache=$Cache
             GlpiUserToken=$UserToken; GlpiAppToken=$AppToken; ForceCloudRefresh=$Refresh }
+        if ($null -ne $Job.PSObject.Properties['SerialDevices']) { $arguments.IntuneDevices=$Job.SerialDevices }
         if ($Job.Kind -eq 'AD') { $arguments.DomainController=$Job.DomainController }
         if ($Job.Kind -in @('Entra','Intune')) { $arguments.ProgressQueue=$Job.ReadProgress }
         Read-ExplorerSource @arguments
@@ -114,7 +115,7 @@ function Invoke-ComputerExplorerParallelSearch {
     $readProgress=New-Object 'System.Collections.Concurrent.ConcurrentQueue[object]'
     $cache=Get-ExplorerCloudCache
     $body=Get-ExplorerReadWorkerScript
-    $adCompleted=0
+    $adCompleted=0;$serialGlpiQueued=$false
     $watch=[Diagnostics.Stopwatch]::StartNew()
     try {
         $pool.Open(); $adPool.Open()
@@ -192,8 +193,19 @@ function Invoke-ComputerExplorerParallelSearch {
                         $sources.AD.State='OK'; if ($errors.Count -gt 0) { $sources.AD.State='Errore' }
                     }
                 }
-                else { $sources[$job.Kind]=$result }
+                else {
+                    if ($job.Kind -eq 'GLPI' -and $null -ne $job.PSObject.Properties['SerialDevices']) { $result.Records=@(@($sources.GLPI.Records)+@($result.Records) | Sort-Object GlpiId -Unique) }
+                    $sources[$job.Kind]=$result
+                }
                 $updated=$true
+            }
+            if (-not $serialGlpiQueued -and $sources.Intune.State -eq 'OK' -and $sources.GLPI.State -eq 'OK') {
+                $serialGlpiQueued=$true
+                if (@(Get-ExplorerSerials $sources.Intune.Records).Count) {
+                    $sources.GLPI.State='In attesa';$sources.GLPI | Add-Member -NotePropertyName Progress -NotePropertyValue 'Ricerca tramite seriali Intune' -Force
+                    [void]$tasks.Add((Start-ExplorerReadTask -Job ([pscustomobject]@{Kind='GLPI';SerialDevices=@($sources.Intune.Records)}) @arguments))
+                    $updated=$true
+                }
             }
             $notice=$null
             while ($readProgress.TryDequeue([ref]$notice)) {

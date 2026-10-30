@@ -141,7 +141,7 @@ try {
         'PASS: a slow source does not delay results from completed sources.'
         $cache.State.Gates.GLPI.Set()
         $complete=Complete-TestSearch $task
-        if($complete.Rows.Count -ne 1 -or $complete.Rows[0].ADColor -ne 'Verde' -or $complete.Rows[0].GLPI -ne '1' -or $cache.State.Exited.Count -ne 8){throw 'Parallel union lost records or readers.'}
+        if($complete.Rows.Count -ne 1 -or $complete.Rows[0].ADColor -ne 'Verde' -or $complete.Rows[0].GLPI -ne '1' -or $cache.State.Exited.Count -ne 9){throw 'Parallel union lost records or readers.'}
         $events=@($cache.State.AdEvents.ToArray())
         if($events.Count -ne 10 -or @($cache.State.AdRunspaces.ToArray()|Select-Object -Unique).Count -ne 1){throw 'AD reads did not reuse one dedicated runspace.'}
         for($i=0;$i -lt 5;$i++){
@@ -263,7 +263,8 @@ try {
             if (-not $task.Operation.AsyncWaitHandle.WaitOne(10000)) { throw ('Cloud deadline failed to terminate '+$blocked) }
             $result=Complete-TestSearch $task
             $source=@($result.Sources | Where-Object { $_.Name -eq $blocked })[0]
-            if ($source.State -ne 'Errore' -or $source.Error -notlike '*Tempo massimo*1 s*' -or @($result.Sources | Where-Object { $_.State -eq 'OK' }).Count -ne 3 -or $cache.State.Exited.Count -ne 8 -or $cache.ContainsKey('tenant|'+$blocked)) { throw 'Cloud timeout fabricated absence, left a reader alive, kept stale data or lost independent results.' }
+            $expectedReaders=9;if ($blocked -eq 'Intune') { $expectedReaders=8 }
+            if ($source.State -ne 'Errore' -or $source.Error -notlike '*Tempo massimo*1 s*' -or @($result.Sources | Where-Object { $_.State -eq 'OK' }).Count -ne 3 -or $cache.State.Exited.Count -ne $expectedReaders -or $cache.ContainsKey('tenant|'+$blocked)) { throw 'Cloud timeout fabricated absence, left a reader alive, kept stale data or lost independent results.' }
             $row=$result.Rows[0]
             if ($row.$blocked -ne '?' -or $row.($blocked+'Color') -ne 'Grigio') { throw 'Cloud timeout was shown as device absence.' }
             $cache.State.Gates[$blocked].Set()
