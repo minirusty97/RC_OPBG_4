@@ -31,6 +31,8 @@ $hybridUiTimer.Add_Tick({
  try {
   if ($hybridUiState.Mode -eq 'Hybrid') {
    $child=$window.Controls.Find('AdChildrenConsent',$true)[0];$hybrid=$window.Controls.Find('HybridIdentityConsent',$true)[0];$confirm=$window.Controls.Find('ConfirmRemoval',$true)[0]
+   $layout=$window.Controls[0];$preview=@($layout.Controls | Where-Object { $_ -is [Windows.Forms.RichTextBox] })[0]
+   if ($preview.Text -notlike '*IDENTITA AD/ENTRA*ServerAd*33333333-3333-4333-8333-333333333333*Non corrisponde*GUID AD differente*') { throw 'Native preview lost the actual hybrid identifiers or mismatch explanation.' }
    if (-not $child.Visible -or -not $hybrid.Visible -or $child.Checked -or $hybrid.Checked -or $confirm.Enabled -or $window.AcceptButton.Text -ne 'Annulla') { throw 'Consent was preselected or a separate confirmation disappeared.' }
    $child.Checked=$true;if ($confirm.Enabled) { throw 'AD-child consent authorized a hybrid mismatch.' }
    $hybrid.Checked=$true;if (-not $confirm.Enabled) { throw 'Both confirmations did not enable removal.' }
@@ -56,7 +58,9 @@ try {
  $result=[pscustomobject]@{Name='PC-HYBRID';Live=$true;Records=@($record);Sources=@([pscustomobject]@{Name='Intune';State='Errore';Count=0;Error='HTTP 403'});DiagnosticText=$expectedDiagnostic}
  $hybridUiState.Seen=$false;$hybridUiState.Mode='Diagnostics';$hybridUiTimer.Start();Show-ArchivedBitLockerKeys $result
  if (-not $hybridUiState.Seen -or $hybridUiState.Error) { throw ('BitLocker diagnostics UI failed: '+$hybridUiState.Error) }
- 'PASS: the actual BitLocker results dialog shows detailed phases and copies a diagnostic report independently of the recovery password display.'
+ $result.Records=@();$hybridUiState.Seen=$false;$hybridUiTimer.Start();Show-ArchivedBitLockerKeys $result
+ if (-not $hybridUiState.Seen -or $hybridUiState.Error) { throw ('Zero-key diagnostics UI failed: '+$hybridUiState.Error) }
+ 'PASS: the actual BitLocker results dialog shows detailed phases and copies a diagnostic report independently of the recovery password display, including a zero-key failure.'
 }
 finally { $hybridUiTimer.Stop();$hybridUiTimer.Dispose();$form.Dispose() }
 '@
