@@ -72,7 +72,7 @@ function Assert-InstalledApplication {
     try{$shortcut=$shell.CreateShortcut($shortcutPath);if($shortcut.TargetPath -ne $launcher){throw 'Shortcut points to the wrong launcher.'}}
     finally{if($null -ne $shortcut){[void][Runtime.InteropServices.Marshal]::ReleaseComObject($shortcut)};[void][Runtime.InteropServices.Marshal]::ReleaseComObject($shell)}
     $window=Invoke-TestWindow $launcher
-    if($window.Product -ne 'Assistente IT' -or $window.WindowTitle -ne ('Assistente IT - '+$installed.Version) -or -not $window.GraphAvailable -or $window.ModuleCount -ne 3 -or $window.DataRoot -ne $dataRoot -or $window.ConfigPath -ne (Join-Path $dataRoot 'Config/computer-explorer.config.local.json')){throw 'Installed window, renamed paths or bundled Graph failed verification.'}
+    if($window.Product -ne 'Assistente IT' -or $window.WindowTitle -ne ('Assistente IT - '+$installed.Version) -or -not $window.GraphAvailable -or $window.ModuleCount -ne @($installed.Modules).Count -or $window.DataRoot -ne $dataRoot -or $window.ConfigPath -ne (Join-Path $dataRoot 'Config/computer-explorer.config.local.json')){throw 'Installed window, renamed paths or bundled Graph failed verification.'}
 }
 try{
     $cases=@(
