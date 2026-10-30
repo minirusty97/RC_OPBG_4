@@ -21,8 +21,8 @@ try {
         if ($row.SerialCheck -ne 'Coerente' -or $row.SerialConflict -or $row.Censito -ne '✓' -or $row.CensitoColor -ne 'Verde') { throw 'Matching serials and assigned CENSITO group not confirmed.' }
         'PASS: case-insensitive hardware serial match and exact assigned group yield a green census check.'
         $row=New-TestRow -GlpiSerials @('DIFFERENT')
-        if (-not $row.SerialConflict -or $row.SerialCheck -ne 'Conflitto' -or $row.Censito -eq '✓' -or $row.Note -notlike '*Eliminazione bloccata*') { throw 'Different hardware merged as verified census.' }
-        'PASS: different hardware under the same name is exposed as a conflict and cannot gain a census check.'
+        if ($row.GlpiRecords.Count -ne 0 -or $row.GLPI -ne '0' -or $row.Censito -eq '✓' -or $row.Note -notlike '*omonime escluse*') { throw 'Different hardware merged as verified census.' }
+        'PASS: different hardware under the same name is excluded from serial binding and cannot gain a census check.'
         $row=New-TestRow -IntuneSerials @('ABC-123','OLD-456')
         if (-not $row.SerialConflict -or $row.IntuneSerial -notlike '*OLD-456*' -or $row.Intune -ne '2') { throw 'Old Intune hardware silently picked or discarded.' }
         'PASS: conflicting instances within one source retain every ID and serial.'
@@ -44,7 +44,7 @@ try {
         if ((New-TestRow -Verified $false).Censito -ne '?' -or (New-TestRow -GlpiState 'Errore').Censito -ne '?') { throw 'Unavailable group or inventory returned false certainty.' }
         'PASS: group and source failures keep census explicitly unknown.'
         $row=New-TestRow -IntuneSerials @('ABC123') -GlpiSerials @('ABC-123')
-        if (-not $row.SerialConflict) { throw 'Normalization removed significant serial characters.' }
+        if ($row.GlpiRecords.Count -ne 0 -or $row.Note -notlike '*omonime escluse*') { throw 'Normalization removed significant serial characters.' }
         'PASS: serial punctuation remains significant to avoid merging different hardware.'
     }
 }
