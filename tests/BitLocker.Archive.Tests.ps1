@@ -29,7 +29,7 @@ try {
         }
         function script:Invoke-MgGraphRequest {
             [CmdletBinding()]param($Method,$Uri,$OutputType,$Headers)
-            if ($Method -ne 'GET' -or $Uri -notlike '*$select=id,deviceId,key*' -or -not $Headers['User-Agent']) { throw 'Secret read was not explicit and identified.' }
+            if ($Method -ne 'GET' -or -not $Uri.EndsWith('?$select=key',[StringComparison]::Ordinal) -or -not $Headers['User-Agent']) { throw 'Secret read was not explicit and identified.' }
             if ($script:BlFixture.Mode -eq 'MissingCloudPassword') { return [pscustomobject]@{id=(New-TestBlId 71);deviceId=(New-TestBlId 41)} }
             $id=New-TestBlId 71; $number=1
             if ($Uri -like ('*/'+(New-TestBlId 73)+'?*')) { $id=New-TestBlId 73; $number=3 }

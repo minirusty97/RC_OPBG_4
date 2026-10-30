@@ -135,6 +135,11 @@ function New-ExplorerGraphOperationError {
     $http=0;$code='';$requestId='';$savedStage='';$localCode='';$exceptionType=''
     $localLabels=@{
         InvalidIdentifier='Identificativo BitLocker assente o non valido.'
+        MissingKeyField='Il servizio non ha restituito il campo key richiesto con $select=key.'
+        EmptyKeyField='Il servizio ha restituito il campo key, ma il valore e vuoto.'
+        InvalidKeyType='Il servizio ha restituito il campo key con un tipo diverso da testo.'
+        InvalidKeyFormat='La password ricevuta non contiene otto gruppi di sei cifre.'
+        InvalidKeyResponse='La risposta alla richiesta della singola chiave non contiene un solo oggetto.'
         MissingPassword='Password di recupero assente nella risposta o formato non valido.'
         InvalidPassword='Password di recupero non valida: controllo dei gruppi numerici fallito.'
         ForeignKey='La chiave ricevuta appartiene a un dispositivo diverso da quello richiesto.'
@@ -155,6 +160,11 @@ function New-ExplorerGraphOperationError {
     }
     $knownMessages=@{
         'Identificativo BitLocker non valido.'='InvalidIdentifier'
+        'Risposta Graph senza il campo key richiesto con $select=key.'='MissingKeyField'
+        'Risposta Graph con campo key vuoto.'='EmptyKeyField'
+        'Risposta Graph con campo key di tipo inatteso.'='InvalidKeyType'
+        'Risposta Graph con password di recupero in formato non valido.'='InvalidKeyFormat'
+        'Risposta Graph della singola chiave non valida: occorre un solo oggetto.'='InvalidKeyResponse'
         'Password di recupero BitLocker assente, non leggibile o non valida.'='MissingPassword'
         'Password di recupero BitLocker non valida.'='InvalidPassword'
         'Chiave Graph esterna al dispositivo richiesto.'='ForeignKey'

@@ -17,7 +17,7 @@ try {
   }
   function script:Invoke-MgGraphRequest {
    [CmdletBinding()]param($Method,$Uri,$OutputType,$Headers)
-   if ($Method -ne 'GET' -or -not $Headers['User-Agent'] -or $Uri -notlike '*$select=id,deviceId,key*') { throw 'Unexpected secret request.' }
+   if ($Method -ne 'GET' -or -not $Headers['User-Agent'] -or -not $Uri.EndsWith('?$select=key',[StringComparison]::Ordinal)) { throw 'Unexpected secret request.' }
    $response=[pscustomobject]@{id='33333333-3333-4333-8333-333333333333';deviceId='11111111-1111-4111-8111-111111111111';key=$script:TraceFixture.Password;volumeType='operatingSystemVolume';createdDateTime='2026-10-30T10:00:00Z'}
    if ($script:TraceFixture.Mode -eq 'MissingPassword') { $response.key=$null }
    if ($script:TraceFixture.Mode -eq 'InvalidPassword') { $response.key='123456-123456-123456-123456-123456-123456-123456-123456' }
