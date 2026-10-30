@@ -237,7 +237,7 @@ function Show-RemovalPreview {
     $intro.Text = 'Origini: {0}. Computer con oggetti pronti: {1}/{2}. Ordine: Intune, AD, Entra.' -f ($Plan.Sources -join ', '), $ready, $Plan.Entries.Count
     if ($Plan.Sources -contains 'Intune') { $intro.Text += [Environment]::NewLine + 'Intune: eliminare una registrazione Windows avvia anche il ritiro dalla gestione.' }
     $intro.Text += [Environment]::NewLine + 'Prima di eliminare: archivio BitLocker aggiunto alle Note GLPI e riletto dalle Note GLPI. Un errore blocca il computer.'
-    if ($archiveOnly) { $intro.Text='Archiviazione delle chiavi in chiaro nelle Note GLPI. Nessun computer verra eliminato. Verificare scheda GLPI, seriale e origini.' }
+    if ($archiveOnly) { $intro.Text='Archiviazione delle chiavi in chiaro nelle Note GLPI. Nessun computer verra eliminato. Origini: '+($Plan.Sources -join ', ')+'. Verificare scheda GLPI, seriale e origini.' }
     $unmapped=@($Plan.Entries | Where-Object { [string]::IsNullOrWhiteSpace($_.Error) -and $_.Targets.Count -gt 0 -and $null -ne (Get-UiSetting $_ 'Backup' $null) -and -not [bool](Get-UiSetting $_.Backup 'ArchiveAvailable' $true) })
     if ($unmapped.Count) {
         $panel.RowStyles[0].Height=95
@@ -272,9 +272,10 @@ function Show-RemovalPreview {
             [void]$lines.Add('  ' + $target.Source + ' | ' + $target.DomainController + ' | ID: ' + $target.Id)
             if ($target.Source -eq 'AD') {
                 [void]$lines.Add('    ' + $target.DistinguishedName)
+                if ($archiveOnly) { [void]$lines.Add('    Oggetti di recupero BitLocker visibili: '+@($target.AdChildren | Where-Object ObjectClass -eq 'msFVE-RecoveryInformation').Count+'. Zero oggetti visibili non esclude restrizioni di lettura AD.') }
                 foreach ($child in $target.AdChildren) {
                     $label = $child.ObjectClass
-                    if ($child.ObjectClass -eq 'msFVE-RecoveryInformation') { $label += ' | Recupero BitLocker: queste informazioni verranno eliminate da AD' }
+                    if ($child.ObjectClass -eq 'msFVE-RecoveryInformation') { if ($archiveOnly) { $label+=' | Recupero BitLocker: sola lettura per archivio' } else { $label += ' | Recupero BitLocker: queste informazioni verranno eliminate da AD' } }
                     [void]$lines.Add('    FIGLIO AD | ' + $label + ' | ID: ' + $child.Id)
                     [void]$lines.Add('      ' + $child.DistinguishedName)
                 }

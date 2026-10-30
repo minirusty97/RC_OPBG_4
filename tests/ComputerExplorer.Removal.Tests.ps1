@@ -101,12 +101,13 @@ try {
                 }
                 return $record
             }
-            if ($LDAPFilter -ne '(objectClass=*)' -or $SearchScope -ne 'Subtree') { throw 'Unexpected child search scope/filter.' }
+            if ($LDAPFilter -notin @('(objectClass=*)','(objectClass=msFVE-RecoveryInformation)') -or $SearchScope -ne 'Subtree') { throw 'Unexpected child search scope/filter.' }
             if ($Properties -contains '*' -or @($Properties | Where-Object { $_ -match 'password|recoveryguid|keypackage' }).Count) { throw 'Secret BitLocker attributes requested.' }
             $parents=@($script:Fixture.Ad | Where-Object { $_.DistinguishedName -eq $SearchBase })
             if ($parents.Count -ne 1) { throw 'Unexpected child search base.' }
-            $parents[0]
+            if ($LDAPFilter -eq '(objectClass=*)') { $parents[0] }
             foreach ($record in $script:Fixture.Children) {
+                if ($LDAPFilter -eq '(objectClass=msFVE-RecoveryInformation)' -and $record.ObjectClass -ne 'msFVE-RecoveryInformation') { continue }
                 if ($script:Fixture.Mode -eq 'MovedChildOutsideSearch' -and [string]$record.ObjectGUID -eq (New-TestId 61)) { continue }
                 if (($record.DistinguishedName.EndsWith(','+$SearchBase,[StringComparison]::OrdinalIgnoreCase) -or $script:Fixture.Mode -eq 'ForeignChild') -and
                     @($script:Fixture.Writes | Where-Object { $_.Source -eq 'AD (figlio)' -and $_.Id -eq [string]$record.ObjectGUID -and $_.Server -eq $Server }).Count -eq 0) { $record }
@@ -341,6 +342,24 @@ try {
                 if ($script:Fixture.Writes.Count -ne 0 -or $result.Failed -ne 1 -or $plan.Entries[0].Error -notlike '*protetto*') { throw ('Accidental deletion protection bypassed: '+$kind) }
             }
             'PASS: protected computers and protected descendants block every selected origin and their protection is never changed.'
+
+            Reset-Fixture;Set-TestAdChildren
+            $script:Fixture.Ad[0].ProtectedFromAccidentalDeletion=$true;$script:Fixture.Children[0].ProtectedFromAccidentalDeletion=$true
+            $plan=New-ExplorerRemovalPlan -Names PC-ONE -Sources AD,Entra,Intune -ConfigPath $configPath -ArchiveOnly
+            $ad=@($plan.Entries[0].Targets | Where-Object Source -eq 'AD')[0]
+            if ($plan.Entries[0].Error -or -not $ad.RecoveryOnly -or $ad.AdChildren.Count -ne 1 -or $ad.AdChildren[0].ObjectClass -ne 'msFVE-RecoveryInformation') { throw 'Archive-only mode used full deletion enumeration or blocked protected recovery objects.' }
+            $result=Invoke-ExplorerRemovalPlan -PlanId $plan.PlanId -Confirm:$false
+            if (@($script:Fixture.ChildReads | Where-Object { $_.Properties -contains 'ProtectedFromAccidentalDeletion' }).Count) { throw 'Archive-only mode still reads deletion protection ACL metadata.' }
+            if ($result.Failed -or $result.Deleted -or $script:Fixture.Writes.Count -or -not $script:Fixture.Ad[0].ProtectedFromAccidentalDeletion -or -not $script:Fixture.Children[0].ProtectedFromAccidentalDeletion) { throw 'Read-only archive path deleted, unprotected or failed to reread AD objects.' }
+            Reset-Fixture;Set-TestAdChildren;$script:Fixture.Children[1].ObjectGUID='invalid-unrelated-guid'
+            $targets=@(Get-RemovalTargets -Name PC-ONE -Sources AD -Controllers @('dc1.example.invalid') -ArchiveOnly)
+            if ($targets.Count -ne 1 -or $targets[0].AdChildren.Count -ne 1) { throw 'An unrelated service child still blocked archive metadata.' }
+            $failed=$false;try { $null=Get-RemovalTargets -Name PC-ONE -Sources AD -Controllers @('dc1.example.invalid') } catch { $failed=$_.Exception.Message -like '*Identificativo oggetto non valido*dc1.example.invalid*container*CN=Services*' }
+            if (-not $failed) { throw 'Deletion accepted an invalid child ID or lost source/DC/DN diagnostics.' }
+            $binary=([guid](New-TestId 11)).ToByteArray()
+            if ((ConvertTo-RemovalId $binary) -ne (New-TestId 11) -or (ConvertTo-RemovalId @((New-TestId 11))) -ne (New-TestId 11)) { throw 'Valid binary or single-value AD identifiers were rejected.' }
+            'PASS: archive-only mode reads only BitLocker children, supports protected objects through final rereads and never changes protections; deletion retains full strict enumeration and contextual invalid-ID errors.'
+
 
             Reset-Fixture; Set-TestAdChildren
             $plan=New-ExplorerRemovalPlan -Names PC-ONE -Sources AD,Entra,Intune -ConfigPath $configPath
