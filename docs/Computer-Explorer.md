@@ -1,6 +1,6 @@
 # Computer Explorer — console di ricerca
 
-Aggiornamento: 16 ottobre 2026. Versione funzionale integrata in `main`.
+Aggiornamento: 30 ottobre 2026. Versione funzionale integrata in `main`.
 
 ## Fase attuale
 
@@ -209,3 +209,26 @@ La ricerca iniziale delle quattro fonti rimane parallela. Dopo la lettura Intune
 Se per il seriale Intune (o per il nome, quando manca il seriale) risultano zero o piu schede GLPI attive, la cancellazione mostra un avviso e una seconda conferma esplicita per i soli PC interessati. **Scarica chiavi** salva un file di testo con computer, seriale, ID e password di recupero; **Stampa chiavi** apre la scelta della stampante e gestisce report su piu pagine. La copia e facoltativa: l'operatore puo confermare il rischio di perdita senza crearla. Le password sono rilette soltanto su richiesta di copia/stampa e non compaiono nell'anteprima o negli eventi di avanzamento.
 
 La conferma senza GLPI non sceglie una scheda a caso e non scrive Note GLPI. Gli altri PC del lotto conservano il backup verificato. Errori di recupero, identita cambiate, chiavi cambiate e oggetti AD protetti non vengono ignorati. Il backend richiede i nomi esatti dei PC confermati e ripete i controlli prima delle cancellazioni. **Archivia BitLocker** continua a richiedere una scheda GLPI univoca; una conferma di perdita non viene trattata come archiviazione riuscita. Le Note GLPI preesistenti restano inalterate.
+
+## Identita hybrid AD / Entra (1.0.22)
+
+La colonna **Identita AD/Entra** confronta `deviceId` Entra con `ObjectGUID` AD soltanto per le registrazioni `trustType=ServerAd`. `Workplace` (registered) e `AzureAd` (joined cloud) sono non applicabili. Ogni registrazione ha il proprio esito: un registered omonimo non nasconde un hybrid discordante. L'Object ID Entra e l'ID gestionale Intune non vengono confrontati con il GUID AD.
+
+- **Corrisponde**: stesso GUID. Le repliche lette su piu DC rappresentano la stessa identita.
+- **Non corrisponde**: oggetti AD omonimi con GUID diverso; il dettaglio conserva gli identificativi e segnala anche un eventuale oggetto atteso trovato con un altro nome.
+- **Assente in AD**: ricerca completa per nome/GUID senza corrispondenze.
+- **Non verificabile**: fonte esclusa, tipo di join o identificativi non validi, DC irraggiungibile o lettura incompleta.
+
+Per gli hybrid senza una corrispondenza gia letta viene eseguita una ricerca LDAP mirata tramite GUID, suddivisa in lotti e sempre sul lettore AD sequenziale. La ricerca attende anche questo passaggio prima di concludersi. Il dettaglio mostra il nome AD effettivo quando il computer e stato rinominato. La correlazione non aggiunge automaticamente l'oggetto rinominato alla selezione di eliminazione.
+
+Prima delle cancellazioni il backend rilegge il tipo di join e i metadati AD. Una discordanza provata richiede la conferma separata **HybridIdentityConsent**, limitata ai PC elencati, distinta dai consensi per figli AD, associazione GLPI e perdita chiavi. Una modifica dopo l'anteprima invalida la conferma. L'archiviazione senza cancellazione non richiede questa conferma.
+
+## Diagnostica BitLocker (1.0.22)
+
+**Leggi chiavi** continua a partire da Intune e a usare AD come riserva. Il report separa sessione effettiva del processo lettore, ricerca Intune, validazione Azure AD Device ID, elenco metadati, richiesta della password e validazione della risposta. Mostra conteggi, Device ID e Recovery Key ID, distinguendo un dispositivo assente da una lista di chiavi vuota.
+
+Il parser gestisce anche il resoconto HTTP con intestazioni prodotto dal SDK Graph 2.41.1, oltre al JSON puro. Conserva HTTP, codice Graph, request-id e tipo dell'eccezione; gli errori locali hanno codici distinti, ad esempio `InvalidIdentifier`, `MissingPassword`, `InvalidPassword` e `MissingCollection`. La finestra offre **Copia diagnostica** anche quando nessuna chiave viene recuperata. Il testo copiato e costruito dai soli dati diagnostici e non include password di recupero, token, corpi di risposta o intestazioni complete.
+
+La verifica iniziale dei metadati rimane **Parziale**: non viene letta una password durante l'accesso. La lettura effettiva avviene soltanto con l'operazione richiesta. Nessuna nuova autorizzazione o richiesta di login viene introdotta nelle funzioni. Gli errori di lettura restano bloccanti per backup ed eliminazioni; il nuovo report permette di diagnosticare il problema reale del tenant senza attribuirlo automaticamente ai permessi.
+
+Riferimenti Microsoft: [attributi sincronizzati AD/Entra](https://learn.microsoft.com/en-us/entra/identity/hybrid/connect/reference-connect-sync-attributes-synchronized#windows-10), [trustType del dispositivo](https://learn.microsoft.com/en-us/graph/api/resources/device), [lettura chiave e ruoli delegati](https://learn.microsoft.com/en-us/graph/api/bitlockerrecoverykey-get). Formato degli errori del SDK fissato: [InvokeMgGraphRequest](https://github.com/microsoftgraph/msgraph-sdk-powershell/blob/v2.41.1/src/Authentication/Authentication/Cmdlets/InvokeMgGraphRequest.cs), [HttpMessageFormatter](https://github.com/microsoftgraph/msgraph-sdk-powershell/blob/v2.41.1/src/Authentication/Authentication/Helpers/HttpMessageFormatter.cs).
