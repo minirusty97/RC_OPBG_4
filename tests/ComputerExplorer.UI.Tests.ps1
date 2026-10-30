@@ -142,6 +142,7 @@ try {
                 elseif ($consent.Visible -or -not $confirm.Enabled) { throw 'Leaf computer unexpectedly requires child consent.' }
                 if ($script:RemovalDialogMapping -and $preview.Text -notlike '*BACKUP GLPI*') { throw 'GLPI backup mapping is absent from the native preview.' }
                 if ($script:RemovalDialogArchiveOnly -and $confirm.Text -ne 'Archivia su GLPI') { throw 'Archive-only preview still offers a deletion action.' }
+                if ($script:RemovalDialogArchiveOnly -and ($preview.Text -like '*verranno eliminate da AD*' -or @($layout.Controls | Where-Object { $_ -is [Windows.Forms.Label] -and $_.Text -like '*Origini: AD*' }).Count -ne 1)) { throw 'Archive preview omitted sources or displayed deletion warnings.' }
                 if ($script:RemovalDialogAccept) { $confirm.PerformClick() }
                 else { $dialog.DialogResult='Cancel' }
             }

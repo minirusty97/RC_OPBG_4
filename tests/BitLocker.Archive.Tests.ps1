@@ -85,7 +85,7 @@ try {
             }
             if ($Method -eq 'POST' -and $Path -eq 'Notepad') {
                 if ($script:BlFixture.Mode -eq 'PostDenied') { throw 'Synthetic note write denied.' }
-                if ($Body.input.itemtype -ne 'Computer' -or $Body.input.items_id -ne 901 -or @($script:BlFixture.Keys | Where-Object { $Body.input.content -like ('*'+$_.Password+'*') }).Count -ne 1 -or $Body.input.content -notlike '*AIT-BITLOCKER-V1*') { throw 'Wrong computer or missing readable recovery password in the native note.' }
+                if ($Body.input.itemtype -ne 'Computer' -or $Body.input.items_id -ne 901 -or @($script:BlFixture.Keys | Where-Object { $Body.input.content -like ('*'+$_.Password+'*') }).Count -ne 1 -or $Body.input.content -notlike '*AIT-BITLOCKER-V2*') { throw 'Wrong computer or missing readable recovery password in the native note.' }
                 $script:BlFixture.Posts++; $id=1000+$script:BlFixture.Posts
                 [void]$script:BlFixture.Notes.Add([pscustomobject]@{id=$id;itemtype='Computer';items_id=901;content=$Body.input.content})
                 return [pscustomobject]@{Data=[pscustomobject]@{id=$id};Headers=@{};Status=201}
@@ -144,6 +144,20 @@ try {
             $receipt=Save-ExplorerBitLockerArchive -Preview $preview -Targets $bindingTargets -Settings $settings -UserToken $token
             if ($receipt.Count -ne 2 -or $script:BlFixture.Posts -ne 2) { throw 'Retry duplicated or lost a key after failed read-back.' }
             'PASS: failed read-back blocks success while a retry recovers and verifies the already-written key without duplication.'
+
+            Reset-BlStorage
+            $script:BlFixture.Keys=@([pscustomobject]@{KeyId=(New-TestBlId 71);Password=(New-TestBlKey);Volume='operatingSystemVolume';CreatedAt='2026-10-01T10:00:00Z';Origins=@('Intune:'+(New-TestBlId 41));Fingerprint=(Get-BlFingerprint (New-TestBlKey))})
+            $oldRecord=[pscustomobject]@{SchemaVersion=1;ComputerId=901;Name='PC-ONE';Serial='SERIAL-ONE';KeyId=(New-TestBlId 71);Password=(New-TestBlKey);Volume='operatingSystemVolume';CreatedAt='2026-10-01T10:00:00Z';Origins=@('Intune:'+(New-TestBlId 41));ArchivedAtUtc='2026-10-20T10:00:00Z'}
+            $oldContent='<p>Archivio precedente</p><pre>[AIT-BITLOCKER-V1]'+[Environment]::NewLine+[Net.WebUtility]::HtmlEncode(($oldRecord | ConvertTo-Json -Depth 5))+'</pre>'
+            [void]$script:BlFixture.Notes.Add([pscustomobject]@{id=999;itemtype='Computer';items_id=901;content=$oldContent})
+            $preview=Get-ExplorerBitLockerPreview -Name PC-ONE -Targets $bindingTargets -Settings $settings -UserToken $token
+            $receipt=Save-ExplorerBitLockerArchive -Preview $preview -Targets $bindingTargets -Settings $settings -UserToken $token
+            $read=@(Read-ExplorerBitLockerArchive -ComputerId 901 -Settings $settings -UserToken $token)
+            if ($script:BlFixture.Posts -ne 1 -or $script:BlFixture.Notes[1].content -cne $oldContent -or $script:BlFixture.Notes[0].content -cne $script:BlFixture.LegacyContent -or $read.Count -ne 1 -or $read[0].SchemaVersion -ne 2) { throw 'Readable legacy migration overwrote a note or duplicated the recovery view.' }
+            $receipt=Save-ExplorerBitLockerArchive -Preview $preview -Targets $bindingTargets -Settings $settings -UserToken $token
+            if ($script:BlFixture.Posts -ne 1) { throw 'Repeated readable migration added another copy.' }
+            'PASS: rearchiving V1 notes appends one readable V2 copy, preserves every old note, deduplicates Leggi archivio and does not repeat the copy.'
+
         }
         finally { $token.Dispose() }
     }

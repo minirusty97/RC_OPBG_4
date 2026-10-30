@@ -15,7 +15,8 @@ function Get-BlValue {
 
 function ConvertTo-BlId {
     param($Value)
-    if ($Value -is [byte[]]) { $Value=[guid]::new([byte[]]$Value) }
+    if ($Value -is [Collections.IList] -and $Value -isnot [byte[]]) { if ($Value.Count -eq 1) { $Value=$Value[0] } }
+    if ($Value -is [byte[]]) { if ($Value.Length -ne 16) { throw 'Identificativo BitLocker non valido.' };$Value=New-Object guid(,$Value) }
     $id=[guid]::Empty
     if (-not [guid]::TryParse([string]$Value,[ref]$id) -or $id -eq [guid]::Empty) { throw 'Identificativo BitLocker non valido.' }
     return $id.ToString()
@@ -131,6 +132,40 @@ function Read-BlRecoveryResponse {
     [pscustomobject]@{Password=$password;Volume=[string]$volume;CreatedAt=[string]$created}
 }
 
+function New-BlAdError {
+    param($Failure,[string]$Stage='ADLookup',[string]$Server,[string]$ObjectId='')
+    $reason='ReadFailure';$type='';$savedStage=''
+    $nodes=New-Object 'Collections.Generic.Queue[object]';$nodes.Enqueue($Failure)
+    for ($i=0;$i -lt 16 -and $nodes.Count;$i++) {
+        $node=$nodes.Dequeue();if ($null -eq $node) { continue }
+        $data=Get-BlValue $node 'Data'
+        $saved=[string](Get-BlValue $data 'AssistenteIT.AdStage' '')
+        if ($saved -in @('ADLookup','ADRecoveryObjects','ADPassword')) { $savedStage=$saved }
+        $known=[string](Get-BlValue $data 'AssistenteIT.AdReason' '')
+        if ($known -in @('ReadFailure','MissingPassword','InvalidPassword','InvalidIdentifier','AccessDenied','ServerUnavailable','ChangedObject')) { $reason=$known }
+        $message=[string](Get-BlValue $node 'Message' '')
+        if ($message -eq 'Password di recupero BitLocker assente, non leggibile o non valida.') { $reason='MissingPassword' }
+        if ($message -eq 'Password di recupero BitLocker non valida.') { $reason='InvalidPassword' }
+        if ($message -eq 'Identificativo BitLocker non valido.') { $reason='InvalidIdentifier' }
+        if ($message -in @('Oggetto BitLocker AD cambiato durante la lettura.','Oggetto BitLocker estraneo al computer AD richiesto.')) { $reason='ChangedObject' }
+        if ($node -is [Exception]) {
+            $candidate=$node.GetType().FullName
+            if ($candidate -cmatch '^[A-Za-z][A-Za-z0-9_.+]{0,179}$' -and ($candidate -notmatch '(RuntimeException|ParentContainsErrorRecordException|InvalidOperationException)$' -or -not $type)) { $type=$candidate }
+            if ($candidate -match 'UnauthorizedAccess|ADUnauthorizedAccess|SecurityException') { $reason='AccessDenied' }
+            if ($candidate -match 'ADServerDown|TimeoutException') { $reason='ServerUnavailable' }
+        }
+        foreach ($field in @('Exception','InnerException','ErrorRecord')) { $child=Get-BlValue $node $field;if ($null -ne $child) { $nodes.Enqueue($child) } }
+    }
+    if ($savedStage) { $Stage=$savedStage }
+    $labels=@{ReadFailure='Lettura AD non completata';MissingPassword='Oggetto di recupero presente, password assente o non leggibile: verificare le autorizzazioni AD sul dato riservato';InvalidPassword='Password AD in formato o checksum non valido';InvalidIdentifier='Identificativo AD o Recovery GUID non valido';AccessDenied='Accesso AD negato';ServerUnavailable='Domain Controller non disponibile o lettura scaduta';ChangedObject='Identita o percorso dell''oggetto AD cambiati'}
+    $text='AD | DC: '+$Server+' | Fase: '+$Stage+' | '+$labels[$reason]
+    $id=[guid]::Empty;if ([guid]::TryParse($ObjectId,[ref]$id) -and $id -ne [guid]::Empty) { $text+=' | Oggetto: '+$id.ToString() }
+    if ($type) { $text+=' | Tipo: '+$type }
+    $errorObject=New-Object InvalidOperationException($text)
+    $errorObject.Data['AssistenteIT.AdStage']=$Stage;$errorObject.Data['AssistenteIT.AdReason']=$reason
+    return $errorObject
+}
+
 function Get-ExplorerBitLockerKeys {
     [CmdletBinding()]
     param([object[]]$Targets,$DiagnosticQueue)
@@ -189,7 +224,7 @@ function Get-ExplorerBitLockerKeys {
                 }
                 else { $keys[$keyId]=[pscustomobject]@{KeyId=$keyId;Password=$key;Volume=$volume;CreatedAt=[string](Get-BlValue $record 'whenCreated');Origins=@($origin);Fingerprint=(Get-BlFingerprint $key)} }
             }
-            catch { throw ('Lettura della chiave BitLocker AD non completata per l''oggetto '+$child.Id+'. Verificare permessi e disponibilita sul DC; nessuna eliminazione consentita.') }
+            catch { throw (New-BlAdError -Failure $_ -Stage ADPassword -Server $target.DomainController -ObjectId $child.Id) }
         }
     }
     return @($keys.Values | Sort-Object KeyId)
@@ -258,24 +293,36 @@ function Read-BlKeysBySource {
         }
     }
     else {
+        $adStage='ADLookup';$adSource='AD: '+$DomainController
+        try {
         Import-Module ActiveDirectory -ErrorAction Stop
+        Write-BlDiagnostic $DiagnosticQueue -Source $adSource -Stage ADLookup -State Avviata -Detail 'Ricerca del computer AD per nome esatto.'
         $escaped=$Name.Replace('\','\5c').Replace('*','\2a').Replace('(','\28').Replace(')','\29').Replace([string][char]0,'\00')
-        foreach ($computer in @(Get-ADComputer -Server $DomainController -LDAPFilter ('(name='+$escaped+')') -Properties @('ObjectGUID','DistinguishedName') -ErrorAction Stop)) {
+        $computers=@(Get-ADComputer -Server $DomainController -LDAPFilter ('(name='+$escaped+')') -Properties @('ObjectGUID','DistinguishedName') -ErrorAction Stop)
+        Write-BlDiagnostic $DiagnosticQueue -Source $adSource -Stage ADLookup -State OK -Count $computers.Count -Detail 'Computer AD visibili con l''account corrente.'
+        foreach ($computer in $computers) {
             if (-not [string]::Equals([string]$computer.Name,$Name,[StringComparison]::OrdinalIgnoreCase)) { throw 'Risposta AD estranea al nome richiesto.' }
             $rootDn=[string]$computer.DistinguishedName
             if (-not $rootDn) { throw 'Percorso AD del computer assente.' }
             $children=New-Object 'Collections.Generic.List[object]'
-            foreach ($child in @(Get-ADObject -Server $DomainController -SearchBase $rootDn -SearchScope Subtree -LDAPFilter '(objectClass=msFVE-RecoveryInformation)' -Properties @('ObjectGUID') -ErrorAction Stop)) {
+            $adStage='ADRecoveryObjects'
+            $recoveryObjects=@(Get-ADObject -Server $DomainController -SearchBase $rootDn -SearchScope Subtree -LDAPFilter '(objectClass=msFVE-RecoveryInformation)' -Properties @('ObjectGUID') -ErrorAction Stop)
+            Write-BlDiagnostic $DiagnosticQueue -Source $adSource -Stage ADRecoveryObjects -State OK -Count $recoveryObjects.Count -Detail 'Oggetti msFVE-RecoveryInformation visibili. Zero oggetti visibili puo indicare assenza o restrizioni ACL; il ruolo Intune non concede automaticamente diritti AD.'
+            foreach ($child in $recoveryObjects) {
                 if ($child.ObjectClass -ne 'msFVE-RecoveryInformation' -or -not ([string]$child.DistinguishedName).EndsWith(','+$rootDn,[StringComparison]::OrdinalIgnoreCase)) { throw 'Oggetto BitLocker estraneo al computer AD richiesto.' }
                 [void]$children.Add([pscustomobject]@{Id=(ConvertTo-BlId $child.ObjectGUID);DistinguishedName=[string]$child.DistinguishedName;ObjectClass=[string]$child.ObjectClass})
             }
             [void]$targets.Add([pscustomobject]@{Source='AD';Name=$Name;Id=(ConvertTo-BlId $computer.ObjectGUID);DomainController=$DomainController;AdChildren=$children.ToArray()})
         }
+        }
+        catch { throw (New-BlAdError -Failure $_ -Stage $adStage -Server $DomainController) }
     }
+    try {
     foreach ($key in @(Get-ExplorerBitLockerKeys -Targets $targets.ToArray() -DiagnosticQueue $DiagnosticQueue)) {
         $serials=@($targets | Where-Object { $_.Source -eq 'Intune' -and $key.Origins -contains ('Intune:'+ $_.LinkId) } | ForEach-Object { $_.SerialNumber } | Sort-Object -Unique)
         [pscustomobject]@{Name=$Name;KeyId=$key.KeyId;Password=$key.Password;Volume=$key.Volume;Origins=$key.Origins;Serial=($serials -join ', ');CreatedAt=$key.CreatedAt;ArchivedAtUtc=''}
     }
+    } catch { if ($Source -eq 'AD') { throw (New-BlAdError -Failure $_ -Stage ADPassword -Server $DomainController) };throw }
 }
 
 function Find-ExplorerBitLockerKeys {
@@ -309,7 +356,7 @@ function Find-ExplorerBitLockerKeys {
                 [void]$sources.Add([pscustomobject]@{Name=('AD: '+$dc);State='OK';Count=$found.Count;Error=''})
                 if ($found.Count -gt 0) { break }
             }
-            catch { [void]$sources.Add([pscustomobject]@{Name=('AD: '+$dc);State='Errore';Count=0;Error='Lettura AD non riuscita: verificare disponibilita del DC e permessi sulle informazioni di recupero.'}) }
+            catch { $failure=New-BlAdError -Failure $_ -Stage ADLookup -Server $dc;Write-BlDiagnostic $diagnostics -Source ('AD: '+$dc) -Stage ([string]$failure.Data['AssistenteIT.AdStage']) -State Errore -Detail $failure.Message;[void]$sources.Add([pscustomobject]@{Name=('AD: '+$dc);State='Errore';Count=0;Error=$failure.Message}) }
         }
         if ($controllers.Count -eq 0) { [void]$sources.Add([pscustomobject]@{Name='AD';State='Errore';Count=0;Error='Nessun Domain Controller configurato per la ricerca di riserva.'}) }
     }
@@ -402,16 +449,51 @@ function Get-BlGlpiNotes {
     return @($notes.ToArray())
 }
 
+function ConvertTo-BlNoteValue {
+    param($Value)
+    return ([string]$Value).Replace('%','%25').Replace('&','%26').Replace('<','%3C').Replace('>','%3E').Replace("`r",'%0D').Replace("`n",'%0A')
+}
+
+function ConvertTo-BlPlainNote {
+    param($Record)
+    $lines=New-Object 'Collections.Generic.List[string]'
+    [void]$lines.Add('Assistente IT - Archivio BitLocker')
+    [void]$lines.Add('[AIT-BITLOCKER-V2]')
+    foreach ($pair in @(@('Computer GLPI','ComputerId'),@('Computer','Name'),@('Seriale','Serial'),@('ID chiave','KeyId'),@('Chiave di recupero','Password'),@('Volume','Volume'),@('Creata','CreatedAt'),@('Archiviata UTC','ArchivedAtUtc'))) {
+        [void]$lines.Add($pair[0]+': '+(ConvertTo-BlNoteValue (Get-BlValue $Record $pair[1] '')))
+    }
+    foreach ($origin in (Get-BlValue $Record 'Origins' @())) { [void]$lines.Add('Origine: '+(ConvertTo-BlNoteValue $origin)) }
+    return $lines -join "`r`n"
+}
+
 function Read-BlNote {
     param($Note,[int]$ComputerId)
     $content=[Net.WebUtility]::HtmlDecode([string](Get-BlValue $Note 'content'))
-    if ($content -notmatch [regex]::Escape($script:BitLockerNoteMarker)) { return $null }
-    $match=[regex]::Match($content,([regex]::Escape($script:BitLockerNoteMarker)+'\s*(\{[\s\S]*\})'))
-    if (-not $match.Success) { throw 'Nota archivio BitLocker non valida. Le note esistenti non vengono modificate.' }
-    try { $record=$match.Groups[1].Value | ConvertFrom-Json -ErrorAction Stop }
-    catch { throw 'Nota archivio BitLocker non leggibile. Le note esistenti non vengono modificate.' }
-    if ($record.SchemaVersion -ne 1 -or [int]$record.ComputerId -ne $ComputerId) { throw 'La nota BitLocker non appartiene alla scheda GLPI verificata.' }
-    [void](ConvertTo-BlId $record.KeyId); [void](ConvertTo-BlPassword $record.Password)
+    if ($content.Contains('[AIT-BITLOCKER-V2]')) {
+        $values=@{};$origins=New-Object 'Collections.Generic.List[string]';$markerSeen=$false
+        foreach ($line in ($content -split '\r?\n')) {
+            if ($line -eq 'Assistente IT - Archivio BitLocker' -or -not $line.Trim()) { continue }
+            if ($line -eq '[AIT-BITLOCKER-V2]') { if ($markerSeen) { throw 'Nota archivio BitLocker con marcatore ripetuto.' };$markerSeen=$true;continue }
+            if (-not $markerSeen -or $line -notmatch '^([^:]+): ?(.*)$') { throw 'Nota archivio BitLocker in testo non valida.' }
+            $label=$Matches[1];$value=[Uri]::UnescapeDataString($Matches[2])
+            if ($label -eq 'Origine') { [void]$origins.Add($value);continue }
+            if ($label -notin @('Computer GLPI','Computer','Seriale','ID chiave','Chiave di recupero','Volume','Creata','Archiviata UTC') -or $values.ContainsKey($label)) { throw 'Nota archivio BitLocker con campi inattesi o ripetuti.' }
+            $values[$label]=$value
+        }
+        if (-not $markerSeen -or $values.Count -ne 8) { throw 'Nota archivio BitLocker in testo incompleta.' }
+        $record=[pscustomobject]@{SchemaVersion=2;ComputerId=0;Name=$values['Computer'];Serial=$values['Seriale'];KeyId=$values['ID chiave'];Password=$values['Chiave di recupero'];Volume=$values['Volume'];CreatedAt=$values['Creata'];ArchivedAtUtc=$values['Archiviata UTC'];Origins=$origins.ToArray()}
+        $parsedId=0;if (-not [int]::TryParse($values['Computer GLPI'],[ref]$parsedId)) { throw 'Identificativo scheda GLPI non valido nella nota.' };$record.ComputerId=$parsedId
+    }
+    else {
+        if ($content -notmatch [regex]::Escape($script:BitLockerNoteMarker)) { return $null }
+        $match=[regex]::Match($content,([regex]::Escape($script:BitLockerNoteMarker)+'\s*(\{[\s\S]*\})'))
+        if (-not $match.Success) { throw 'Nota archivio BitLocker non valida. Le note esistenti non vengono modificate.' }
+        try { $record=$match.Groups[1].Value | ConvertFrom-Json -ErrorAction Stop }
+        catch { throw 'Nota archivio BitLocker non leggibile. Le note esistenti non vengono modificate.' }
+        if ($record.SchemaVersion -ne 1) { throw 'Versione nota BitLocker non riconosciuta.' }
+    }
+    if ([int]$record.ComputerId -ne $ComputerId) { throw 'La nota BitLocker non appartiene alla scheda GLPI verificata.' }
+    [void](ConvertTo-BlId $record.KeyId);[void](ConvertTo-BlPassword $record.Password)
     return $record
 }
 
@@ -486,8 +568,8 @@ function Save-ExplorerBitLockerArchive {
         foreach ($note in @(Get-BlGlpiNotes $session $Preview.ComputerId)) {
             $record=Read-BlNote $note $Preview.ComputerId
             if ($null -ne $record) {
-                if ($existing.ContainsKey($record.KeyId) -and $existing[$record.KeyId].Password -cne $record.Password) { throw 'Archivio GLPI con password discordanti per lo stesso Key ID.' }
-                $existing[$record.KeyId]=$record
+                if ($existing.ContainsKey($record.KeyId) -and ($existing[$record.KeyId].Password -cne $record.Password -or [string]$existing[$record.KeyId].Serial -cne [string]$record.Serial)) { throw 'Archivio GLPI con password discordanti per lo stesso Key ID.' }
+                if (-not $existing.ContainsKey($record.KeyId) -or [int]$record.SchemaVersion -gt [int]$existing[$record.KeyId].SchemaVersion) { $existing[$record.KeyId]=$record }
             }
         }
         foreach ($key in $keys) {
@@ -495,10 +577,9 @@ function Save-ExplorerBitLockerArchive {
             if ($existing.ContainsKey($key.KeyId)) {
                 if ($existing[$key.KeyId].Password -cne $key.Password -or [string]$existing[$key.KeyId].Serial -cne $Preview.Serial) { throw 'Chiave gia archiviata discordante: nessuna sovrascrittura consentita.' }
             }
-            else {
-                $record=[ordered]@{SchemaVersion=1;ComputerId=$Preview.ComputerId;Name=$Preview.Name;Serial=$Preview.Serial;KeyId=$key.KeyId;Password=$key.Password;Volume=$key.Volume;CreatedAt=$key.CreatedAt;Origins=$key.Origins;ArchivedAtUtc=[datetimeoffset]::UtcNow.ToString('o')}
-                $text=$script:BitLockerNoteMarker+"`r`n"+($record | ConvertTo-Json -Depth 8)
-                $content='<p><strong>Assistente IT - Archivio BitLocker</strong> - Key ID '+$key.KeyId+' - '+[datetime]::UtcNow.ToString('yyyy-MM-dd')+'</p><pre>'+[Net.WebUtility]::HtmlEncode($text)+'</pre>'
+            if (-not $existing.ContainsKey($key.KeyId) -or [int]$existing[$key.KeyId].SchemaVersion -lt 2) {
+                $record=[ordered]@{SchemaVersion=2;ComputerId=$Preview.ComputerId;Name=$Preview.Name;Serial=$Preview.Serial;KeyId=$key.KeyId;Password=$key.Password;Volume=$key.Volume;CreatedAt=$key.CreatedAt;Origins=$key.Origins;ArchivedAtUtc=[datetimeoffset]::UtcNow.ToString('o')}
+                $content=ConvertTo-BlPlainNote $record
                 $created=(Invoke-BlGlpiRequest -Session $session -Method POST -Path Notepad -Body @{input=@{itemtype='Computer';items_id=$Preview.ComputerId;content=$content}}).Data
                 $id=[int](Get-BlValue $created 'id')
                 if ($id -le 0) { throw 'GLPI non ha confermato la creazione della nota BitLocker.' }
@@ -527,7 +608,18 @@ function Read-ExplorerBitLockerArchive {
         }
     }
     finally { Close-BlGlpiSession $session }
-    return @($records.ToArray())
+    $unique=@{}
+    foreach ($record in $records) {
+        if ($unique.ContainsKey($record.KeyId)) {
+            $previous=$unique[$record.KeyId]
+            if ($previous.Password -cne $record.Password -or [string]$previous.Serial -cne [string]$record.Serial) { throw 'Archivio GLPI con dati discordanti per lo stesso Key ID.' }
+            $origins=@(@($previous.Origins)+@($record.Origins) | Sort-Object -Unique)
+            if ([int]$record.SchemaVersion -gt [int]$previous.SchemaVersion) { $unique[$record.KeyId]=$record }
+            $unique[$record.KeyId].Origins=$origins
+        }
+        else { $unique[$record.KeyId]=$record }
+    }
+    return @($unique.Values | Sort-Object KeyId)
 }
 
 function ConvertTo-ExplorerBitLockerRecoveryText {

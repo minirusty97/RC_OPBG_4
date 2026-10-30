@@ -16,8 +16,8 @@ function Assert-ExplorerRemovalWriteAccess {
 function Get-RemovalValue {
     param($Object, [string]$Name, $Default = $null)
     if ($null -ne $Object) {
-        $property = $Object.PSObject.Properties[$Name]
-        if ($null -ne $property) { return ,$property.Value }
+        if ($Object -is [Collections.IDictionary]) { if ($Object.Contains($Name)) { return ,$Object[$Name] } }
+        else { $property = $Object.PSObject.Properties[$Name];if ($null -ne $property) { return ,$property.Value } }
     }
     return ,$Default
 }
@@ -38,27 +38,32 @@ function Get-RemovalContextKey {
 }
 
 function ConvertTo-RemovalId {
-    param($Value)
+    param($Value,[string]$Context='')
+    if ($Value -is [Collections.IList] -and $Value -isnot [byte[]]) { if ($Value.Count -eq 1) { $Value=$Value[0] } }
+    if ($Value -is [byte[]] -and $Value.Length -eq 16) { $Value=New-Object guid(,$Value) }
     $id = [guid]::Empty
-    if (-not [guid]::TryParse([string]$Value, [ref]$id) -or $id -eq [guid]::Empty) { throw 'Identificativo oggetto non valido.' }
+    if (-not [guid]::TryParse([string]$Value, [ref]$id) -or $id -eq [guid]::Empty) { if ($Context) { throw ('Identificativo oggetto non valido. '+$Context) };throw 'Identificativo oggetto non valido.' }
     return $id.ToString()
 }
 
 function Get-RemovalAdChildren {
-    param($Computer, [string]$Server)
-    if ([bool](Get-RemovalValue $Computer 'ProtectedFromAccidentalDeletion' $false)) {
+    param($Computer, [string]$Server,[switch]$RecoveryOnly)
+    if (-not $RecoveryOnly -and [bool](Get-RemovalValue $Computer 'ProtectedFromAccidentalDeletion' $false)) {
         throw ('Computer AD protetto da eliminazione accidentale: ' + $Computer.DistinguishedName)
     }
-    $rootId = ConvertTo-RemovalId $Computer.ObjectGUID
+    $rootId = ConvertTo-RemovalId $Computer.ObjectGUID -Context ('AD | DC: '+$Server+' | Computer: '+$Computer.DistinguishedName)
     $rootDn = [string]$Computer.DistinguishedName
     if ([string]::IsNullOrWhiteSpace($rootDn)) { throw 'Percorso del computer AD assente.' }
     # Leggere solo metadati: nessuna password o chiave di recupero BitLocker.
-    $records = @(Get-ADObject -Server $Server -SearchBase $rootDn -SearchScope Subtree -LDAPFilter '(objectClass=*)' -Properties @('ObjectGUID', 'ProtectedFromAccidentalDeletion') -ErrorAction Stop)
-    $baseSeen = $false
+    $filter='(objectClass=*)';if ($RecoveryOnly) { $filter='(objectClass=msFVE-RecoveryInformation)' }
+    $properties=@('ObjectGUID');if (-not $RecoveryOnly) { $properties+='ProtectedFromAccidentalDeletion' }
+    $records = @(Get-ADObject -Server $Server -SearchBase $rootDn -SearchScope Subtree -LDAPFilter $filter -Properties $properties -ErrorAction Stop)
+    $baseSeen = [bool]$RecoveryOnly
     $children = New-Object 'System.Collections.Generic.List[object]'
     foreach ($record in $records) {
-        $id = ConvertTo-RemovalId $record.ObjectGUID
         $dn = [string]$record.DistinguishedName
+        $id = ConvertTo-RemovalId $record.ObjectGUID -Context ('AD | DC: '+$Server+' | Classe: '+$record.ObjectClass+' | DN: '+$dn)
+        if ($RecoveryOnly -and $record.ObjectClass -ne 'msFVE-RecoveryInformation') { throw 'La risposta AD per l''archivio contiene un oggetto non BitLocker.' }
         if ($id -eq $rootId) {
             if (-not [string]::Equals($dn, $rootDn, [StringComparison]::OrdinalIgnoreCase) -or $record.ObjectClass -ne 'computer') {
                 throw 'La base della ricerca AD non corrisponde al computer verificato.'
@@ -70,7 +75,7 @@ function Get-RemovalAdChildren {
         if (-not $dn.EndsWith(',' + $rootDn, [StringComparison]::OrdinalIgnoreCase)) {
             throw 'La lettura AD contiene un oggetto esterno al computer selezionato.'
         }
-        if ([bool]$record.ProtectedFromAccidentalDeletion) { throw ('Oggetto figlio AD protetto da eliminazione accidentale: ' + $dn) }
+        if (-not $RecoveryOnly -and [bool]$record.ProtectedFromAccidentalDeletion) { throw ('Oggetto figlio AD protetto da eliminazione accidentale: ' + $dn) }
         [void]$children.Add([pscustomobject]@{
             Id = $id; DistinguishedName = $dn; ObjectClass = [string]$record.ObjectClass
         })
@@ -90,9 +95,10 @@ function Test-RemovalSameAdChild {
 function Read-RemovalAdChildById {
     param($Child, $Target)
     try {
-        $record = Get-ADObject -Server $Target.DomainController -Identity ([guid](ConvertTo-RemovalId $Child.Id)) -Properties @('ObjectGUID', 'ProtectedFromAccidentalDeletion') -ErrorAction Stop
-        if ([bool]$record.ProtectedFromAccidentalDeletion) { throw ('Oggetto figlio AD protetto da eliminazione accidentale: ' + $record.DistinguishedName) }
-        $current = [pscustomobject]@{ Id = ConvertTo-RemovalId $record.ObjectGUID; DistinguishedName = [string]$record.DistinguishedName; ObjectClass = [string]$record.ObjectClass }
+        $properties=@('ObjectGUID');if (-not [bool](Get-RemovalValue $Target 'RecoveryOnly' $false)) { $properties+='ProtectedFromAccidentalDeletion' }
+        $record = Get-ADObject -Server $Target.DomainController -Identity ([guid](ConvertTo-RemovalId $Child.Id)) -Properties $properties -ErrorAction Stop
+        if (-not [bool](Get-RemovalValue $Target 'RecoveryOnly' $false) -and [bool]$record.ProtectedFromAccidentalDeletion) { throw ('Oggetto figlio AD protetto da eliminazione accidentale: ' + $record.DistinguishedName) }
+        $current = [pscustomobject]@{ Id = ConvertTo-RemovalId $record.ObjectGUID -Context ('AD | DC: '+$Target.DomainController+' | DN: '+$record.DistinguishedName); DistinguishedName = [string]$record.DistinguishedName; ObjectClass = [string]$record.ObjectClass }
         if (-not (Test-RemovalSameAdChild $Child $current) -or
             -not $current.DistinguishedName.EndsWith(',' + $Target.DistinguishedName, [StringComparison]::OrdinalIgnoreCase)) {
             throw 'Un oggetto figlio AD ha cambiato identità o percorso. Ripetere la verifica.'
@@ -103,19 +109,20 @@ function Read-RemovalAdChildById {
 }
 
 function Get-RemovalTargets {
-    param([string]$Name, [string[]]$Sources, [string[]]$Controllers)
+    param([string]$Name, [string[]]$Sources, [string[]]$Controllers,[switch]$ArchiveOnly)
     $targets = New-Object 'System.Collections.Generic.List[object]'
     if ($Sources -contains 'AD') {
         if ($Controllers.Count -eq 0) { throw 'Nessun DC configurato.' }
         $escaped = $Name.Replace('\', '\5c').Replace('*', '\2a').Replace('(', '\28').Replace(')', '\29').Replace([string][char]0, '\00')
         foreach ($dc in $Controllers) {
-            $found = @(Get-ADComputer -Server $dc -LDAPFilter ('(name={0})' -f $escaped) -Properties @('DistinguishedName', 'ObjectGUID', 'ProtectedFromAccidentalDeletion') -ErrorAction Stop)
+            $properties=@('DistinguishedName','ObjectGUID');if (-not $ArchiveOnly) { $properties+='ProtectedFromAccidentalDeletion' }
+            $found = @(Get-ADComputer -Server $dc -LDAPFilter ('(name={0})' -f $escaped) -Properties $properties -ErrorAction Stop)
             foreach ($computer in $found) {
                 if (-not [string]::Equals([string]$computer.Name, $Name, [StringComparison]::OrdinalIgnoreCase)) { throw 'Risposta AD estranea al nome esatto richiesto.' }
                 [void]$targets.Add([pscustomobject]@{
-                    Source = 'AD'; Name = [string]$computer.Name; Id = ConvertTo-RemovalId $computer.ObjectGUID; DomainController = $dc
+                    Source = 'AD'; Name = [string]$computer.Name; Id = ConvertTo-RemovalId $computer.ObjectGUID -Context ('AD | DC: '+$dc+' | Computer: '+$Name); DomainController = $dc
                     DistinguishedName = [string]$computer.DistinguishedName; LinkId = ''; SerialNumber = ''; OperatingSystem = ''
-                    AdChildren = @(Get-RemovalAdChildren -Computer $computer -Server $dc)
+                    RecoveryOnly=[bool]$ArchiveOnly; AdChildren = @(Get-RemovalAdChildren -Computer $computer -Server $dc -RecoveryOnly:$ArchiveOnly)
                 })
             }
         }
@@ -145,7 +152,7 @@ function Get-RemovalTargets {
                 $serial = [string](Get-RemovalValue $record 'serialNumber')
             }
             [void]$targets.Add([pscustomobject]@{
-                Source = $source; Name = $recordName; Id = ConvertTo-RemovalId (Get-RemovalValue $record 'id'); DomainController = ''
+                Source = $source; Name = $recordName; Id = ConvertTo-RemovalId (Get-RemovalValue $record 'id') -Context ($source+' | Computer: '+$Name+' | Campo: id'); DomainController = ''
                 DistinguishedName = ''; LinkId = $link; SerialNumber = $serial; OperatingSystem = $os; TrustType=[string](Get-RemovalValue $record 'trustType' '')
             })
         }
@@ -164,6 +171,7 @@ function Test-RemovalSameTarget {
     foreach ($field in @('Source', 'Name', 'Id', 'DomainController', 'DistinguishedName', 'LinkId', 'SerialNumber', 'OperatingSystem')) {
         if (-not [string]::Equals([string]$Expected.$field, [string]$Current.$field, [StringComparison]::OrdinalIgnoreCase)) { return $false }
     }
+    if ([bool](Get-RemovalValue $Expected 'RecoveryOnly' $false) -ne [bool](Get-RemovalValue $Current 'RecoveryOnly' $false)) { return $false }
     if ([string](Get-RemovalValue $Expected 'TrustType' '') -ine [string](Get-RemovalValue $Current 'TrustType' '')) { return $false }
     if ($Expected.Source -eq 'AD') {
         $expectedChildren = @{}
@@ -257,7 +265,7 @@ function New-ExplorerRemovalPlan {
         Send-RemovalProgress $ProgressQueue ("Verifica oggetti: $name")
         $targets = @(); $errorText = $null; $backup=$null;$hybrid=$null
         try {
-            $targets = @(Get-RemovalTargets -Name $name -Sources $selectedSources -Controllers $controllers)
+            $targets = @(Get-RemovalTargets -Name $name -Sources $selectedSources -Controllers $controllers -ArchiveOnly:$ArchiveOnly)
             $hybrid=Get-RemovalHybridIdentity -Name $name -Targets $targets -Sources $selectedSources -Controllers $controllers
             if ($targets.Count -gt 0) { $backup=Get-RemovalBitLockerPreview -Name $name -Targets $targets -Settings (Get-RemovalValue $config.Settings 'Glpi') -Credentials $GlpiCredentials -AllowUnmappedGlpi:(-not $ArchiveOnly) }
         }
@@ -274,7 +282,7 @@ function New-ExplorerRemovalPlan {
     # La vista passata alla UI non contiene gli oggetti interni del piano.
     $view = @($entries | ForEach-Object {
         [pscustomobject]@{ Name = $_.Name; Error = $_.Error; HybridIdentity=(ConvertTo-RemovalHybridView $_.HybridIdentity); Backup=$_.Backup | Select-Object ComputerId,Name,GlpiName,Serial,EntityId,RequiresMappingConfirmation,Warning,MatchBy,@{Name='ArchiveAvailable';Expression={[bool](Get-RemovalValue $_ 'ArchiveAvailable' $true)}},@{Name='GlpiMatchCount';Expression={[int](Get-RemovalValue $_ 'GlpiMatchCount' 1)}},@{Name='KeyCount';Expression={$_.Keys.Count}},@{Name='Keys';Expression={@($_.Keys | Select-Object KeyId,Volume,CreatedAt,@{Name='Origins';Expression={@($_.Origins | ForEach-Object {[string]$_})}})}}; Targets = @($_.Targets | ForEach-Object {
-            $copy = $_ | Select-Object Source, Name, Id, DomainController, DistinguishedName, LinkId, SerialNumber, OperatingSystem, TrustType
+            $copy = $_ | Select-Object Source, Name, Id, DomainController, DistinguishedName, LinkId, SerialNumber, OperatingSystem, TrustType, RecoveryOnly
             $children = @((Get-RemovalValue $_ 'AdChildren' @()) | ForEach-Object { $_ | Select-Object Id, DistinguishedName, ObjectClass })
             $copy | Add-Member -NotePropertyName AdChildren -NotePropertyValue $children
             $copy
@@ -302,11 +310,12 @@ function Read-RemovalTargetById {
     param($Target)
     try {
         if ($Target.Source -eq 'AD') {
-            $record = Get-ADComputer -Server $Target.DomainController -Identity ([guid]$Target.Id) -Properties @('DistinguishedName', 'ObjectGUID', 'ProtectedFromAccidentalDeletion') -ErrorAction Stop
+            $properties=@('DistinguishedName','ObjectGUID');if (-not [bool](Get-RemovalValue $Target 'RecoveryOnly' $false)) { $properties+='ProtectedFromAccidentalDeletion' }
+            $record = Get-ADComputer -Server $Target.DomainController -Identity ([guid]$Target.Id) -Properties $properties -ErrorAction Stop
             return [pscustomobject]@{
-                Source = 'AD'; Name = [string]$record.Name; Id = ConvertTo-RemovalId $record.ObjectGUID; DomainController = $Target.DomainController
+                Source = 'AD'; Name = [string]$record.Name; Id = ConvertTo-RemovalId $record.ObjectGUID -Context ('AD | DC: '+$Target.DomainController+' | Computer: '+$Target.Name); DomainController = $Target.DomainController
                 DistinguishedName = [string]$record.DistinguishedName; LinkId = ''; SerialNumber = ''; OperatingSystem = ''
-                AdChildren = @(Get-RemovalAdChildren -Computer $record -Server $Target.DomainController)
+                RecoveryOnly=[bool](Get-RemovalValue $Target 'RecoveryOnly' $false);AdChildren = @(Get-RemovalAdChildren -Computer $record -Server $Target.DomainController -RecoveryOnly:([bool](Get-RemovalValue $Target 'RecoveryOnly' $false)))
             }
         }
         $path = '/v1.0/devices'; $nameField = 'displayName'; $linkField = 'deviceId'; $select = 'id,displayName,deviceId,trustType'
@@ -319,7 +328,7 @@ function Read-RemovalTargetById {
         $os = ''; $serial = ''
         if ($Target.Source -eq 'Intune') { $os = [string](Get-RemovalValue $record 'operatingSystem'); $serial = [string](Get-RemovalValue $record 'serialNumber') }
         return [pscustomobject]@{
-            Source = $Target.Source; Name = [string](Get-RemovalValue $record $nameField); Id = ConvertTo-RemovalId (Get-RemovalValue $record 'id')
+            Source = $Target.Source; Name = [string](Get-RemovalValue $record $nameField); Id = ConvertTo-RemovalId (Get-RemovalValue $record 'id') -Context ($Target.Source+' | Computer: '+$Target.Name+' | Campo: id')
             DomainController = ''; DistinguishedName = ''; LinkId = [string](Get-RemovalValue $record $linkField); SerialNumber = $serial; OperatingSystem = $os; TrustType=[string](Get-RemovalValue $record 'trustType' '')
         }
     }
@@ -408,8 +417,8 @@ function Invoke-ExplorerRemovalPlan {
             if ([string]::IsNullOrWhiteSpace($reason)) {
                 try {
                     if ((Get-RemovalContextKey $plan.Sources) -ne $plan.ContextKey) { throw 'Sessione Graph cambiata.' }
-                    Send-RemovalProgress $ProgressQueue ("Rilettura prima di eliminare: " + $entry.Name)
-                    $current = @(Get-RemovalTargets -Name $entry.Name -Sources $plan.Sources -Controllers $plan.Controllers)
+                    Send-RemovalProgress $ProgressQueue ($(if ($plan.ArchiveOnly) { "Rilettura prima di archiviare: " } else { "Rilettura prima di eliminare: " }) + $entry.Name)
+                    $current = @(Get-RemovalTargets -Name $entry.Name -Sources $plan.Sources -Controllers $plan.Controllers -ArchiveOnly:$plan.ArchiveOnly)
                     $expected = @{}
                     foreach ($target in $entry.Targets) { $expected[(Get-RemovalTargetKey $target)] = $target }
                     foreach ($target in $current) {
