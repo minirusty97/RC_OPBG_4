@@ -1,8 +1,10 @@
 # Stato condiviso per riprendere il lavoro
 
 Repository: `minirusty97/RC_OPBG_4`. Consultare sempre il main e la release
-effettiva: questo documento descrive la versione sorgente **1.1.0**, che
-introduce due moduli oltre a Computer Explorer 1.0.24.
+effettiva: questo documento descrive la versione sorgente **1.1.1**. La 1.1.0 ha introdotto Verifica Hybrid Join e
+Gestione Ring oltre a Computer Explorer. La 1.1.1 corregge il loro avvio: una
+scansione completa automatica, vista iniziale Tutti e filtri locali sui dati
+gia caricati. Aggiorna dati / F5 ripete sempre la scansione completa.
 
 | Modulo | Entry point | Backend e documentazione |
 | --- | --- | --- |

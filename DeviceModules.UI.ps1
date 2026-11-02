@@ -84,6 +84,12 @@ function Get-DmVisibleRows {
     })
 }
 
+function Update-DmCounter {
+    $u=$script:DmUi;$total=0
+    if ($null -ne $u.Snapshot) { $total=@($u.Snapshot.Rows).Count }
+    $u.Counter.Text='Visualizzati: '+$u.Grid.Rows.Count+'/'+$total+' | Selezionati: '+$u.Grid.SelectedRows.Count
+}
+
 function Update-DmGrid {
     $u=$script:DmUi;$u.Populating=$true
     try {
@@ -98,7 +104,7 @@ function Update-DmGrid {
             if ($row.Censito -eq 'Si') { $gridRow.Cells['Censito'].Style.ForeColor=[Drawing.Color]::DarkGreen }
         }
         $u.Grid.ClearSelection();$u.Details.Text=Format-DmDetail $null $u.Kind
-        $u.Counter.Text='Risultati: '+$visible.Count+' | Selezionati: 0'
+        Update-DmCounter
     }
     finally { $u.Populating=$false;Update-DmButtons }
 }
@@ -106,7 +112,7 @@ function Update-DmGrid {
 function Update-DmButtons {
     $u=$script:DmUi;$idle=$null -eq $u.Pipeline
     $u.Refresh.Enabled=$idle;$u.Stop.Enabled=-not $idle -and -not $u.Writing
-    $u.Query.Enabled=$idle;$u.Filter.Enabled=$idle;$u.Grid.Enabled=$idle
+    $u.Query.Enabled=$idle -and $null -ne $u.Snapshot;$u.Filter.Enabled=$u.Query.Enabled;$u.Grid.Enabled=$idle
     $u.Export.Enabled=$idle -and $u.Grid.Rows.Count -gt 0
     $u.Write.Enabled=$idle -and -not $u.Access.ReadOnly -and $u.Grid.SelectedRows.Count -gt 0
     $u.OpenGlpi.Enabled=$idle -and $u.Grid.SelectedRows.Count -eq 1 -and $u.Grid.SelectedRows[0].Tag.GlpiRecords.Count -eq 1
@@ -135,7 +141,9 @@ function Start-DmTask {
         }
     }
     [void]$u.Pipeline.AddScript($worker.ToString()).AddArgument($PSScriptRoot).AddArgument($u.Kind).AddArgument($Operation).AddArgument($u.ConfigPath).AddArgument($u.EnvPath).AddArgument($u.Access).AddArgument($Payload).AddArgument($u.Queue)
-    $u.Status.Text='Operazione in corso: '+$Operation+'...';Update-DmButtons
+    $u.Status.Text='Operazione in corso: '+$Operation+'...'
+    if ($Operation -eq 'Snapshot') { $u.Summary.Text='Scansione completa dei dispositivi in corso...';$u.Status.Text='Lettura completa delle fonti configurate. Al termine puoi filtrare l''elenco.' }
+    Update-DmButtons
     try { $u.Invocation=$u.Pipeline.BeginInvoke();$u.Timer.Start() }
     catch { $u.Pipeline.Dispose();$u.Pipeline=$null;Update-DmButtons;throw }
 }
@@ -170,8 +178,8 @@ function Complete-DmTask {
     catch { if (-not $u.Cancelled) { $errorText=$_.Exception.Message } }
     finally { $u.Pipeline.Dispose();$u.Pipeline=$null;$u.Invocation=$null;$u.StopInvocation=$null;$u.Writing=$false;Update-DmButtons }
     if ($u.Closing) { $u.Form.Close();return }
-    if ($u.Cancelled) { $u.Status.Text='Lettura annullata. Aggiornare i dati prima delle operazioni.';$u.Snapshot=$null;Update-DmGrid;return }
-    if ($errorText) { $u.Status.Text='Operazione non completata: '+$errorText;if ($operation -eq 'Snapshot') { $u.Snapshot=$null;Update-DmGrid };return }
+    if ($u.Cancelled) { $u.Summary.Text='Scansione annullata. Aggiorna dati per riprovare.';$u.Status.Text='Lettura annullata. Aggiornare i dati prima delle operazioni.';$u.Snapshot=$null;Update-DmGrid;return }
+    if ($errorText) { $u.Status.Text='Operazione non completata: '+$errorText;if ($operation -eq 'Snapshot') { $u.Summary.Text='Scansione non completata. Consultare l''esito delle fonti.';$u.Snapshot=$null;Update-DmGrid };return }
     switch ($operation) {
         'Snapshot' {
             $u.Snapshot=$result
@@ -212,23 +220,23 @@ function Show-DeviceModuleWindow {
     . (Join-Path $PSScriptRoot 'ComputerExplorer.Recovery.UI.ps1')
     . (Join-Path $PSScriptRoot 'ComputerExplorer.Removal.UI.ps1')
     if ($null -eq $GraphAccess -or -not $GraphAccess.CanOpen) { throw 'Eseguire Accesso dal wrapper prima di aprire il modulo.' }
-    $script:DmUi=@{Kind=$Kind;ConfigPath=$ConfigPath;EnvPath=$EnvPath;Access=$GraphAccess;Snapshot=$null;Pipeline=$null;Invocation=$null;StopInvocation=$null;Cancelled=$false;Closing=$false;Writing=$false;Populating=$false;LastReport=@();Queue=(New-Object 'Collections.Concurrent.ConcurrentQueue[object]')}
+    $script:DmUi=@{Kind=$Kind;ConfigPath=$ConfigPath;EnvPath=$EnvPath;Access=$GraphAccess;Snapshot=$null;Pipeline=$null;Invocation=$null;StopInvocation=$null;Cancelled=$false;Closing=$false;Writing=$false;Populating=$false;LastReport=@();InitialScanStarted=$false;SuppressInitialScan=[bool]$SmokeTest;Queue=(New-Object 'Collections.Concurrent.ConcurrentQueue[object]')}
     $u=$script:DmUi
     $form=New-Object Windows.Forms.Form;$form.Name='DeviceModule-'+$Kind;$form.Text='Assistente IT - Verifica Hybrid Join';if ($Kind -eq 'Ring') { $form.Text='Assistente IT - Gestione Ring Intune' }
     $form.ClientSize=New-Object Drawing.Size(1320,850);$form.MinimumSize=New-Object Drawing.Size(1050,720);$form.StartPosition='CenterScreen';$form.Font=New-Object Drawing.Font('Segoe UI',9);$form.AutoScaleMode='Dpi'
     $icon=New-Object Drawing.Icon((Join-Path $PSScriptRoot 'assets/AssistenteIT.ico'));$form.Icon=$icon;$u.Form=$form
     $layout=New-Object Windows.Forms.TableLayoutPanel;$layout.Dock='Fill';$layout.Padding=New-Object Windows.Forms.Padding(12);$layout.ColumnCount=1;$layout.RowCount=6
     foreach ($height in @(58,48,42,-1,38,65)) { if ($height -lt 0) { [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent',100))) } else { [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',$height))) } }
-    $summary=New-Object Windows.Forms.Label;$summary.Dock='Fill';$summary.Text='Premere Aggiorna dati per leggere le fonti.';$summary.Font=New-Object Drawing.Font('Segoe UI',10);$u.Summary=$summary
+    $summary=New-Object Windows.Forms.Label;$summary.Dock='Fill';$summary.Text='Scansione completa all''apertura, poi filtra l''elenco dei dispositivi.';$summary.Font=New-Object Drawing.Font('Segoe UI',10);$u.Summary=$summary
     $toolbar=New-Object Windows.Forms.FlowLayoutPanel;$toolbar.Dock='Fill';$toolbar.WrapContents=$false
     foreach ($spec in @(@('Refresh','Aggiorna dati (F5)',160),@('Stop','Interrompi lettura',145),@('Export','Esporta CSV',120),@('OpenGlpi','Apri GLPI',115),@('Write','Pulizia Registered',175))) { $button=New-Object Windows.Forms.Button;$button.Name=$spec[0];$button.Text=$spec[1];$button.Width=$spec[2];$button.Height=32;$u[$spec[0]]=$button;$toolbar.Controls.Add($button) }
     if ($Kind -eq 'Ring') { $u.Write.Text='Verifica assegnazioni';$u.Write.Width=190 }
     $mode=New-Object Windows.Forms.Label;$mode.AutoSize=$true;$mode.Padding=New-Object Windows.Forms.Padding(8,8,0,0);$mode.Text='Sola lettura';if (-not $GraphAccess.ReadOnly) { $mode.Text='Lettura e scrittura' };$toolbar.Controls.Add($mode)
     $filters=New-Object Windows.Forms.FlowLayoutPanel;$filters.Dock='Fill';$filters.WrapContents=$false
-    $queryLabel=New-Object Windows.Forms.Label;$queryLabel.Text='Cerca:';$queryLabel.AutoSize=$true;$queryLabel.Padding=New-Object Windows.Forms.Padding(0,7,0,0)
-    $query=New-Object Windows.Forms.TextBox;$query.Name='DeviceModuleSearch';$query.Width=240;$u.Query=$query
+    $queryLabel=New-Object Windows.Forms.Label;$queryLabel.Name='DeviceModuleFilterLabel';$queryLabel.Text='Filtra elenco:';$queryLabel.AutoSize=$true;$queryLabel.Padding=New-Object Windows.Forms.Padding(0,7,0,0)
+    $query=New-Object Windows.Forms.TextBox;$query.Name='DeviceModuleFilterText';$query.Width=240;$u.Query=$query
     $filter=New-Object Windows.Forms.ComboBox;$filter.Name='DeviceModuleFilter';$filter.DropDownStyle='DropDownList';$filter.Width=225;$u.Filter=$filter
-    $choices=@('Tutti','Solo problemi Hybrid','Con Registered','GUID non corrispondente','Assenti da Entra','Senza Hybrid','Hybrid duplicati','Ownership Personal','Hybrid non gestiti MDM','Account AD disabilitati','GLPI assente','GLPI duplicato');if ($Kind -eq 'Ring') { $choices=@('Orfani','Tutti','Gia assegnati','Piu Ring','GLPI assente','GLPI duplicato') }
+    $choices=@('Tutti','Solo problemi Hybrid','Con Registered','GUID non corrispondente','Assenti da Entra','Senza Hybrid','Hybrid duplicati','Ownership Personal','Hybrid non gestiti MDM','Account AD disabilitati','GLPI assente','GLPI duplicato');if ($Kind -eq 'Ring') { $choices=@('Tutti','Orfani','Gia assegnati','Piu Ring','GLPI assente','GLPI duplicato') }
     foreach ($choice in $choices) { [void]$filter.Items.Add($choice) };$filter.SelectedIndex=0;$filters.Controls.AddRange(@($queryLabel,$query,$filter))
     if ($Kind -eq 'Ring') {
         $ring=New-Object Windows.Forms.ComboBox;$ring.Name='BulkTargetRing';$ring.DropDownStyle='DropDownList';$ring.Width=120;$u.Ring=$ring
@@ -254,7 +262,7 @@ function Show-DeviceModuleWindow {
     $counter=New-Object Windows.Forms.Label;$counter.Dock='Fill';$counter.TextAlign='MiddleLeft';$u.Counter=$counter
     $status=New-Object Windows.Forms.Label;$status.Name='DeviceModuleStatus';$status.Dock='Fill';$status.Text='Accesso Microsoft condiviso con il wrapper. GLPI usa i token salvati nelle Impostazioni.';$u.Status=$status
     $layout.Controls.Add($summary,0,0);$layout.Controls.Add($toolbar,0,1);$layout.Controls.Add($filters,0,2);$layout.Controls.Add($split,0,3);$layout.Controls.Add($counter,0,4);$layout.Controls.Add($status,0,5);$form.Controls.Add($layout)
-    $grid.Add_SelectionChanged({$u=$script:DmUi;if ($u.Populating) { return };$row=$null;if ($u.Grid.SelectedRows.Count) { $row=$u.Grid.SelectedRows[0].Tag };$u.Details.Text=Format-DmDetail $row $u.Kind;$u.Counter.Text='Risultati: '+$u.Grid.Rows.Count+' | Selezionati: '+$u.Grid.SelectedRows.Count;Update-DmButtons})
+    $grid.Add_SelectionChanged({$u=$script:DmUi;if ($u.Populating) { return };$row=$null;if ($u.Grid.SelectedRows.Count) { $row=$u.Grid.SelectedRows[0].Tag };$u.Details.Text=Format-DmDetail $row $u.Kind;Update-DmCounter;Update-DmButtons})
     $grid.Add_CurrentCellDirtyStateChanged({$u=$script:DmUi;if ($u.Grid.IsCurrentCellDirty) { [void]$u.Grid.CommitEdit('Commit') }})
     $grid.Add_CellValueChanged({param($sender,$eventArgs);$u=$script:DmUi;if ($u.Populating -or $u.Kind -ne 'Ring' -or $eventArgs.RowIndex -lt 0 -or $eventArgs.ColumnIndex -ne $u.Grid.Columns['TargetRing'].Index) { return };$row=$u.Grid.Rows[$eventArgs.RowIndex];if ($null -ne $row.Tag) { $row.Tag.TargetRing=[string]$row.Cells['TargetRing'].Value }})
     $grid.Add_DataError({param($sender,$eventArgs);$eventArgs.ThrowException=$false;$script:DmUi.Status.Text='Selezione Ring non valida: aggiornare i dati.'})
@@ -278,6 +286,12 @@ function Show-DeviceModuleWindow {
     $timer=New-Object Windows.Forms.Timer;$timer.Interval=100;$timer.Add_Tick({Complete-DmTask});$u.Timer=$timer
     Update-DmButtons;Update-DmGrid
     if (Get-Command Initialize-AssistenteITWindowIdentity -ErrorAction SilentlyContinue) { Initialize-AssistenteITWindowIdentity -InstallRoot $PSScriptRoot -Window $form }
+    $form.Add_Shown({
+        $scanUi=$script:DmUi
+        if ($scanUi.SuppressInitialScan -or $scanUi.InitialScanStarted) { return }
+        $scanUi.InitialScanStarted=$true
+        Start-DmTask Snapshot
+    })
     try { if ($SmokeTest) { $form.CreateControl();$form.PerformLayout();return $form } else { [void]$form.ShowDialog() } }
     finally { if (-not $SmokeTest) { $timer.Stop();$timer.Dispose();if ($null -ne $u.Pipeline) { $u.Pipeline.Stop();$u.Pipeline.Dispose() };$worker.Close();$worker.Dispose();$form.Dispose();$icon.Dispose() } }
 }
