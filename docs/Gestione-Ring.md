@@ -25,12 +25,15 @@ la ricerca: non viene ignorato e non produce falsi orfani.
 
 ## Lettura e assegnazione
 
-Aggiorna dati / F5 legge i gruppi selezionati, tutte le loro appartenenze
-transitive e i dispositivi Entra. I candidati sono Windows, ServerAd, Corporate,
+All’apertura parte automaticamente la lettura completa dei gruppi selezionati,
+di tutte le loro appartenenze transitive e dei dispositivi Entra.
+**Aggiorna dati / F5** ripete l’intera scansione anche se sono attivi filtri. I candidati sono Windows, ServerAd, Corporate,
 gestiti MDM e abilitati. Le appartenenze sono confrontate con **Object ID
-Entra**, non con Device ID. La vista iniziale mostra gli orfani; i filtri
-permettono di consultare anche gia assegnati, appartenenze multiple e anomalie
-GLPI. I contatori dei gruppi considerano gli oggetti transitivi letti.
+Entra**, non con Device ID. La vista iniziale **Tutti** mostra lo stato di ogni candidato, sia orfano
+sia gia assegnato. **Filtra elenco** e i filtri di stato selezionano solo i
+risultati gia caricati, senza nuove richieste ai servizi. E possibile isolare
+orfani, gia assegnati, appartenenze multiple e anomalie GLPI. Il contatore
+riporta visualizzati sul totale e selezionati. I contatori dei gruppi considerano gli oggetti transitivi letti.
 
 Intune arricchisce l'inventario tramite Azure AD Device ID. GLPI usa seriale
 Intune quando disponibile, altrimenti nome esatto, e mostra ID, nome effettivo,

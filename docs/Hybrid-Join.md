@@ -13,7 +13,12 @@ essere relative al dominio o DN completi nello stesso dominio. OU sovrapposte
 non duplicano il computer con lo stesso GUID. Una OU non leggibile interrompe
 la ricerca, senza presentarla come vuota.
 
-Aggiorna dati / F5 legge AD, tutte le pagine Entra e, se autorizzato, Intune.
+All’apertura parte automaticamente una scansione completa delle OU configurate,
+di tutte le pagine Entra e, se autorizzato, di Intune. La vista iniziale e
+**Tutti**. **Aggiorna dati / F5** ripete la scansione completa.
+**Filtra elenco** e il filtro di stato agiscono sui dati gia caricati: non
+limitano la lettura alle macchine cercate e non avviano nuove richieste. Il
+contatore mostra dispositivi visualizzati sul totale e selezionati.
 Il confronto affianca nomi e GUID: per `ServerAd` il Device ID Entra deve
 corrispondere a ObjectGUID AD. La corrispondenza per GUID ritrova anche una
 registrazione Hybrid con nome diverso. Workplace e AzureAd non sono valutati
