@@ -81,6 +81,14 @@ function Show-AssistenteITSettings {
     $hybridPage=New-Object Windows.Forms.TabPage;$hybridPage.Text='Hybrid Join'
     $ringPage=New-Object Windows.Forms.TabPage;$ringPage.Text='Ring Intune'
     $settingsTabs.TabPages.AddRange(@($hybridPage,$ringPage))
+    $searchSettings=Get-DmValue $settings 'Search'
+    $searchPage=New-Object Windows.Forms.TabPage;$searchPage.Text='Ricerca computer'
+    [void]$settingsTabs.TabPages.Add($searchPage)
+    $searchDcLabel=New-Object Windows.Forms.Label;$searchDcLabel.Text='DC di consultazione (uno dei DC configurati in GLPI / AD)';$searchDcLabel.SetBounds(18,18,560,30)
+    $searchDc=New-Object Windows.Forms.TextBox;$searchDc.Name='ExplorerSearchDc';$searchDc.Text=[string](Get-DmValue $searchSettings 'DomainController' '');$searchDc.SetBounds(18,55,560,25)
+    $allDcs=New-Object Windows.Forms.CheckBox;$allDcs.Name='ExplorerAllSearchDcs';$allDcs.Text='Diagnostica: consulta tutti i DC configurati';$allDcs.Checked=[bool](Get-DmValue $searchSettings 'AllDomainControllers' $false);$allDcs.SetBounds(18,100,560,30)
+    $searchHint=New-Object Windows.Forms.Label;$searchHint.Text='Vuoto: usa srvDC1 se presente nell elenco, altrimenti il primo DC. La lettura ordinaria usa un solo DC. La diagnostica su tutti i DC richiede piu tempo. Le cancellazioni continuano a verificare tutti i DC configurati; questa scelta non ne modifica l elenco.';$searchHint.SetBounds(18,155,560,120)
+    $searchPage.Controls.AddRange(@($searchDcLabel,$searchDc,$allDcs,$searchHint))
     $hybridServerLabel=New-Object Windows.Forms.Label;$hybridServerLabel.Text='Server AD (vuoto: primo DC configurato)';$hybridServerLabel.SetBounds(18,18,560,24)
     $hybridServer=New-Object Windows.Forms.TextBox;$hybridServer.Name='HybridAdServer';$hybridServer.Text=[string]$hybridSettings.AdServer;$hybridServer.SetBounds(18,44,560,25)
     $scopeLabel=New-Object Windows.Forms.Label;$scopeLabel.Text='Profondita ricerca OU';$scopeLabel.SetBounds(18,84,560,24)
@@ -99,10 +107,10 @@ function Show-AssistenteITSettings {
     $hybridPage.Controls.AddRange(@($hybridServerLabel,$hybridServer,$scopeLabel,$scopeBox,$ouLabel,$ouBox,$importOus,$hybridHint))
     . (Join-Path $PSScriptRoot 'AssistenteIT/GroupPicker.UI.ps1')
     $ringSelection=@{Groups=@($ringSettings.Groups)}
-    $groupHint=New-Object Windows.Forms.Label;$groupHint.Text='Scegliere i gruppi da controllare e quelli utilizzabili come destinazione. I gruppi scelti vengono salvati per ID. Nessun gruppo e preselezionato; includi solo quelli che vuoi controllare.';$groupHint.SetBounds(18,18,560,65)
+    $groupHint=New-Object Windows.Forms.Label;$groupHint.Text='Scegliere i gruppi da controllare e quelli modificabili (inserimenti e rimozioni confermate). I gruppi scelti vengono salvati per ID. Nessun gruppo e preselezionato; includi solo quelli che vuoi controllare.';$groupHint.SetBounds(18,18,560,65)
     $chooseGroups=New-Object Windows.Forms.Button;$chooseGroups.Name='ChooseRingGroups';$chooseGroups.Text='Seleziona gruppi da Entra';$chooseGroups.SetBounds(18,94,270,34)
     $selectedGroups=New-Object Windows.Forms.TextBox;$selectedGroups.Name='SelectedRingGroups';$selectedGroups.Multiline=$true;$selectedGroups.ReadOnly=$true;$selectedGroups.ScrollBars='Vertical';$selectedGroups.SetBounds(18,145,560,300)
-    $showSelectedGroups={ $selectedGroups.Text=(@($ringSelection.Groups | ForEach-Object { $mode='solo controllo';if ($_.CanAssign) { $mode='controllo e destinazione' };$_.Label+' | '+$_.Name+' | '+$mode }) -join [Environment]::NewLine) }
+    $showSelectedGroups={ $selectedGroups.Text=(@($ringSelection.Groups | ForEach-Object { $mode='solo controllo';if ($_.CanAssign) { $mode='controllo e modifica' };$_.Label+' | '+$_.Name+' | '+$mode }) -join [Environment]::NewLine) }
     & $showSelectedGroups
     $chooseGroups.Add_Click({
         $entry=@($manifest.Modules | Where-Object Id -eq 'ring-manager')[0]
@@ -118,7 +126,7 @@ function Show-AssistenteITSettings {
         try {
             $mode='Interactive';if ($modeBox.SelectedIndex -eq 1) { $mode='Delegated' }
             $graphAuthentication=[pscustomobject]@{AuthenticationMode=$mode;TenantId=$tenantBox.Text;ClientId=$clientBox.Text}
-            Save-AssistenteITSettings -HybridJoinSettings ([pscustomobject]@{AdServer=$hybridServer.Text;SearchScope=[string]$scopeBox.SelectedItem;TargetOus=@($ouBox.Lines | Where-Object { $_.Trim() })}) -RingManagerSettings ([pscustomobject]@{Groups=@($ringSelection.Groups)}) -GraphAuthentication $graphAuthentication -Paths $paths -DomainControllers $dcBox.Lines -GlpiBaseUri $urlBox.Text -GlpiEnabled $glpiCheck.Checked -UseAppToken $appCheck.Checked -UserToken $userBox.Text -AppToken $appBox.Text
+            Save-AssistenteITSettings -SearchSettings ([pscustomobject]@{DomainController=$searchDc.Text;AllDomainControllers=$allDcs.Checked}) -HybridJoinSettings ([pscustomobject]@{AdServer=$hybridServer.Text;SearchScope=[string]$scopeBox.SelectedItem;TargetOus=@($ouBox.Lines | Where-Object { $_.Trim() })}) -RingManagerSettings ([pscustomobject]@{Groups=@($ringSelection.Groups)}) -GraphAuthentication $graphAuthentication -Paths $paths -DomainControllers $dcBox.Lines -GlpiBaseUri $urlBox.Text -GlpiEnabled $glpiCheck.Checked -UseAppToken $appCheck.Checked -UserToken $userBox.Text -AppToken $appBox.Text
             $dialog.DialogResult='OK'; $dialog.Close()
         }
         catch { [void][Windows.Forms.MessageBox]::Show($dialog, $_.Exception.Message, 'Impostazioni', 'OK', 'Error') }

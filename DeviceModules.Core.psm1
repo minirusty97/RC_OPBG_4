@@ -122,19 +122,39 @@ function Add-DmInventory {
         try {
             $credentials=Read-ExplorerGlpiCredentials -Path $EnvPath -UseAppToken:([bool](Get-DmValue $glpi 'UseAppToken' $true))
             if ($null -eq $credentials) { throw 'Configurare i token GLPI nelle Impostazioni del wrapper.' }
-            $arguments=@{BaseUri=[uri]$glpi.BaseUri;UserToken=$credentials.User;PageSize=[int](Get-DmValue $glpi 'PageSize' 100);TimeoutSeconds=[int](Get-DmValue $glpi 'TimeoutSeconds' 20)}
+            $arguments=@{BaseUri=[uri]$glpi.BaseUri;UserToken=$credentials.User;PageSize=[int](Get-DmValue $glpi 'PageSize' 100);TimeoutSeconds=[int](Get-DmValue $glpi 'TimeoutSeconds' 20);BulkRead=$true;LookupCache=@{};ProgressQueue=$ProgressQueue}
             if ([bool](Get-DmValue $glpi 'UseAppToken' $true)) { $arguments.AppToken=$credentials.App }
             $allSerials=@($Rows | Where-Object { $_.IntuneSerial -and -not $_.SerialConflict } | ForEach-Object { $_.IntuneSerial } | Sort-Object -Unique)
-            $names=@($Rows | Where-Object { -not $_.IntuneSerial } | ForEach-Object { $_.Name } | Sort-Object -Unique)
-            $serialRecords=@();$nameRecords=@()
-            Send-DmProgress $ProgressQueue 'Ricerca GLPI per seriale Intune e nome esatto...'
+            $serialRecords=@();$nameRecords=@();$bySerial=@{};$byName=@{}
+            Send-DmProgress $ProgressQueue 'Ricerca GLPI per seriale Intune...'
             if ($allSerials.Count) { $serialRecords=@(Find-GlpiComputer @arguments -SerialNumber $allSerials) }
-            if ($names.Count) { $nameRecords=@(Find-GlpiComputer @arguments -ExactName $names) }
+            foreach ($record in $serialRecords) {
+                $serial=([string]$record.SerialNumber).Trim().ToUpperInvariant()
+                if (-not $bySerial.ContainsKey($serial)) { $bySerial[$serial]=New-Object 'Collections.Generic.List[object]' };[void]$bySerial[$serial].Add($record)
+            }
+            $fallbackRows=@($Rows | Where-Object { $_.SerialConflict -or -not $_.IntuneSerial -or -not $bySerial.ContainsKey($_.IntuneSerial) })
+            $names=@($fallbackRows | ForEach-Object { $_.Name } | Sort-Object -Unique)
+            if ($names.Count) { Send-DmProgress $ProgressQueue 'Ricerca GLPI per nome esatto per i seriali assenti o senza corrispondenza...';$nameRecords=@(Find-GlpiComputer @arguments -ExactName $names) }
+            foreach ($record in $nameRecords) {
+                $name=([string]$record.Name).Trim()
+                if (-not $byName.ContainsKey($name)) { $byName[$name]=New-Object 'Collections.Generic.List[object]' };[void]$byName[$name].Add($record)
+            }
             foreach ($row in $Rows) {
-                if ($row.SerialConflict) { $row.GlpiState='Conflitto seriali';$row.GlpiError='Più seriali Intune per la stessa identita: verificare i dettagli.';continue }
-                if ($row.IntuneSerial) { $row.GlpiRecords=@($serialRecords | Where-Object { ([string]$_.SerialNumber).Trim() -ieq $row.IntuneSerial }) }
-                else { $row.GlpiRecords=@($nameRecords | Where-Object { $_.Name -ieq $row.Name }) }
+                $fallback=$true
+                if (-not $row.SerialConflict -and $row.IntuneSerial -and $bySerial.ContainsKey($row.IntuneSerial)) { $row.GlpiRecords=$bySerial[$row.IntuneSerial].ToArray();$fallback=$false }
+                elseif ($byName.ContainsKey($row.Name.Trim())) { $row.GlpiRecords=$byName[$row.Name.Trim()].ToArray() }
                 $row.GlpiState='Assente';if ($row.GlpiRecords.Count -eq 1) { $row.GlpiState='Presente' } elseif ($row.GlpiRecords.Count -gt 1) { $row.GlpiState='Duplicati ('+$row.GlpiRecords.Count+')' }
+                if ($fallback) {
+                    $row.GlpiMatchBy='Nome esatto'
+                    if ($row.IntuneSerial -and $row.GlpiRecords.Count) {
+                        $row.GlpiMatchBy='Nome esatto; seriale Intune non riscontrato'
+                        $row.GlpiError='Scheda GLPI trovata per nome. Il seriale Intune non corrisponde o non e valorizzato in GLPI: verificare l identita hardware.'
+                        $actual=@(Get-ExplorerSerials $row.GlpiRecords | Sort-Object -Unique)
+                        if ($actual.Count) { $row.SerialConflict=$true }
+                        if ($row.GlpiRecords.Count -eq 1) { $row.GlpiState='Presente (solo nome)' }
+                    }
+                }
+                if ($row.SerialConflict) { $row.GlpiError+=' Seriali discordanti: nessuna associazione hardware automatica confermata.' }
             }
             $glpiState='OK';$glpiError=''
         }
@@ -146,7 +166,7 @@ function Add-DmInventory {
         $row | Add-Member -Force NoteProperty GlpiNames (@($row.GlpiRecords | ForEach-Object { $_.Name } | Sort-Object -Unique) -join ', ')
         $row | Add-Member -Force NoteProperty GlpiStatus (@($row.GlpiRecords | ForEach-Object { $_.State } | Sort-Object -Unique) -join ', ')
         $row | Add-Member -Force NoteProperty GlpiGroup (@($row.GlpiRecords | ForEach-Object { $_.GroupPath } | Sort-Object -Unique) -join ', ')
-        $row | Add-Member -Force NoteProperty Censito $(if (@($row.GlpiRecords | Where-Object { $_.GroupVerified -and $_.GroupName -ieq 'CENSITO' }).Count) { 'Si' } else { '' })
+        $row | Add-Member -Force NoteProperty Censito $(if ($row.SerialConflict -or $row.GlpiRecords.Count -gt 1 -or $row.GlpiMatchBy -like '*non riscontrato*') { '?' } elseif (@($row.GlpiRecords | Where-Object { $_.GroupVerified -and $_.GroupName -ieq 'CENSITO' }).Count) { 'Si' } else { '' })
     }
     [pscustomobject]@{IntuneState=$intuneState;IntuneError=$intuneError;GlpiState=$glpiState;GlpiError=$glpiError}
 }

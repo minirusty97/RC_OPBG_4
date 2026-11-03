@@ -16,7 +16,9 @@
     "MinimumCharacters": 2,
     "CloudCacheMinutes": 5,
     "CloudReadTimeoutSeconds": 90,
-    "RefreshBeforeDelete": true
+    "RefreshBeforeDelete": true,
+    "DomainController": "",
+    "AllDomainControllers": false
   },
   "Glpi": {
     "Enabled": false,

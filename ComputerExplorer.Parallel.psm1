@@ -1,6 +1,7 @@
 ﻿#requires -version 5.1
 Set-StrictMode -Version 2.0
 Import-Module (Join-Path $PSScriptRoot 'ComputerExplorer.Core.psm1') -ErrorAction Stop
+$script:LastParallelRows=$null;$script:ParallelRowsRevision=0
 
 function New-ParallelSource {
     param([string]$Name, [string]$State = 'In attesa', [string]$ErrorText)
@@ -9,7 +10,7 @@ function New-ParallelSource {
 
 function Get-ExplorerReadWorkerScript {
     return {
-        param($Job, $CorePath, $ConfigPath, $Fragment, $Configuration, $Cache, $UserToken, $AppToken, $Refresh)
+        param($Job, $CorePath, $ConfigPath, $Fragment, $Configuration, $Cache, $UserToken, $AppToken, $Refresh,$GlpiLookupCache)
         $ErrorActionPreference = 'Stop'
         Import-Module $CorePath -ErrorAction Stop
         if ($Job.Kind -eq 'GraphAuth') {
@@ -18,20 +19,20 @@ function Get-ExplorerReadWorkerScript {
         }
         if ($Job.Kind -eq 'HybridAD') { return Read-ExplorerHybridAd -DeviceIds $Job.DeviceIds -Controllers $Job.Controllers }
         $arguments = @{ Source=$Job.Kind; NameFragment=$Fragment; ConfigPath=$ConfigPath; Configuration=$Configuration; CloudCache=$Cache
-            GlpiUserToken=$UserToken; GlpiAppToken=$AppToken; ForceCloudRefresh=$Refresh }
+            GlpiUserToken=$UserToken; GlpiAppToken=$AppToken; ForceCloudRefresh=$Refresh;GlpiLookupCache=$GlpiLookupCache }
         if ($null -ne $Job.PSObject.Properties['SerialDevices']) { $arguments.IntuneDevices=$Job.SerialDevices }
         if ($Job.Kind -eq 'AD') { $arguments.DomainController=$Job.DomainController }
-        if ($Job.Kind -in @('Entra','Intune')) { $arguments.ProgressQueue=$Job.ReadProgress }
+        if ($Job.Kind -in @('Entra','Intune','GLPI')) { $arguments.ProgressQueue=$Job.ReadProgress }
         Read-ExplorerSource @arguments
     }
 }
 
 function Start-ExplorerReadTask {
-    param($Job, $Pool, [scriptblock]$Body, $ConfigPath, $Fragment, $Configuration, $Cache, $UserToken, $AppToken, $Refresh)
+    param($Job, $Pool, [scriptblock]$Body, $ConfigPath, $Fragment, $Configuration, $Cache, $UserToken, $AppToken, $Refresh, $GlpiLookupCache)
     $pipeline = [PowerShell]::Create()
     try {
         $pipeline.RunspacePool = $Pool
-        [void]$pipeline.AddScript($Body.ToString()).AddArgument($Job).AddArgument((Join-Path $PSScriptRoot 'ComputerExplorer.Core.psm1')).AddArgument($ConfigPath).AddArgument($Fragment).AddArgument($Configuration).AddArgument($Cache).AddArgument($UserToken).AddArgument($AppToken).AddArgument($Refresh)
+        [void]$pipeline.AddScript($Body.ToString()).AddArgument($Job).AddArgument((Join-Path $PSScriptRoot 'ComputerExplorer.Core.psm1')).AddArgument($ConfigPath).AddArgument($Fragment).AddArgument($Configuration).AddArgument($Cache).AddArgument($UserToken).AddArgument($AppToken).AddArgument($Refresh).AddArgument($GlpiLookupCache)
         $operation = $pipeline.BeginInvoke()
         return [pscustomobject]@{ Job=$Job; Pipeline=$pipeline; Operation=$operation; StopOperation=$null; Watch=[Diagnostics.Stopwatch]::StartNew(); TimedOut=$false }
     }
@@ -53,10 +54,11 @@ function Stop-ExplorerReadTasks {
 }
 
 function Send-ParallelSnapshot {
-    param($Sources, $Controllers, [string]$Message, $Queue, [switch]$Complete)
+    param($Sources, $Controllers, [string]$Message, $Queue, [switch]$Complete, [switch]$ReuseRows)
+    if (-not $ReuseRows -or $null -eq $script:LastParallelRows) { $script:LastParallelRows=@(Merge-ExplorerResults -Sources $Sources -DomainControllers $Controllers);$script:ParallelRowsRevision++ }
     $snapshot = [pscustomobject]@{
-        Message=$Message; Complete=[bool]$Complete
-        Rows=@(Merge-ExplorerResults -Sources $Sources -DomainControllers $Controllers)
+        Message=$Message; Complete=[bool]$Complete;RowsRevision=$script:ParallelRowsRevision
+        Rows=@($script:LastParallelRows)
         Sources=@($Sources.Values | ForEach-Object {
             [pscustomobject]@{ Name=$_.Name; State=$_.State; Count=$_.Records.Count; CheckedAtUtc=$_.CheckedAtUtc
                 FromCache=$_.FromCache; Error=$_.Error; DcSources=@($_.DcSources)
@@ -85,9 +87,8 @@ function Invoke-ComputerExplorerParallelSearch {
     $fragment=$NameFragment.Trim()
     if ($fragment.Length -lt $config.MinimumCharacters) { throw "Inserire almeno $($config.MinimumCharacters) caratteri." }
     $enabled=@($EnabledSources | Sort-Object -Unique)
-    $property=$config.Settings.PSObject.Properties['DomainControllers']
-    $controllers=@()
-    if ($null -ne $property) { $controllers=@($property.Value | ForEach-Object { ([string]$_).Trim() } | Sort-Object -Unique) }
+    $controllers=@(Get-ExplorerSearchControllers $config.Settings)
+    $glpiLookupCache=[hashtable]::Synchronized(@{})
     $sources=[ordered]@{}
     foreach ($name in @('AD','Entra','Intune','GLPI')) {
         $state='Esclusa'; if ($enabled -contains $name) { $state='In attesa' }
@@ -97,9 +98,10 @@ function Invoke-ComputerExplorerParallelSearch {
         $sources.AD=New-ParallelSource 'AD' 'Errore' 'Configurare i Domain Controller nel JSON locale.'
     }
     $cloud=@($enabled | Where-Object { $_ -in @('Entra','Intune') })
+    $readProgress=New-Object 'System.Collections.Concurrent.ConcurrentQueue[object]'
     $jobs=New-Object 'System.Collections.Generic.List[object]'
     # Servizi indipendenti subito; il solo login Graph precede le due letture cloud.
-    if ($enabled -contains 'GLPI') { [void]$jobs.Add([pscustomobject]@{Kind='GLPI'}) }
+    if ($enabled -contains 'GLPI') { [void]$jobs.Add([pscustomobject]@{Kind='GLPI';ReadProgress=$readProgress}) }
     if ($cloud.Count -gt 0) { [void]$jobs.Add([pscustomobject]@{Kind='GraphAuth';CloudSources=$cloud;AuthQueue=$ProgressQueue}) }
     # One AD runspace and one queued DC at a time, independent of cloud/GLPI.
     $adPending=New-Object 'System.Collections.Generic.Queue[string]'
@@ -113,15 +115,15 @@ function Invoke-ComputerExplorerParallelSearch {
     $adPool=[RunspaceFactory]::CreateRunspacePool(1,1)
     $adPool.ApartmentState='STA'; $adPool.ThreadOptions='ReuseThread'
     $tasks=New-Object 'System.Collections.Generic.List[object]'
-    $readProgress=New-Object 'System.Collections.Concurrent.ConcurrentQueue[object]'
     $cache=Get-ExplorerCloudCache
     $body=Get-ExplorerReadWorkerScript
     $adCompleted=0;$serialGlpiQueued=$false;$hybridAdQueued=$false
+    $script:LastParallelRows=$null;$script:ParallelRowsRevision=0
     $watch=[Diagnostics.Stopwatch]::StartNew()
     try {
         $pool.Open(); $adPool.Open()
         $arguments=@{Pool=$pool;Body=$body;ConfigPath=$ConfigPath;Fragment=$fragment;Configuration=$config;Cache=$cache
-            UserToken=$GlpiUserToken;AppToken=$GlpiAppToken;Refresh=[bool]$ForceCloudRefresh}
+            UserToken=$GlpiUserToken;AppToken=$GlpiAppToken;Refresh=[bool]$ForceCloudRefresh;GlpiLookupCache=$glpiLookupCache}
         $adArguments=@{}; foreach ($key in $arguments.Keys) { $adArguments[$key]=$arguments[$key] }; $adArguments.Pool=$adPool
         foreach ($job in $jobs) { [void]$tasks.Add((Start-ExplorerReadTask -Job $job @arguments)) }
         if ($adPending.Count -gt 0) {
@@ -130,7 +132,7 @@ function Invoke-ComputerExplorerParallelSearch {
         }
         Send-ParallelSnapshot $sources $controllers 'Ricerca avviata. Se richiesto, completare il login Graph nel browser.' $ProgressQueue
         while ($tasks.Count -gt 0) {
-            $updated=$false
+            $updated=$false;$dataUpdated=$false
             foreach ($task in @($tasks.ToArray())) {
                 $job=$task.Job
                 if (-not $task.Operation.IsCompleted) {
@@ -206,14 +208,14 @@ function Invoke-ComputerExplorerParallelSearch {
                     if ($job.Kind -eq 'GLPI' -and $null -ne $job.PSObject.Properties['SerialDevices']) { $result.Records=@(@($sources.GLPI.Records)+@($result.Records) | Sort-Object GlpiId -Unique) }
                     $sources[$job.Kind]=$result
                 }
-                $updated=$true
+                $updated=$true;$dataUpdated=$true
             }
             if (-not $serialGlpiQueued -and $sources.Intune.State -eq 'OK' -and $sources.GLPI.State -eq 'OK') {
                 $serialGlpiQueued=$true
                 if (@(Get-ExplorerSerials $sources.Intune.Records).Count) {
                     $sources.GLPI.State='In attesa';$sources.GLPI | Add-Member -NotePropertyName Progress -NotePropertyValue 'Ricerca tramite seriali Intune' -Force
-                    [void]$tasks.Add((Start-ExplorerReadTask -Job ([pscustomobject]@{Kind='GLPI';SerialDevices=@($sources.Intune.Records)}) @arguments))
-                    $updated=$true
+                    [void]$tasks.Add((Start-ExplorerReadTask -Job ([pscustomobject]@{Kind='GLPI';ReadProgress=$readProgress;SerialDevices=@($sources.Intune.Records)}) @arguments))
+                    $updated=$true;$dataUpdated=$true
                 }
             }
             if (-not $hybridAdQueued -and $sources.AD.State -eq 'OK' -and $sources.Entra.State -eq 'OK') {
@@ -224,7 +226,7 @@ function Invoke-ComputerExplorerParallelSearch {
                     $sources.AD.State='In attesa'
                     $sources.AD.Progress='Verifica GUID hybrid';$sources.AD.CurrentTarget='Confronto AD/Entra'
                     [void]$tasks.Add((Start-ExplorerReadTask -Job ([pscustomobject]@{Kind='HybridAD';DeviceIds=$lookupIds;Controllers=$controllers}) @adArguments))
-                    $updated=$true
+                    $updated=$true;$dataUpdated=$true
                 }
             }
             $notice=$null
@@ -236,7 +238,7 @@ function Invoke-ComputerExplorerParallelSearch {
             }
             if ($updated) {
                 $pending=@($sources.Values | Where-Object { $_.State -eq 'In attesa' } | ForEach-Object { $_.Name })
-                Send-ParallelSnapshot $sources $controllers ('In corso: ' + ($pending -join ', ')) $ProgressQueue
+                Send-ParallelSnapshot $sources $controllers ('In corso: ' + ($pending -join ', ')) $ProgressQueue -ReuseRows:(-not $dataUpdated)
             }
             if ($tasks.Count -gt 0) { [Threading.Thread]::Sleep(30) }
         }

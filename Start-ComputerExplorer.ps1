@@ -429,46 +429,51 @@ function Update-ExplorerSourceStatus {
 
 function Show-ExplorerSnapshot {
     param($Snapshot)
-    $script:CopyCell=$null
-    $selectedNames = @($grid.SelectedRows | Where-Object { $null -ne $_.Tag } | ForEach-Object { $_.Tag.Name })
-    $script:RenderingGrid = $true
+    $previousRevision=[int](Get-UiSetting $script:Latest 'RowsRevision' 0)
+    $revision=[int](Get-UiSetting $Snapshot 'RowsRevision' 0)
+    $renderRows=$revision -le 0 -or $revision -ne $previousRevision
     $script:Latest = $Snapshot
-    $grid.SuspendLayout()
-    try {
-        $grid.Rows.Clear()
-        foreach ($computer in $Snapshot.Rows) {
-            $index = $grid.Rows.Add([object[]]@($computer.Name, $computer.AD, $computer.ADLastModified,
-                $computer.Entra, $computer.EntraLastActivity, $computer.Intune, $computer.IntuneLastCheckIn,
-                $computer.GLPI, $computer.GlpiLastInventory, $computer.StatoGLPI, (Get-UiSetting $computer 'Censito' ''),
-                (Get-UiSetting $computer 'IntuneSerial' ''), (Get-UiSetting $computer 'GlpiSerial' ''),
-                (Get-UiSetting $computer 'SerialCheck' 'Non verificabile'), (Get-UiSetting $computer 'HybridCheck' 'Non verificabile'), $computer.PercorsoAD, $computer.Note))
-            $row = $grid.Rows[$index]; $row.Tag = $computer
-            $row.Cells['Censito'].ToolTipText=[string](Get-UiSetting $computer 'CensitoInfo' '')
-            if ((Get-UiSetting $computer 'Censito' '') -eq '✓') {
-                $row.Cells['Censito'].Style.ForeColor=[Drawing.Color]::DarkGreen
-                $row.Cells['Censito'].Style.SelectionForeColor=[Drawing.Color]::DarkGreen
+    if ($renderRows) {
+        $script:CopyCell=$null
+        $selectedNames = @($grid.SelectedRows | Where-Object { $null -ne $_.Tag } | ForEach-Object { $_.Tag.Name })
+        $script:RenderingGrid = $true
+        $grid.SuspendLayout()
+        try {
+            $grid.Rows.Clear()
+            foreach ($computer in $Snapshot.Rows) {
+                $index = $grid.Rows.Add([object[]]@($computer.Name, $computer.AD, $computer.ADLastModified,
+                    $computer.Entra, $computer.EntraLastActivity, $computer.Intune, $computer.IntuneLastCheckIn,
+                    $computer.GLPI, $computer.GlpiLastInventory, $computer.StatoGLPI, (Get-UiSetting $computer 'Censito' ''),
+                    (Get-UiSetting $computer 'IntuneSerial' ''), (Get-UiSetting $computer 'GlpiSerial' ''),
+                    (Get-UiSetting $computer 'SerialCheck' 'Non verificabile'), (Get-UiSetting $computer 'HybridCheck' 'Non verificabile'), $computer.PercorsoAD, $computer.Note))
+                $row = $grid.Rows[$index]; $row.Tag = $computer
+                $row.Cells['Censito'].ToolTipText=[string](Get-UiSetting $computer 'CensitoInfo' '')
+                if ((Get-UiSetting $computer 'Censito' '') -eq '✓') {
+                    $row.Cells['Censito'].Style.ForeColor=[Drawing.Color]::DarkGreen
+                    $row.Cells['Censito'].Style.SelectionForeColor=[Drawing.Color]::DarkGreen
+                }
+                Set-CellPresence $row.Cells['SerialCheck'] (Get-UiSetting $computer 'SerialColor' 'Grigio')
+                $row.Cells['SerialCheck'].ToolTipText='Confronto dei seriali Intune/GLPI dello stesso nome. AD ed Entra non forniscono qui un seriale hardware. Coerente non certifica identita AD/Entra.' 
+                Set-CellPresence $row.Cells['HybridCheck'] (Get-UiSetting $computer 'HybridColor' 'Grigio')
+                $row.Cells['HybridCheck'].ToolTipText='Solo hybrid joined: confronto Device ID Entra / GUID AD. Registered e joined cloud: non applicabile. Dettagli e identificativi nel pannello inferiore.'
+                foreach ($name in @('AD', 'Entra', 'Intune', 'GLPI')) {
+                    $color = $computer.PSObject.Properties[$name + 'Color'].Value
+                    Set-CellPresence $row.Cells[$name] $color
+                    $source = @($Snapshot.Sources | Where-Object { $_.Name -eq $name })[0]
+                    $row.Cells[$name].ToolTipText = $source.State + ' ' + $source.Error
+                    if ($name -eq 'AD') { $row.Cells[$name].ToolTipText += ' | DC verificati: ' + $computer.Verificati }
+                }
             }
-            Set-CellPresence $row.Cells['SerialCheck'] (Get-UiSetting $computer 'SerialColor' 'Grigio')
-            $row.Cells['SerialCheck'].ToolTipText='Confronto dei seriali Intune/GLPI dello stesso nome. AD ed Entra non forniscono qui un seriale hardware. Coerente non certifica identita AD/Entra.' 
-            Set-CellPresence $row.Cells['HybridCheck'] (Get-UiSetting $computer 'HybridColor' 'Grigio')
-            $row.Cells['HybridCheck'].ToolTipText='Solo hybrid joined: confronto Device ID Entra / GUID AD. Registered e joined cloud: non applicabile. Dettagli e identificativi nel pannello inferiore.'
-            foreach ($name in @('AD', 'Entra', 'Intune', 'GLPI')) {
-                $color = $computer.PSObject.Properties[$name + 'Color'].Value
-                Set-CellPresence $row.Cells[$name] $color
-                $source = @($Snapshot.Sources | Where-Object { $_.Name -eq $name })[0]
-                $row.Cells[$name].ToolTipText = $source.State + ' ' + $source.Error
-                if ($name -eq 'AD') { $row.Cells[$name].ToolTipText += ' | DC verificati: ' + $computer.Verificati }
-            }
+            $grid.ClearSelection()
+            foreach ($row in $grid.Rows) { if ($selectedNames -contains $row.Tag.Name) { $row.Selected = $true } }
         }
-        $grid.ClearSelection()
-        foreach ($row in $grid.Rows) { if ($selectedNames -contains $row.Tag.Name) { $row.Selected = $true } }
+        finally { $grid.ResumeLayout(); $script:RenderingGrid = $false }
+        foreach ($name in @('AD', 'ADLastModified', 'Entra', 'EntraLastActivity', 'Intune', 'IntuneLastCheckIn', 'GLPI', 'GlpiLastInventory')) {
+            $column = $grid.Columns[$name]
+            $column.Width = $column.GetPreferredWidth([Windows.Forms.DataGridViewAutoSizeColumnMode]::AllCells, $true)
+        }
+        Update-ExplorerCounters
     }
-    finally { $grid.ResumeLayout(); $script:RenderingGrid = $false }
-    foreach ($name in @('AD', 'ADLastModified', 'Entra', 'EntraLastActivity', 'Intune', 'IntuneLastCheckIn', 'GLPI', 'GlpiLastInventory')) {
-        $column = $grid.Columns[$name]
-        $column.Width = $column.GetPreferredWidth([Windows.Forms.DataGridViewAutoSizeColumnMode]::AllCells, $true)
-    }
-    Update-ExplorerCounters
     $sourceGrid.Rows.Clear()
     foreach ($source in $Snapshot.Sources) {
         $date = ''
@@ -480,7 +485,7 @@ function Show-ExplorerSnapshot {
         [void]$sourceGrid.Rows.Add([object[]]@($source.Name, $source.State, $count, $date, $cache, $source.Error))
     }
     Update-ExplorerSourceStatus -Sources $Snapshot.Sources
-    Show-SelectedComputer
+    if ($renderRows) { Show-SelectedComputer }
     $script:StageMessage = $Snapshot.Message
     $status.Text = '{0} | {1} nomi' -f $Snapshot.Message, $Snapshot.Rows.Count
 }

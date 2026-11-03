@@ -13,7 +13,8 @@ function Test-RingWritable {
     if ($types -contains 'Unified') { return 'Gruppo Microsoft 365' }
     if ($types -contains 'DynamicMembership') { return 'Appartenenza dinamica' }
     if ((Get-DmValue $Group 'onPremisesSyncEnabled') -eq $true) { return 'Sincronizzato da AD' }
-    if ((Get-DmValue $Group 'isAssignableToRole') -ne $false) { return 'Assegnabile a ruoli o proprieta non leggibile' }
+    # Graph exposes this optional property as null for normal groups. Only true is role-assignable.
+    if ((Get-DmValue $Group 'isAssignableToRole') -eq $true) { return 'Gruppo assegnabile a ruoli Entra' }
     if ((Get-DmValue $Group 'mailEnabled') -ne $false) { return 'Gruppo abilitato alla posta o proprieta non leggibile' }
     if ($null -eq $types -or -not ($types -is [Array] -or $types -is [Collections.IList])) { return 'Tipo di appartenenza non leggibile' }
     return ''
@@ -26,7 +27,7 @@ function Get-RingGroups {
     $groups=New-Object 'Collections.Generic.List[object]';$seen=@{};$labels=@{}
     foreach ($entry in $configured) {
         $name=([string]$entry.Name).Trim();$label=([string]$entry.Label).Trim();$configuredId=[string]$entry.Id
-        if ($entry.CanAssign -isnot [bool]) { throw 'La scelta Destinazione del gruppo deve essere un valore booleano.' }
+        if ($entry.CanAssign -isnot [bool]) { throw 'La scelta Modifica del gruppo deve essere un valore booleano.' }
         if (-not $label -or $label.Length -gt 120 -or $label -match '[\r\n\x00]' -or $labels.ContainsKey($label)) { throw 'Etichette dei gruppi mancanti o duplicate nelle Impostazioni.' };$labels[$label]=$true
         $select='id,displayName,groupTypes,onPremisesSyncEnabled,securityEnabled,mailEnabled,isAssignableToRole'
         if ($configuredId) {
@@ -57,7 +58,7 @@ function Get-RingMemberIndex {
         # Uncast collection avoids eventual-consistency casts and also sees nested memberships.
         $members=@(Get-DmGraphItems -Uri ('https://graph.microsoft.com/v1.0/groups/'+$group.Id+'/transitiveMembers?$select=id&$top=999') -ProgressQueue $ProgressQueue)
         $group.MemberCount=$members.Count
-        foreach ($member in $members) { $id=ConvertTo-DmId $member.id;if (-not $index.ContainsKey($id)) { $index[$id]=New-Object 'Collections.Generic.List[string]' };[void]$index[$id].Add($group.Label) }
+        foreach ($member in $members) { $id=ConvertTo-DmId $member.id;if (-not $index.ContainsKey($id)) { $index[$id]=New-Object 'Collections.Generic.List[string]' };[void]$index[$id].Add($group.Id) }
     }
     return ,$index
 }
@@ -80,11 +81,13 @@ function Get-RingManagerSnapshot {
     $groups=@(Get-RingGroups -Options $settings.Options -ProgressQueue $ProgressQueue)
     $members=Get-RingMemberIndex -Groups $groups -ProgressQueue $ProgressQueue
     $devices=@(Get-DmEntraInventory $ProgressQueue)
-    $eligible=@($devices | Where-Object { Test-RingEligible $_ })
+    $eligible=@($devices | Where-Object { Test-RingEligible $_ });$groupsById=@{}
+    foreach ($group in $groups) { $groupsById[$group.Id]=$group }
     $rows=@(foreach ($device in @($eligible | Sort-Object displayName,id)) {
         $id=ConvertTo-DmId $device.id;$deviceId=ConvertTo-DmId $device.deviceId
-        $rings=@();if ($members.ContainsKey($id)) { $rings=@($members[$id].ToArray() | Sort-Object -Unique) }
-        [pscustomobject]@{Key=$id;Name=[string]$device.displayName;ObjectId=$id;DeviceId=$deviceId;DeviceIds=@($deviceId);Rings=($rings -join ', ');Orphan=($rings.Count -eq 0);State=$(if ($rings.Count -gt 1) {'Piu Ring'} elseif ($rings.Count) {'Assegnato'} else {'Orfano'});TargetRing='';LastSignIn=(Get-DmValue $device 'approximateLastSignInDateTime')}
+        $currentIds=@();if ($members.ContainsKey($id)) { $currentIds=@($members[$id].ToArray() | Sort-Object -Unique) }
+        $rings=@($currentIds | ForEach-Object { $groupsById[$_].Label })
+        [pscustomobject]@{Key=$id;Name=[string]$device.displayName;ObjectId=$id;DeviceId=$deviceId;DeviceIds=@($deviceId);Rings=($rings -join ', ');CurrentGroupIds=$currentIds;Orphan=($rings.Count -eq 0);State=$(if ($rings.Count -gt 1) {'Piu Ring'} elseif ($rings.Count) {'Assegnato'} else {'Orfano'});TargetRing='';LastSignIn=(Get-DmValue $device 'approximateLastSignInDateTime')}
     })
     $sources=Add-DmInventory -Rows $rows -Config $settings.Config -Access $GraphAccess -EnvPath $EnvPath -ProgressQueue $ProgressQueue
     if ((Assert-DmSession $GraphAccess -ReadIds @('entra-read','groups-read')) -cne $context) { throw 'Sessione cambiata durante la lettura. Aggiornare i dati.' }
@@ -109,6 +112,25 @@ function Get-RingGroupSignature {
     return (@($Groups | Sort-Object Id | ForEach-Object { $_.Id+'|'+$_.Name+'|'+$_.Label+'|'+$_.Destination+'|'+$_.IsWritable+'|'+$_.Reason }) -join "`n")
 }
 
+function Get-RingMembershipState {
+    param([string]$ObjectId,[string[]]$MonitoredIds)
+    $id=ConvertTo-DmId $ObjectId
+    $direct=@(Get-DmGraphItems -Uri ('https://graph.microsoft.com/v1.0/devices/'+$id+'/memberOf?$select=id'))
+    $transitive=@(Get-DmGraphItems -Uri ('https://graph.microsoft.com/v1.0/devices/'+$id+'/transitiveMemberOf?$select=id'))
+    [pscustomobject]@{Direct=@($direct | ForEach-Object { ConvertTo-DmId $_.id } | Where-Object { $MonitoredIds -contains $_ } | Sort-Object -Unique);All=@($transitive | ForEach-Object { ConvertTo-DmId $_.id } | Where-Object { $MonitoredIds -contains $_ } | Sort-Object -Unique)}
+}
+
+function Test-RingSameIds {
+    param([string[]]$Expected,[string[]]$Actual)
+    return (@($Expected | Sort-Object -Unique) -join '|') -ceq (@($Actual | Sort-Object -Unique) -join '|')
+}
+
+function Assert-RingDirectTarget {
+    param([string]$GroupId,[string]$ObjectId)
+    $record=Invoke-MgGraphRequest -Method GET -Uri ('https://graph.microsoft.com/v1.0/groups/'+(ConvertTo-DmId $GroupId)+'/members/'+(ConvertTo-DmId $ObjectId)+'?$select=id') -OutputType PSObject -ErrorAction Stop
+    if ((ConvertTo-DmId $record.id) -ne $ObjectId) { throw 'Appartenenza diretta al gruppo di destinazione non confermata.' }
+}
+
 function New-RingAssignmentPlan {
     [CmdletBinding()]
     param([object[]]$Assignments,[string]$ConfigPath,$GraphAccess,$ProgressQueue)
@@ -117,22 +139,33 @@ function New-RingAssignmentPlan {
     $script:RingPlans=@{}
     $settings=Read-DmSettings $ConfigPath RingManager;$groups=@(Get-RingGroups $settings.Options $ProgressQueue)
     $members=Get-RingMemberIndex $groups $ProgressQueue
+    $byId=@{};foreach ($group in $groups) { $byId[$group.Id]=$group }
+    $monitored=@($groups | ForEach-Object { $_.Id })
     $items=New-Object 'Collections.Generic.List[object]';$seen=@{}
     foreach ($assignment in $Assignments) {
         $id=ConvertTo-DmId $assignment.ObjectId
-        if ($seen.ContainsKey($id) -or -not $script:RingRows.ContainsKey($id)) { throw 'Selezione duplicata o esterna all''ultima ricerca.' };$seen[$id]=$true
-        $expected=$script:RingRows[$id]
-        if (-not $expected.Orphan -or $members.ContainsKey($id)) { throw ($expected.Name+' appartiene gia a un Ring. Aggiornare i dati.') }
+        if ($seen.ContainsKey($id) -or -not $script:RingRows.ContainsKey($id)) { throw 'Selezione duplicata o esterna all ultima ricerca.' };$seen[$id]=$true
+        $expected=$script:RingRows[$id];$current=@();if ($members.ContainsKey($id)) { $current=$members[$id].ToArray() }
+        $expectedIds=Get-DmValue $expected 'CurrentGroupIds' @()
+        if (-not (Test-RingSameIds $expectedIds $current)) { throw ($expected.Name+': appartenenze cambiate. Aggiornare i dati.') }
         $dest=@($groups | Where-Object { $_.Label -ieq [string]$assignment.TargetRing -and $_.IsWritable })
-        if ($dest.Count -ne 1) { throw 'Ring di destinazione non assegnabile, cambiato o non configurato.' }
+        if ($dest.Count -ne 1) { throw 'Gruppo di destinazione non modificabile o non configurato.' }
         Assert-RingDeviceSame $expected (Get-RingDeviceLive $id)
-        [void]$items.Add([pscustomobject]@{ObjectId=$id;DeviceId=$expected.DeviceId;Name=$expected.Name;TargetRing=$dest[0].Label;GroupId=$dest[0].Id;GroupName=$dest[0].Name})
+        $membership=Get-RingMembershipState -ObjectId $id -MonitoredIds $monitored
+        if (-not (Test-RingSameIds $current $membership.All)) { throw 'Appartenenze cambiate durante la preparazione.' }
+        $origins=@($current | Where-Object { $_ -ne $dest[0].Id })
+        foreach ($origin in $origins) {
+            if (-not $byId[$origin].IsWritable) { throw ($expected.Name+': origine '+$byId[$origin].Label+' impostata solo per controllo o non modificabile. Abilitare Modifica nelle impostazioni oppure verificare il tipo del gruppo.') }
+            if ($membership.Direct -notcontains $origin) { throw ($expected.Name+': appartenenza a '+$byId[$origin].Label+' ereditata da un gruppo annidato. Non e possibile rimuoverla sul solo PC.') }
+        }
+        $action='Assegna';if ($origins.Count) { $action='Sposta' } elseif ($membership.Direct -contains $dest[0].Id) { $action='Gia nel Ring' }
+        [void]$items.Add([pscustomobject]@{ObjectId=$id;DeviceId=$expected.DeviceId;Name=$expected.Name;TargetRing=$dest[0].Label;GroupId=$dest[0].Id;GroupName=$dest[0].Name;Action=$action;InitialMembershipIds=@($current);InitialDirectIds=@($membership.Direct);RemoveGroupIds=$origins;RemoveGroups=(@($origins | ForEach-Object { $byId[$_].Name+' / '+$_ }) -join '; ')})
     }
-    if (-not $items.Count) { throw 'Selezionare almeno un PC orfano e un Ring di destinazione.' }
+    if (-not $items.Count) { throw 'Selezionare almeno un PC e un gruppo di destinazione.' }
     if ((Assert-DmSession $GraphAccess -ReadIds @('entra-read','groups-read') -WriteId 'groups-write') -cne $context) { throw 'Sessione cambiata durante la preparazione.' }
     $id=[guid]::NewGuid().ToString();$created=[datetimeoffset]::UtcNow
-    $script:RingPlans[$id]=[pscustomobject]@{Id=$id;CreatedAt=$created;Context=$context;ConfigPath=$ConfigPath;GroupSignature=(Get-RingGroupSignature $groups);Items=$items.ToArray();MonitoredIds=@($groups | ForEach-Object { $_.Id })}
-    [pscustomobject]@{PlanId=$id;CreatedAtUtc=$created;Items=@($items | Select-Object Name,ObjectId,DeviceId,TargetRing,GroupName)}
+    $script:RingPlans[$id]=[pscustomobject]@{Id=$id;CreatedAt=$created;Context=$context;ConfigPath=$ConfigPath;GroupSignature=(Get-RingGroupSignature $groups);Items=$items.ToArray();MonitoredIds=$monitored}
+    [pscustomobject]@{PlanId=$id;CreatedAtUtc=$created;Items=@($items | Select-Object Name,ObjectId,DeviceId,TargetRing,GroupId,GroupName,Action,RemoveGroups)}
 }
 
 function Invoke-RingAssignmentPlan {
@@ -144,38 +177,67 @@ function Invoke-RingAssignmentPlan {
     if (([datetimeoffset]::UtcNow-$plan.CreatedAt).TotalMinutes -gt 5 -or $context -cne $plan.Context) { throw 'Anteprima scaduta o sessione cambiata. Ripetere la verifica.' }
     $results=New-Object 'Collections.Generic.List[object]'
     foreach ($item in $plan.Items) {
-        $state='Bloccato';$errorText='';$posted=$false
+        $state='Bloccato';$errorText='';$stage='Verifica';$writes=$false;$targetVerified=$false;$removed=New-Object 'Collections.Generic.List[string]'
         try {
             if ((Assert-DmSession $GraphAccess -ReadIds @('entra-read','groups-read') -WriteId 'groups-write') -cne $plan.Context) { throw 'Sessione cambiata.' }
-            $settings=Read-DmSettings $plan.ConfigPath RingManager
-            $groups=@(Get-RingGroups $settings.Options $ProgressQueue)
-            if ((Get-RingGroupSignature $groups) -cne $plan.GroupSignature) { throw 'Identita o caratteristiche dei gruppi cambiate. Ripetere anteprima e conferma.' }
+            $settings=Read-DmSettings $plan.ConfigPath RingManager;$groups=@(Get-RingGroups $settings.Options $ProgressQueue)
+            if ((Get-RingGroupSignature $groups) -cne $plan.GroupSignature) { throw 'Identita, impostazioni o caratteristiche dei gruppi cambiate.' }
+            $byId=@{};foreach ($group in $groups) { $byId[$group.Id]=$group }
             Assert-RingDeviceSame $item (Get-RingDeviceLive $item.ObjectId)
-            $memberships=@(Get-DmGraphItems -Uri ('https://graph.microsoft.com/v1.0/devices/'+$item.ObjectId+'/transitiveMemberOf?$select=id'))
-            if (@($memberships | Where-Object { $plan.MonitoredIds -contains [string]$_.id }).Count) { $state='Gia assegnato';throw 'Il PC appartiene ora a un Ring: nessuna aggiunta eseguita.' }
-            if ($PSCmdlet.ShouldProcess(($item.Name+' / '+$item.ObjectId),('Aggiungi a '+$item.GroupName))) {
-                Send-DmProgress $ProgressQueue ('Assegnazione: '+$item.Name+' a '+$item.TargetRing)
-                $body=@{'@odata.id'=('https://graph.microsoft.com/v1.0/devices/'+$item.ObjectId)} | ConvertTo-Json -Compress
-                $posted=$true
-                [void](Invoke-MgGraphRequest -Method POST -Uri ('https://graph.microsoft.com/v1.0/groups/'+$item.GroupId+'/members/$ref') -Body $body -ContentType 'application/json' -ErrorAction Stop)
-                $verified=$false
-                for ($attempt=0;$attempt -lt 3 -and -not $verified;$attempt++) {
-                    try { $member=Invoke-MgGraphRequest -Method GET -Uri ('https://graph.microsoft.com/v1.0/groups/'+$item.GroupId+'/members/'+$item.ObjectId+'?$select=id') -OutputType PSObject -ErrorAction Stop;$verified=(ConvertTo-DmId $member.id) -eq $item.ObjectId }
-                    catch { if ($attempt -eq 2) { throw } }
-                    if (-not $verified -and $attempt -lt 2) { Start-Sleep -Milliseconds 300 }
+            $membership=Get-RingMembershipState -ObjectId $item.ObjectId -MonitoredIds $plan.MonitoredIds
+            if (-not (Test-RingSameIds $item.InitialMembershipIds $membership.All) -or -not (Test-RingSameIds $item.InitialDirectIds $membership.Direct)) { throw 'Appartenenze cambiate dopo l anteprima. Aggiornare dati e conferma.' }
+            if ($item.Action -eq 'Gia nel Ring') { Assert-RingDirectTarget $item.GroupId $item.ObjectId;$state='Gia nel Ring' }
+            elseif ($PSCmdlet.ShouldProcess(($item.Name+' / '+$item.ObjectId),($item.Action+' verso '+$item.GroupName+'; rimuovi solo origini confermate: '+$item.RemoveGroups))) {
+                $stage='Aggiunta destinazione'
+                if ($membership.Direct -notcontains $item.GroupId) {
+                    Send-DmProgress $ProgressQueue ('Inserimento '+$item.Name+' in '+$item.TargetRing)
+                    $body=@{'@odata.id'=('https://graph.microsoft.com/v1.0/devices/'+$item.ObjectId)} | ConvertTo-Json -Compress
+                    $writes=$true
+                    [void](Invoke-MgGraphRequest -Method POST -Uri ('https://graph.microsoft.com/v1.0/groups/'+$item.GroupId+'/members/$ref') -Body $body -ContentType 'application/json' -ErrorAction Stop)
                 }
-                if (-not $verified) { throw 'Rilettura dell''appartenenza non confermata.' }
-                $state='Assegnato e verificato'
+                $stage='Verifica destinazione'
+                for ($attempt=0;$attempt -lt 3 -and -not $targetVerified;$attempt++) {
+                    try { Assert-RingDirectTarget $item.GroupId $item.ObjectId;$targetVerified=$true } catch { if ($attempt -eq 2) { throw };Start-Sleep -Milliseconds 300 }
+                }
+                $expectedDirect=@(@($item.InitialDirectIds)+@($item.GroupId) | Sort-Object -Unique)
+                foreach ($origin in $item.RemoveGroupIds) {
+                    $stage='Rimozione origine '+$byId[$origin].Label
+                    if ((Assert-DmSession $GraphAccess -ReadIds @('entra-read','groups-read') -WriteId 'groups-write') -cne $plan.Context) { throw 'Sessione cambiata.' }
+                    Assert-RingDeviceSame $item (Get-RingDeviceLive $item.ObjectId)
+                    Assert-RingDirectTarget $item.GroupId $item.ObjectId
+                    $liveGroup=Invoke-MgGraphRequest -Method GET -Uri ('https://graph.microsoft.com/v1.0/groups/'+$origin+'?$select=id,displayName,groupTypes,onPremisesSyncEnabled,securityEnabled,mailEnabled,isAssignableToRole') -OutputType PSObject -ErrorAction Stop
+                    if ((ConvertTo-DmId $liveGroup.id) -ne $origin -or (Test-RingWritable $liveGroup)) { throw 'Gruppo di origine cambiato o non piu modificabile.' }
+                    $live=Get-RingMembershipState -ObjectId $item.ObjectId -MonitoredIds $plan.MonitoredIds
+                    if (-not (Test-RingSameIds $expectedDirect $live.Direct) -or -not (Test-RingSameIds $expectedDirect $live.All)) { throw 'Appartenenze dirette cambiate durante lo spostamento.' }
+                    $writes=$true
+                    # The literal /$ref is mandatory: only membership is removed, never the device object.
+                    [void](Invoke-MgGraphRequest -Method DELETE -Uri ('https://graph.microsoft.com/v1.0/groups/'+$origin+'/members/'+$item.ObjectId+'/$ref') -ErrorAction Stop)
+                    $expectedDirect=@($expectedDirect | Where-Object { $_ -ne $origin });$confirmed=$false
+                    for ($attempt=0;$attempt -lt 3 -and -not $confirmed;$attempt++) {
+                        $readback=Get-RingMembershipState -ObjectId $item.ObjectId -MonitoredIds $plan.MonitoredIds
+                        $confirmed=$readback.Direct -notcontains $origin -and $readback.Direct -contains $item.GroupId
+                        if (-not $confirmed -and $attempt -lt 2) { Start-Sleep -Milliseconds 300 }
+                    }
+                    if (-not $confirmed) { throw 'Rimozione inviata ma rilettura delle appartenenze non confermata.' }
+                    [void]$removed.Add($origin)
+                }
+                Assert-RingDirectTarget $item.GroupId $item.ObjectId
+                $state='Assegnato e verificato';if ($item.RemoveGroupIds.Count) { $state='Spostato e verificato' }
             }
             else { $state='Simulato' }
         }
         catch {
             $errorText=$_.Exception.Message
-            if ($posted) { $state='Esito da verificare';$safe=New-ExplorerGraphOperationError -Failure $_ -Stage InitialRead;$errorText='Richiesta di aggiunta inviata; aggiornare i dati prima di riprovare. '+$safe.Message }
+            if ($writes) {
+                $state='Esito da verificare';if ($targetVerified) { $state='Parziale: destinazione verificata' }
+                $safe=New-ExplorerGraphOperationError -Failure $_ -Stage InitialRead
+                $errorText=$stage+': '+$safe.Message+'. Aggiornare i dati prima di riprovare; nessuna rimozione viene tentata senza destinazione verificata.'
+            }
         }
-        [void]$results.Add([pscustomobject]@{AtUtc=[datetimeoffset]::UtcNow.ToString('o');Name=$item.Name;ObjectId=$item.ObjectId;DeviceId=$item.DeviceId;TargetRing=$item.TargetRing;GroupId=$item.GroupId;State=$state;Error=$errorText})
+        [void]$results.Add([pscustomobject]@{AtUtc=[datetimeoffset]::UtcNow.ToString('o');Name=$item.Name;ObjectId=$item.ObjectId;DeviceId=$item.DeviceId;Action=$item.Action;TargetRing=$item.TargetRing;GroupId=$item.GroupId;RemoveGroups=$item.RemoveGroups;RemovedGroupIds=($removed -join ', ');State=$state;Stage=$stage;Error=$errorText})
     }
-    [pscustomobject]@{Results=$results.ToArray();Assigned=@($results | Where-Object State -eq 'Assegnato e verificato').Count;Failed=@($results | Where-Object State -notin @('Assegnato e verificato','Simulato')).Count}
+    $success=@('Assegnato e verificato','Spostato e verificato','Gia nel Ring','Simulato')
+    [pscustomobject]@{Results=$results.ToArray();Assigned=@($results | Where-Object State -eq 'Assegnato e verificato').Count;Moved=@($results | Where-Object State -eq 'Spostato e verificato').Count;Failed=@($results | Where-Object { $_.State -notin $success }).Count}
 }
 
 Export-ModuleMember -Function Test-RingWritable,Test-RingEligible,Get-RingManagerSnapshot,New-RingAssignmentPlan,Invoke-RingAssignmentPlan

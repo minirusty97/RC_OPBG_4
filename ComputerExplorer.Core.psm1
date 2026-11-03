@@ -36,6 +36,26 @@ function Read-ExplorerConfiguration {
     [pscustomobject]@{ GraphAuthentication=$graph; Settings = $config; MinimumCharacters = $minimum; CloudCacheMinutes = $cacheMinutes; CloudReadTimeoutSeconds = $cloudTimeout }
 }
 
+function Get-ExplorerSearchControllers {
+    param($Settings)
+    $configured=Get-ExplorerValue $Settings 'DomainControllers' @()
+    $controllers=@($configured | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ } | Select-Object -Unique)
+    if (-not $controllers.Count) { return @() }
+    $search=Get-ExplorerValue $Settings 'Search'
+    $all=Get-ExplorerValue $search 'AllDomainControllers' $false
+    if ($all -isnot [bool]) { throw 'Search.AllDomainControllers deve essere un valore booleano.' }
+    if ($all) { return $controllers }
+    $preferred=([string](Get-ExplorerValue $search 'DomainController' '')).Trim()
+    if ($preferred) {
+        $matches=@($controllers | Where-Object { $_ -ieq $preferred -or $_.Split('.')[0] -ieq $preferred })
+        if ($matches.Count -ne 1) { throw 'Il DC di consultazione deve identificare un solo DC configurato.' }
+        return $matches[0]
+    }
+    $primary=@($controllers | Where-Object { $_.Split('.')[0] -ieq 'srvdc1' })
+    if ($primary.Count -eq 1) { return $primary[0] }
+    return $controllers[0]
+}
+
 function Get-ExplorerGraphCollection {
     param([string]$Uri, [string]$ResourcePath, $ProgressQueue, [string]$Source)
     $visited = @{}
@@ -231,20 +251,30 @@ function Merge-ExplorerResults {
             $groups[$key][$sourceName] += @($record)
         }
     }
-    $excludedGlpi=@{}
+    $excludedGlpi=@{};$serialToNames=@{};$intuneSerialsByName=@{}
+    foreach ($key in $groups.Keys) {
+        $values=@(Get-ExplorerSerials $groups[$key].Intune | Sort-Object -Unique);$intuneSerialsByName[$key]=$values
+        foreach ($serial in $values) { if (-not $serialToNames.ContainsKey($serial)) { $serialToNames[$serial]=New-Object 'Collections.Generic.List[string]' };[void]$serialToNames[$serial].Add($key) }
+    }
     foreach ($record in $Sources.GLPI.Records) {
         $name=([string](Get-ExplorerValue $record 'Name')).Trim();if (-not $name) { continue }
         $nameKey=$name.ToUpperInvariant();$serials=@(Get-ExplorerSerials @($record));$matches=@()
-        if ($Sources.Intune.State -eq 'OK' -and $serials.Count -eq 1) {
-            $matches=@($groups.Keys | Where-Object { @(Get-ExplorerSerials $groups[$_].Intune) -contains $serials[0] })
-        }
+        if ($Sources.Intune.State -eq 'OK' -and $serials.Count -eq 1 -and $serialToNames.ContainsKey($serials[0])) { $matches=$serialToNames[$serials[0]].ToArray() }
         if ($matches.Count) { foreach ($key in $matches) { $groups[$key].GLPI+=@($record) };continue }
-        if ($Sources.Intune.State -eq 'OK' -and $groups.ContainsKey($nameKey) -and @(Get-ExplorerSerials $groups[$nameKey].Intune).Count -gt 0) {
+        if ($Sources.Intune.State -eq 'OK' -and $intuneSerialsByName.ContainsKey($nameKey) -and $intuneSerialsByName[$nameKey].Count -gt 0) {
             if (-not $excludedGlpi.ContainsKey($nameKey)) { $excludedGlpi[$nameKey]=@() }
             $excludedGlpi[$nameKey]+=@($record);continue
         }
         if (-not $groups.ContainsKey($nameKey)) { $groups[$nameKey]=@{Name=$name;AD=@();Entra=@();Intune=@();GLPI=@()} }
         $groups[$nameKey].GLPI+=@($record)
+    }
+    $hybridAdRecords=Get-ExplorerValue $Sources.AD 'HybridRecords' @()
+    $allAd=@(@($Sources.AD.Records)+@($hybridAdRecords))
+    $adByName=@{};$adByGuid=@{}
+    foreach ($record in $allAd) {
+        $key=([string](Get-ExplorerValue $record 'Name')).Trim();$id=[string](Get-ExplorerValue $record 'ObjectGUID')
+        if ($key) { if (-not $adByName.ContainsKey($key)) { $adByName[$key]=New-Object 'Collections.Generic.List[object]' };[void]$adByName[$key].Add($record) }
+        if ($id) { if (-not $adByGuid.ContainsKey($id)) { $adByGuid[$id]=New-Object 'Collections.Generic.List[object]' };[void]$adByGuid[$id].Add($record) }
     }
     $verified = @($Sources.AD.DcSources | Where-Object { $_.Verificato }).Count
     foreach ($group in @($groups.Values | Sort-Object { $_.Name })) {
@@ -307,9 +337,11 @@ function Merge-ExplorerResults {
                 break
             }
         }
-        $hybridRecords=Get-ExplorerValue $Sources.AD 'HybridRecords' @()
         $hybridState=[string](Get-ExplorerValue $Sources.AD 'HybridLookupState' '')
-        $hybrid=Get-ExplorerHybridIdentity -Name $group.Name -AdRecords $group.AD -EntraRecords $entra -AllAdRecords @(@($Sources.AD.Records)+@($hybridRecords)) -AdComplete:($Sources.AD.State -eq 'OK' -and $verified -eq $DomainControllers.Count -and $DomainControllers.Count -gt 0) -EntraComplete:($Sources.Entra.State -eq 'OK') -LookupComplete:($hybridState -eq 'OK') -LookupError:([string](Get-ExplorerValue $Sources.AD 'HybridLookupError' ''))
+        $relevantAd=New-Object 'Collections.Generic.List[object]'
+        if ($adByName.ContainsKey($group.Name)) { $relevantAd.AddRange([object[]]$adByName[$group.Name].ToArray()) }
+        foreach ($device in $entra) { if ($adByGuid.ContainsKey([string]$device.DeviceId)) { $relevantAd.AddRange([object[]]$adByGuid[[string]$device.DeviceId].ToArray()) } }
+        $hybrid=Get-ExplorerHybridIdentity -Name $group.Name -AdRecords $group.AD -EntraRecords $entra -AllAdRecords $relevantAd.ToArray() -AdComplete:($Sources.AD.State -eq 'OK' -and $verified -eq $DomainControllers.Count -and $DomainControllers.Count -gt 0) -EntraComplete:($Sources.Entra.State -eq 'OK') -LookupComplete:($hybridState -eq 'OK') -LookupError:([string](Get-ExplorerValue $Sources.AD 'HybridLookupError' ''))
         if ($hybrid.RequiresConfirmation) { [void]$notes.Add('Identita hybrid AD/Entra discordante: verificare i GUID prima di eliminare.') }
         [pscustomobject]@{
             Name = $group.Name; AD = $adText; ADColor = $adColor; Verificati = ('{0}/{1}' -f $verified, $DomainControllers.Count)
@@ -351,13 +383,14 @@ function Read-ExplorerSource {
         [string]$DomainController, [object[]]$IntuneDevices=@(),
         [System.Collections.IDictionary]$CloudCache = $script:CloudCache,
         [Security.SecureString]$GlpiUserToken, [Security.SecureString]$GlpiAppToken,
-        [switch]$ForceCloudRefresh, $ProgressQueue
+        [switch]$ForceCloudRefresh, $ProgressQueue, [System.Collections.IDictionary]$GlpiLookupCache
     )
     $result = New-ExplorerSource $Source
     try {
         if ($null -eq $Configuration) { $Configuration = Read-ExplorerConfiguration $ConfigPath }
         if ($Source -eq 'AD') {
             $query = @{ NameFragment = $NameFragment; ConfigPath = $ConfigPath; PassThru = $true; ErrorAction = 'Stop' }
+            if ([string]::IsNullOrWhiteSpace($DomainController)) { $readControllers=@(Get-ExplorerSearchControllers $Configuration.Settings);if ($readControllers.Count -eq 1) { $DomainController=$readControllers[0] } }
             if (-not [string]::IsNullOrWhiteSpace($DomainController)) { $query.DomainController = $DomainController }
             $ad = & (Join-Path $PSScriptRoot 'Test-AdLookup.ps1') @query
             $result.Records = @($ad.Computers); $result.DcSources = @($ad.Sources); $result.CheckedAtUtc = $ad.CheckedAtUtc
@@ -387,6 +420,8 @@ function Read-ExplorerSource {
                 }
                 $serials=@(Get-ExplorerSerials $IntuneDevices | Sort-Object -Unique)
                 if ($serials.Count) { $query.Remove('NameFragment');$query.SerialNumber=$serials }
+                $query.BulkRead=$true;$query.ProgressQueue=$ProgressQueue
+                if ($null -ne $GlpiLookupCache) { $query.LookupCache=$GlpiLookupCache }
                 $result.Records = @(Find-GlpiComputer @query)
                 $result.CheckedAtUtc = [datetimeoffset]::UtcNow; $result.State = 'OK'
             }
@@ -413,8 +448,8 @@ function Invoke-ComputerExplorerSearch {
     $config = Read-ExplorerConfiguration $ConfigPath
     $fragment = $NameFragment.Trim()
     if ($fragment.Length -lt $config.MinimumCharacters) { throw "Inserire almeno $($config.MinimumCharacters) caratteri." }
-    $configuredControllers = Get-ExplorerValue $config.Settings 'DomainControllers' @()
-    $controllers = @($configuredControllers | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_.Length -gt 0 } | Sort-Object -Unique)
+    $controllers=@(Get-ExplorerSearchControllers $config.Settings)
+    $glpiLookupCache=@{}
     $sources = [ordered]@{}
     foreach ($name in @('AD', 'Entra', 'Intune', 'GLPI')) {
         $state = 'Esclusa'
@@ -423,7 +458,7 @@ function Invoke-ComputerExplorerSearch {
     }
     Send-ExplorerUpdate $sources $controllers 'Ricerca AD sui DC configurati...' $ProgressQueue
     if ($EnabledSources -contains 'AD') {
-        $sources.AD = Read-ExplorerSource -Source AD -NameFragment $fragment -ConfigPath $ConfigPath -Configuration $config
+        $sources.AD = Read-ExplorerSource -Source AD -NameFragment $fragment -ConfigPath $ConfigPath -Configuration $config -DomainController $(if ($controllers.Count -eq 1) { $controllers[0] } else { '' })
     }
     $cloudSources = @($EnabledSources | Where-Object { $_ -in @('Entra', 'Intune') })
     Send-ExplorerUpdate $sources $controllers 'Graph: verifica sessione e accesso.' $ProgressQueue
@@ -438,11 +473,11 @@ function Invoke-ComputerExplorerSearch {
             $sources[$name].State = 'Errore'; $sources[$name].Error = $graphError
         }
         else {
-            $sources[$name] = Read-ExplorerSource -Source $name -NameFragment $fragment -ConfigPath $ConfigPath -Configuration $config -GlpiUserToken $GlpiUserToken -GlpiAppToken $GlpiAppToken -ForceCloudRefresh:$ForceCloudRefresh
+            $sources[$name] = Read-ExplorerSource -Source $name -NameFragment $fragment -ConfigPath $ConfigPath -Configuration $config -GlpiUserToken $GlpiUserToken -GlpiAppToken $GlpiAppToken -ForceCloudRefresh:$ForceCloudRefresh -GlpiLookupCache $glpiLookupCache
         }
     }
     if ($sources.Intune.State -eq 'OK' -and $sources.GLPI.State -eq 'OK' -and @(Get-ExplorerSerials $sources.Intune.Records).Count) {
-        $extra=Read-ExplorerSource -Source GLPI -NameFragment $fragment -ConfigPath $ConfigPath -Configuration $config -IntuneDevices $sources.Intune.Records -GlpiUserToken $GlpiUserToken -GlpiAppToken $GlpiAppToken
+        $extra=Read-ExplorerSource -Source GLPI -NameFragment $fragment -ConfigPath $ConfigPath -Configuration $config -IntuneDevices $sources.Intune.Records -GlpiUserToken $GlpiUserToken -GlpiAppToken $GlpiAppToken -GlpiLookupCache $glpiLookupCache
         $extra.Records=@(@($sources.GLPI.Records)+@($extra.Records) | Sort-Object GlpiId -Unique);$sources.GLPI=$extra
     }
     if ($sources.AD.State -eq 'OK' -and $sources.Entra.State -eq 'OK') {
@@ -463,4 +498,4 @@ function Get-ExplorerCloudCache { return $script:CloudCache }
 
 function Clear-ExplorerCloudCache { $script:CloudCache.Clear() }
 
-Export-ModuleMember -Function Get-ExplorerHybridIdentity, Get-ExplorerHybridLookupIds, Read-ExplorerHybridAd, Get-ExplorerSerials, New-ExplorerGraphOperationError, Initialize-ExplorerGraphSession, Get-ExplorerGraphPermissionStatus, Read-ExplorerSource, Get-ExplorerCloudCache, Connect-ExplorerGraph, Get-ExplorerGraphCollection, Clear-ExplorerCloudCache, Read-ExplorerConfiguration, Invoke-ComputerExplorerSearch, Merge-ExplorerResults, Format-ExplorerDate, Read-ExplorerGlpiCredentials, Save-ExplorerGlpiCredentials
+Export-ModuleMember -Function Get-ExplorerSearchControllers, Get-ExplorerHybridIdentity, Get-ExplorerHybridLookupIds, Read-ExplorerHybridAd, Get-ExplorerSerials, New-ExplorerGraphOperationError, Initialize-ExplorerGraphSession, Get-ExplorerGraphPermissionStatus, Read-ExplorerSource, Get-ExplorerCloudCache, Connect-ExplorerGraph, Get-ExplorerGraphCollection, Clear-ExplorerCloudCache, Read-ExplorerConfiguration, Invoke-ComputerExplorerSearch, Merge-ExplorerResults, Format-ExplorerDate, Read-ExplorerGlpiCredentials, Save-ExplorerGlpiCredentials

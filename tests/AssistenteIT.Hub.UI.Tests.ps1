@@ -1,4 +1,4 @@
-#requires -version 5.1
+﻿#requires -version 5.1
 $ErrorActionPreference='Stop'
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { Write-Host 'SKIP: native hub workflow requires Windows.';return }
 $root=Split-Path $PSScriptRoot -Parent
@@ -31,6 +31,26 @@ Export-ModuleMember -Function Get-MgContext,Disconnect-MgGraph,Connect-MgGraph,I
  $configuration.Graph.AuthenticationMode='Delegated';$configuration.Graph.TenantId='11111111-1111-4111-8111-111111111111';$configuration.Graph.ClientId='22222222-2222-4222-8222-222222222222'
  $configuration | ConvertTo-Json -Depth 10 | Set-Content $paths.ConfigPath -Encoding UTF8
  $form.Show();[Windows.Forms.Application]::DoEvents()
+ $settingsProbe=@{Seen=$false;Error=''};$settingsTimer=New-Object Windows.Forms.Timer;$settingsTimer.Interval=50
+ $settingsTimer.Add_Tick({
+  $windows=@([Windows.Forms.Application]::OpenForms | Where-Object Text -like 'Impostazioni - *');if (-not $windows.Count) { return };$settingsTimer.Stop();$window=$windows[0]
+  try {
+   $dc=$window.Controls.Find('ExplorerSearchDc',$true)[0];$all=$window.Controls.Find('ExplorerAllSearchDcs',$true)[0]
+   $tabs=@($window.Controls | Where-Object { $_ -is [Windows.Forms.TabControl] })[0]
+   $tabs.SelectedTab=$dc.Parent
+   if ($all.Checked -or $tabs.SelectedTab.Text -ne 'Ricerca computer') { throw 'Consultation defaults or settings tab missing.' }
+   $dc.Text='dc1.example.invalid';$settingsProbe.Seen=$true
+   $bitmap=New-Object Drawing.Bitmap($window.Width,$window.Height)
+   try { $window.DrawToBitmap($bitmap,(New-Object Drawing.Rectangle(0,0,$bitmap.Width,$bitmap.Height)));$memory=New-Object IO.MemoryStream;try { $bitmap.Save($memory,[Drawing.Imaging.ImageFormat]::Png);Write-Host ('SEARCH_SETTINGS_UI_PNG:'+ [Convert]::ToBase64String($memory.ToArray())) } finally {$memory.Dispose()} } finally {$bitmap.Dispose()}
+   $window.Controls.Find('SaveSettings',$true)[0].PerformClick()
+  }
+  catch { $settingsProbe.Error=$_.Exception.Message;$window.Close() }
+ })
+ try { $settingsTimer.Start();$settingsButton.PerformClick() } finally {$settingsTimer.Stop();$settingsTimer.Dispose()}
+ $saved=Get-Content $paths.ConfigPath -Raw|ConvertFrom-Json
+ if (-not $settingsProbe.Seen -or $settingsProbe.Error -or $saved.Search.DomainController -ne 'dc1.example.invalid' -or $saved.Search.AllDomainControllers) { throw ('Search settings UI failed: '+$settingsProbe.Error) }
+ 'PASS: native search settings expose one configured consultation DC, preserve the full controller list and save without opening Graph login.'
+
  $button=$script:ModuleButtons['computer-explorer']
  if ($button.Enabled -or $button.Text -ne 'Apri modulo' -or $accessButton.Parent -ne $toolbar -or $accessButton.Text -ne 'Accesso' -or $releaseButton.Text -ne 'Cerca aggiornamenti') { throw 'Hub exposes login on module cards or enables modules before verification.' }
  if ([AssistenteIT.WindowIdentity]::CurrentId() -ne 'AssistenteIT.Desktop' -or [AssistenteIT.WindowIdentity]::WindowId($form.Handle) -ne 'AssistenteIT.Desktop' -or $null -eq $form.Icon -or -not [Windows.Forms.Application]::RenderWithVisualStyles) { throw 'Application identity, icon or native visual style is missing.' }

@@ -163,7 +163,7 @@ try {
 
         $configPath = Join-Path ([IO.Path]::GetTempPath()) ('removal-' + [guid]::NewGuid().ToString('N') + '.json')
         try {
-            @{DomainControllers=@(1..5 | ForEach-Object { "dc$_.example.invalid" });Search=@{MinimumCharacters=2}} | ConvertTo-Json -Depth 4 | Set-Content $configPath -Encoding UTF8
+            @{DomainControllers=@(1..5 | ForEach-Object { "dc$_.example.invalid" });Search=@{MinimumCharacters=2;DomainController="dc1.example.invalid";AllDomainControllers=$false}} | ConvertTo-Json -Depth 4 | Set-Content $configPath -Encoding UTF8
             Reset-Fixture
             $plan=New-ExplorerRemovalPlan -Names PC-ONE -Sources AD,Entra,Intune -ConfigPath $configPath
             if ($script:Fixture.Writes.Count -ne 0 -or $plan.Entries.Count -ne 1 -or $plan.Entries[0].Targets.Count -ne 8 -or

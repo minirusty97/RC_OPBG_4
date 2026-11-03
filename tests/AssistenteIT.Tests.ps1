@@ -21,9 +21,9 @@ try {
     if ([IO.File]::ReadAllText($paths.ConfigPath) -ne $before -or [IO.File]::ReadAllText($paths.EnvPath) -ne $envBefore) { throw 'Initialization overwrote existing user files.' }
     'PASS: first launch seeds user configuration; later launches preserve existing files.'
 
-    Save-AssistenteITSettings -Paths $paths -DomainControllers @('dc1.example.invalid','dc2.example.invalid') -GlpiBaseUri 'https://glpi.example.invalid/glpi/apirest.php/' -GlpiEnabled $true -UseAppToken $true
+    Save-AssistenteITSettings -Paths $paths -SearchSettings ([pscustomobject]@{DomainController='dc2';AllDomainControllers=$false}) -DomainControllers @('dc1.example.invalid','dc2.example.invalid') -GlpiBaseUri 'https://glpi.example.invalid/glpi/apirest.php/' -GlpiEnabled $true -UseAppToken $true
     $config = Get-Content -LiteralPath $paths.ConfigPath -Raw | ConvertFrom-Json
-    if ($config.Search.MinimumCharacters -ne 4 -or $config.Glpi.BaseUri -ne 'https://glpi.example.invalid/glpi/apirest.php' -or $config.DomainControllers.Count -ne 2 -or [IO.File]::ReadAllText($paths.EnvPath) -match 'existing-(user|app)' -or -not (Test-Path -LiteralPath (Join-Path $paths.ConfigDirectory 'glpi-credentials.dpapi.json'))) { throw 'Settings changed unrelated options or blank inputs erased tokens.' }
+    if ($config.Search.MinimumCharacters -ne 4 -or $config.Search.DomainController -ne "dc2.example.invalid" -or $config.Search.AllDomainControllers -or $config.Glpi.BaseUri -ne 'https://glpi.example.invalid/glpi/apirest.php' -or $config.DomainControllers.Count -ne 2 -or [IO.File]::ReadAllText($paths.EnvPath) -match 'existing-(user|app)' -or -not (Test-Path -LiteralPath (Join-Path $paths.ConfigDirectory 'glpi-credentials.dpapi.json'))) { throw 'Settings changed unrelated options or blank inputs erased tokens.' }
     'PASS: saving connection settings preserves search options and tokens left blank.'
 
     Save-AssistenteITSettings -Paths $paths -DomainControllers 'dc1.example.invalid' -GlpiBaseUri 'https://glpi.example.invalid/apirest.php' -GlpiEnabled $true -UserToken 'new#literal$token' -AppToken 'new-app'
@@ -36,7 +36,7 @@ try {
     'PASS: saved GLPI tokens round-trip through the production credential reader as literal values.'
 
     $before=[IO.File]::ReadAllText($paths.ConfigPath); $envBefore=[IO.File]::ReadAllText($paths.EnvPath)
-    foreach ($bad in @(@{GlpiBaseUri='file:///tmp/invalid'}, @{GlpiBaseUri='https://user:password@example.invalid/apirest.php'}, @{GlpiBaseUri='https://example.invalid/apirest.php';UserToken="bad`nvalue"})) {
+    foreach ($bad in @(@{GlpiBaseUri='https://example.invalid/apirest.php';SearchSettings=[pscustomobject]@{DomainController='outside.example.invalid';AllDomainControllers=$false}}, @{GlpiBaseUri='file:///tmp/invalid'}, @{GlpiBaseUri='https://user:password@example.invalid/apirest.php'}, @{GlpiBaseUri='https://example.invalid/apirest.php';UserToken="bad`nvalue"})) {
         $failed=$false
         try { Save-AssistenteITSettings -Paths $paths -DomainControllers 'dc1.example.invalid' -GlpiEnabled $true @bad }
         catch { $failed=$true }

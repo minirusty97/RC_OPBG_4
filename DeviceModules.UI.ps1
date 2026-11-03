@@ -23,15 +23,15 @@ function Show-DmSelection {
 
 function Show-DmRingReview {
     param($Plan,$Owner)
-    $dialog=New-Object Windows.Forms.Form;$dialog.Name='RingAssignmentReview';$dialog.Text='Conferma assegnazioni Ring';$dialog.ClientSize=New-Object Drawing.Size(960,530);$dialog.MinimumSize=New-Object Drawing.Size(800,450);$dialog.StartPosition='CenterParent';$dialog.Icon=$Owner.Icon;$dialog.Font=$Owner.Font
+    $dialog=New-Object Windows.Forms.Form;$dialog.Name='RingAssignmentReview';$dialog.Text='Conferma modifiche Ring';$dialog.ClientSize=New-Object Drawing.Size(960,530);$dialog.MinimumSize=New-Object Drawing.Size(800,450);$dialog.StartPosition='CenterParent';$dialog.Icon=$Owner.Icon;$dialog.Font=$Owner.Font
     $layout=New-Object Windows.Forms.TableLayoutPanel;$layout.Dock='Fill';$layout.Padding=New-Object Windows.Forms.Padding(12);$layout.RowCount=3
     foreach ($height in @(65,-1,45)) { if ($height -lt 0) { [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent',100))) } else { [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',$height))) } }
-    $intro=New-Object Windows.Forms.Label;$intro.Dock='Fill';$intro.Text='Verificare PC, Object ID e gruppo di destinazione. Saranno aggiunte solo le appartenenze elencate, dopo una nuova verifica. Le schede GLPI sono consultate per identificare il PC.'
+    $intro=New-Object Windows.Forms.Label;$intro.Dock='Fill';$intro.Text='Verificare PC, Object ID, destinazione e origini da rimuovere. La destinazione viene aggiunta e verificata prima di rimuovere solo le origini elencate. Le schede GLPI aiutano a identificare il PC.'
     $text=New-Object Windows.Forms.RichTextBox;$text.Dock='Fill';$text.ReadOnly=$true;$text.WordWrap=$false;$text.Font=New-Object Drawing.Font('Consolas',9)
-    $text.Text=(@($Plan.Items | ForEach-Object { $_.Name+' -> '+$_.TargetRing+"`r`n  Gruppo: "+$_.GroupName+"`r`n  Object ID: "+$_.ObjectId+"`r`n  Device ID: "+$_.DeviceId+"`r`n" }) -join "`r`n")
+    $text.Text=(@($Plan.Items | ForEach-Object { $_.Name+' | '+$_.Action+' -> '+$_.TargetRing+"`r`n  Destinazione: "+$_.GroupName+" / "+$_.GroupId+"`r`n  Rimuovi da: "+$(if ($_.RemoveGroups) {$_.RemoveGroups} else {'Nessuna origine'})+"`r`n  Object ID: "+$_.ObjectId+"`r`n  Device ID: "+$_.DeviceId+"`r`n" }) -join "`r`n")
     $buttons=New-Object Windows.Forms.FlowLayoutPanel;$buttons.Dock='Fill';$buttons.FlowDirection='RightToLeft'
     $cancel=New-Object Windows.Forms.Button;$cancel.Text='Annulla';$cancel.DialogResult='Cancel';$cancel.Width=110
-    $confirm=New-Object Windows.Forms.Button;$confirm.Name='ConfirmRingAssignments';$confirm.Text='Applica assegnazioni';$confirm.Width=200;$confirm.Add_Click({$dialog.DialogResult='OK';$dialog.Close()})
+    $confirm=New-Object Windows.Forms.Button;$confirm.Name='ConfirmRingAssignments';$confirm.Text='Applica modifiche';$confirm.Width=200;$confirm.Add_Click({$dialog.DialogResult='OK';$dialog.Close()})
     $buttons.Controls.AddRange(@($cancel,$confirm));$layout.Controls.Add($intro,0,0);$layout.Controls.Add($text,0,1);$layout.Controls.Add($buttons,0,2);$dialog.Controls.Add($layout);$dialog.CancelButton=$cancel;$dialog.AcceptButton=$cancel
     try { return $dialog.ShowDialog($Owner) -eq 'OK' } finally { $dialog.Dispose() }
 }
@@ -98,7 +98,7 @@ function Update-DmGrid {
         foreach ($row in $visible) {
             $index=$u.Grid.Rows.Add();$gridRow=$u.Grid.Rows[$index];$gridRow.Tag=$row
             foreach ($column in $u.Grid.Columns) { $gridRow.Cells[$column.Name].Value=Get-DmValue $row $column.Name '' }
-            if ($u.Kind -eq 'Ring') { $gridRow.Cells['TargetRing'].ReadOnly=$u.Access.ReadOnly -or -not $row.Orphan }
+            if ($u.Kind -eq 'Ring') { $gridRow.Cells['TargetRing'].ReadOnly=$u.Access.ReadOnly }
             if ($row.SerialConflict -or $row.GlpiState -like 'Duplicati*' -or ($u.Kind -eq 'Hybrid' -and $row.Severity -eq 'Error')) { $gridRow.DefaultCellStyle.BackColor=[Drawing.Color]::MistyRose }
             elseif ($row.GlpiState -eq 'Non verificabile' -or ($u.Kind -eq 'Hybrid' -and $row.Severity -eq 'Warning')) { $gridRow.DefaultCellStyle.BackColor=[Drawing.Color]::LemonChiffon }
             if ($row.Censito -eq 'Si') { $gridRow.Cells['Censito'].Style.ForeColor=[Drawing.Color]::DarkGreen }
@@ -153,7 +153,7 @@ function Save-DmCsv {
     $records=@(foreach ($row in $Rows) {
         $record=[ordered]@{}
         $fields=@('Name','IntuneSerial','GlpiState','GlpiMatchBy','GlpiIds','GlpiNames','GlpiStatus','GlpiGroup','Censito')
-        if ($Report) { $fields=@('AtUtc','Name','Source','Destination','ObjectId','Id','DeviceId','GroupId','TargetRing','State','Error') }
+        if ($Report) { $fields=@('AtUtc','Name','Source','Destination','ObjectId','Id','DeviceId','GroupId','Action','TargetRing','RemoveGroups','RemovedGroupIds','State','Stage','Error') }
         elseif ($Kind -eq 'Hybrid') { $fields+=@('ADGuid','ADDistinguishedName','OUName','EntraObjectIds','EntraDeviceIds','HybridState','IdentityState','EntraCount','RegisteredCount','Anomalies') }
         else { $fields+=@('ObjectId','DeviceId','Rings','State','TargetRing') }
         foreach ($field in $fields) { $record[$field]=ConvertTo-DmCsvValue (Get-DmValue $row $field '') }
@@ -189,7 +189,7 @@ function Complete-DmTask {
             }
             Update-DmGrid;$u.Summary.Text=$result.Summary
             $overview=@($result.Summary,'Lettura UTC: '+$result.CapturedAtUtc)
-            if ($u.Kind -eq 'Ring') { $overview+=@($result.Groups | ForEach-Object { $mode='Solo controllo';if ($_.IsWritable) { $mode='Controllo e destinazione' };$_.Label+' | '+$_.Name+' | ID: '+$_.Id+' | Oggetti transitivi: '+$_.MemberCount+' | '+$mode+' | '+$_.Reason }) }
+            if ($u.Kind -eq 'Ring') { $overview+=@($result.Groups | ForEach-Object { $mode='Solo controllo';if ($_.IsWritable) { $mode='Controllo e modifica' };$_.Label+' | '+$_.Name+' | ID: '+$_.Id+' | Oggetti transitivi: '+$_.MemberCount+' | '+$mode+' | '+$_.Reason }) }
             else { $overview+=@($result.OuStatistics | ForEach-Object { $_.Name+' | Computer: '+$_.Count+' | '+$_.DistinguishedName }) }
             $u.Overview.Text=$overview -join [Environment]::NewLine
             $u.Status.Text='Intune: '+$result.Sources.IntuneState+' '+$result.Sources.IntuneError+' | GLPI: '+$result.Sources.GlpiState+' '+$result.Sources.GlpiError
@@ -230,7 +230,7 @@ function Show-DeviceModuleWindow {
     $summary=New-Object Windows.Forms.Label;$summary.Dock='Fill';$summary.Text='Scansione completa all''apertura, poi filtra l''elenco dei dispositivi.';$summary.Font=New-Object Drawing.Font('Segoe UI',10);$u.Summary=$summary
     $toolbar=New-Object Windows.Forms.FlowLayoutPanel;$toolbar.Dock='Fill';$toolbar.WrapContents=$false
     foreach ($spec in @(@('Refresh','Aggiorna dati (F5)',160),@('Stop','Interrompi lettura',145),@('Export','Esporta CSV',120),@('OpenGlpi','Apri GLPI',115),@('Write','Pulizia Registered',175))) { $button=New-Object Windows.Forms.Button;$button.Name=$spec[0];$button.Text=$spec[1];$button.Width=$spec[2];$button.Height=32;$u[$spec[0]]=$button;$toolbar.Controls.Add($button) }
-    if ($Kind -eq 'Ring') { $u.Write.Text='Verifica assegnazioni';$u.Write.Width=190 }
+    if ($Kind -eq 'Ring') { $u.Write.Text='Verifica modifiche';$u.Write.Width=190 }
     $mode=New-Object Windows.Forms.Label;$mode.AutoSize=$true;$mode.Padding=New-Object Windows.Forms.Padding(8,8,0,0);$mode.Text='Sola lettura';if (-not $GraphAccess.ReadOnly) { $mode.Text='Lettura e scrittura' };$toolbar.Controls.Add($mode)
     $filters=New-Object Windows.Forms.FlowLayoutPanel;$filters.Dock='Fill';$filters.WrapContents=$false
     $queryLabel=New-Object Windows.Forms.Label;$queryLabel.Name='DeviceModuleFilterLabel';$queryLabel.Text='Filtra elenco:';$queryLabel.AutoSize=$true;$queryLabel.Padding=New-Object Windows.Forms.Padding(0,7,0,0)
@@ -241,7 +241,7 @@ function Show-DeviceModuleWindow {
     if ($Kind -eq 'Ring') {
         $ring=New-Object Windows.Forms.ComboBox;$ring.Name='BulkTargetRing';$ring.DropDownStyle='DropDownList';$ring.Width=120;$u.Ring=$ring
         $bulk=New-Object Windows.Forms.Button;$bulk.Name='SetRingForSelected';$bulk.Text='Imposta sui selezionati';$bulk.Width=190;$bulk.Height=28;$u.Bulk=$bulk;$filters.Controls.AddRange(@($ring,$bulk))
-        $bulk.Add_Click({$u=$script:DmUi;if (-not $u.Ring.SelectedItem) { return };foreach ($row in $u.Grid.SelectedRows) { if ($row.Tag.Orphan -and -not $u.Access.ReadOnly) { $row.Cells['TargetRing'].Value=[string]$u.Ring.SelectedItem } }})
+        $bulk.Add_Click({$u=$script:DmUi;if (-not $u.Ring.SelectedItem) { return };foreach ($row in $u.Grid.SelectedRows) { if (-not $u.Access.ReadOnly) { $row.Cells['TargetRing'].Value=[string]$u.Ring.SelectedItem } }})
     }
     $split=New-Object Windows.Forms.SplitContainer;$split.Dock='Fill';$split.Size=New-Object Drawing.Size(1280,570);$split.Orientation='Horizontal';$split.SplitterDistance=330;$split.Panel1MinSize=100;$split.Panel2MinSize=80
     $grid=New-Object Windows.Forms.DataGridView;$grid.Name='DeviceModuleGrid';$grid.Dock='Fill';$grid.AutoGenerateColumns=$false;$grid.AllowUserToAddRows=$false;$grid.AllowUserToDeleteRows=$false;$grid.AllowUserToResizeRows=$false;$grid.RowHeadersVisible=$false;$grid.MultiSelect=$true;$grid.SelectionMode='FullRowSelect';$grid.BackgroundColor=[Drawing.SystemColors]::Window;$grid.ClipboardCopyMode='EnableAlwaysIncludeHeaderText';$grid.AlternatingRowsDefaultCellStyle.BackColor=[Drawing.Color]::FromArgb(247,249,252);$u.Grid=$grid
@@ -274,8 +274,8 @@ function Show-DeviceModuleWindow {
         if ($u.Kind -eq 'Hybrid') { Start-DmTask Candidates ([string[]]@($u.Grid.SelectedRows | ForEach-Object { $_.Tag.Key })) }
         else {
             [void]$u.Grid.EndEdit()
-            $assignments=@($u.Grid.Rows | Where-Object { $_.Tag.Orphan -and $_.Tag.TargetRing } | ForEach-Object { [pscustomobject]@{ObjectId=$_.Tag.ObjectId;TargetRing=$_.Tag.TargetRing} })
-            if (-not $assignments.Count) { $u.Status.Text='Scegliere un Ring nelle righe degli orfani, oppure impostarlo sui selezionati.';return };Start-DmTask RingPlan $assignments
+            $assignments=@($u.Grid.Rows | Where-Object { $_.Tag.TargetRing } | ForEach-Object { [pscustomobject]@{ObjectId=$_.Tag.ObjectId;TargetRing=$_.Tag.TargetRing} })
+            if (-not $assignments.Count) { $u.Status.Text='Scegliere un Ring di destinazione nelle righe, oppure impostarlo sui selezionati.';return };Start-DmTask RingPlan $assignments
         }
     })
     $u.OpenGlpi.Add_Click({$u=$script:DmUi;if ($u.Grid.SelectedRows.Count -ne 1 -or $u.Grid.SelectedRows[0].Tag.GlpiRecords.Count -ne 1) { return };$config=Read-ExplorerConfiguration $u.ConfigPath;$base=([string]$config.Settings.Glpi.BaseUri).TrimEnd('/');$id=[int]$u.Grid.SelectedRows[0].Tag.GlpiRecords[0].GlpiId;if ($base -match '^https?://' -and $base -match '/apirest\.php$' -and $id -gt 0) { [void][Diagnostics.Process]::Start(($base -replace '/apirest\.php$','')+'/front/computer.form.php?id='+$id) }})

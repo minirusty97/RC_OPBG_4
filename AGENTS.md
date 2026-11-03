@@ -22,7 +22,9 @@ manifest; a previous chat or local copy may be behind the repository.
   deletion and no weakening of protected-object checks for deletion.
 - For Ring assignments use Entra object IDs, all configured monitored groups,
   manual destination selection and a fresh membership check. Never silently
-  skip an unreadable group or move/remove existing memberships.
+  skip an unreadable group. Moves require an explicit origin/destination preview:
+  add and verify the destination before removing only confirmed direct origins
+  configured as modifiable. Delete membership /$ref only, never device objects.
 - Do not operate on the company's live devices or GLPI data for verification.
   Use isolated fixtures, native Windows UI tests and installer/OTA checks.
 - Follow `docs/Versionamento.md`. One product version in `assistente-it.json`;

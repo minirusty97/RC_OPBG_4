@@ -43,8 +43,15 @@ try {
     }
     function script:Read-ExplorerGlpiCredentials {param($Path,$UseAppToken);[pscustomobject]@{User=(ConvertTo-SecureString synthetic -AsPlainText -Force);App=(ConvertTo-SecureString synthetic -AsPlainText -Force)} }
     function script:Find-GlpiComputer {
-        param($BaseUri,$UserToken,$AppToken,$PageSize,$TimeoutSeconds,$SerialNumber,$ExactName)
+        param($BaseUri,$UserToken,$AppToken,$PageSize,$TimeoutSeconds,$SerialNumber,$ExactName,$BulkRead,$LookupCache,$ProgressQueue)
         [void]$script:DmFixture.Finds.Add(@{Serials=$SerialNumber;Names=$ExactName})
+        if ($script:DmFixture.Mode -eq 'GlpiDenied') { throw 'Synthetic GLPI read failure.' }
+        if ($SerialNumber -and $script:DmFixture.Mode -like 'SerialMiss*') { return @() }
+        if ($ExactName -and $script:DmFixture.Mode -like 'SerialMiss*') {
+            $serial='WRONG-SERIAL';if ($script:DmFixture.Mode -eq 'SerialMissNoSerial') { $serial='' }
+            $found=[pscustomobject]@{GlpiId=30;Name=' SAME-NAME ';SerialNumber=$serial;State='Assegnato';GroupPath='CENSITO';GroupName='CENSITO';GroupVerified=$true}
+            if ($script:DmFixture.Mode -eq 'SerialMissDuplicate') { return @($found,($found|Select-Object *)) };return @($found)
+        }
         if ($SerialNumber) { return @([pscustomobject]@{GlpiId=10;Name='GLPI-OTHER-NAME';SerialNumber='REAL-SERIAL';State='Assegnato';GroupPath='CENSITO';GroupName='CENSITO';GroupVerified=$true}) }
         @([pscustomobject]@{GlpiId=20;Name='SAME-NAME';SerialNumber='WRONG-FOR-FIRST';State='Ritirato';GroupPath='';GroupName='';GroupVerified=$true})
     }
@@ -54,6 +61,20 @@ try {
     $sources=Add-DmInventory -Rows $rows -Config $config -Access $access -EnvPath synthetic
     if ($rows[0].GlpiIds -ne '10' -or $rows[0].GlpiNames -ne 'GLPI-OTHER-NAME' -or $rows[0].IntuneSerial -ne 'REAL-SERIAL' -or $rows[0].Censito -ne 'Si' -or $rows[1].GlpiIds -ne '20' -or $rows[1].IntuneRecords.Count -ne 0 -or $script:DmFixture.Finds.Count -ne 2) { throw 'Serial-first inventory attached an unrelated namesake or lost exact-name fallback.' }
     'PASS: both modules correlate Intune by Entra Device ID, prefer the verified serial over GLPI namesakes, keep renamed GLPI assets and use exact-name batches only when no serial is available.'
+    foreach ($mode in @('SerialMiss','SerialMissNoSerial','SerialMissDuplicate')) {
+        $script:DmFixture.Mode=$mode;$script:DmFixture.Finds.Clear()
+        $fallback=@([pscustomobject]@{Name='SAME-NAME';DeviceIds=@('33333333-3333-4333-8333-333333333333')})
+        $sources=Add-DmInventory -Rows $fallback -Config $config -Access $access -EnvPath synthetic
+        if ($sources.GlpiState -ne 'OK' -or $fallback[0].GlpiState -eq 'Assente' -or $fallback[0].GlpiMatchBy -notlike 'Nome esatto;*' -or -not $fallback[0].GlpiError -or $script:DmFixture.Finds.Count -ne 2) { throw ('A serial miss hid an existing exact-name asset: '+$mode) }
+        if ($mode -eq 'SerialMissDuplicate' -and $fallback[0].GlpiState -notlike 'Duplicati*') { throw 'Name fallback hid duplicates.' }
+        if ($mode -eq 'SerialMiss' -and -not $fallback[0].SerialConflict) { throw 'Name fallback claimed verified hardware despite conflicting serial.' }
+    }
+    'PASS: a successful serial miss falls back to trimmed exact name, exposes missing/mismatched serials and preserves duplicate ambiguity.'
+    $script:DmFixture.Mode='GlpiDenied';$script:DmFixture.Finds.Clear()
+    $failure=@([pscustomobject]@{Name='SAME-NAME';DeviceIds=@('33333333-3333-4333-8333-333333333333')})
+    $sources=Add-DmInventory -Rows $failure -Config $config -Access $access -EnvPath synthetic
+    if ($sources.GlpiState -ne 'Errore' -or $failure[0].GlpiState -ne 'Non verificabile' -or $script:DmFixture.Finds.Count -ne 1) { throw 'A serial read error was hidden as absence or retried as a name lookup.' }
+    'PASS: failed GLPI serial requests remain explicit errors and never become false absences through fallback.'
     $script:DmFixture.Mode='IntuneDenied'
     $sources=Add-DmInventory -Rows @() -Config $config -Access $access -EnvPath synthetic
     if ($sources.IntuneState -ne 'Errore') { throw 'Intune denial became an empty successful inventory.' }
