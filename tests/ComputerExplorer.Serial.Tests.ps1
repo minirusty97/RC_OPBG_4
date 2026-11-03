@@ -19,7 +19,7 @@ try {
   'PASS: absent Intune serials keep name lookup, while GLPI-only ambiguity can proceed to the explicit loss confirmation.'
   function script:Import-Module { [CmdletBinding()]param($Name) }
   $script:SerialQuery=$null
-  function script:Find-GlpiComputer { [CmdletBinding()]param($BaseUri,$NameFragment,$SerialNumber,$UserToken,$PageSize,$TimeoutSeconds) $script:SerialQuery=@{Name=$NameFragment;Serial=$SerialNumber};@() }
+  function script:Find-GlpiComputer { [CmdletBinding()]param($BaseUri,$NameFragment,$SerialNumber,$UserToken,$PageSize,$TimeoutSeconds,$BulkRead,$LookupCache,$ProgressQueue) $script:SerialQuery=@{Name=$NameFragment;Serial=$SerialNumber};@() }
   $configuration=[pscustomobject]@{Settings=[pscustomobject]@{Glpi=[pscustomobject]@{Enabled=$true;BaseUri='https://example.invalid/apirest.php';UseAppToken=$false}}}
   $token=ConvertTo-SecureString 'synthetic' -AsPlainText -Force
   try {

@@ -101,12 +101,23 @@ function Save-AssistenteITSettings {
         [Parameter(Mandatory=$true)]$Paths,
         [Parameter(Mandatory=$true)][string[]]$DomainControllers,
         [string]$GlpiBaseUri='', [bool]$GlpiEnabled, [bool]$UseAppToken=$true,
-        [string]$UserToken, [string]$AppToken, $GraphAuthentication, $HybridJoinSettings, $RingManagerSettings
+        [string]$UserToken, [string]$AppToken, $GraphAuthentication, $HybridJoinSettings, $RingManagerSettings, $SearchSettings
     )
     $graph=$null
     if ($PSBoundParameters.ContainsKey('GraphAuthentication')) { $graph=ConvertTo-ExplorerGraphAuthentication $GraphAuthentication }
     $controllers = @($DomainControllers | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
     if ($controllers.Count -eq 0 -or @($controllers | Where-Object { $_ -notmatch '^[a-zA-Z0-9][a-zA-Z0-9.-]*$' }).Count -gt 0) { throw 'Inserire almeno un DC valido, uno per riga.' }
+    if ($null -ne $SearchSettings) {
+        $preferred=([string](Get-ExplorerGraphSetting $SearchSettings 'DomainController' '')).Trim()
+        $all=Get-ExplorerGraphSetting $SearchSettings 'AllDomainControllers' $false
+        if ($all -isnot [bool]) { throw 'La ricerca su tutti i DC deve essere un valore booleano.' }
+        if ($preferred) {
+            $matched=@($controllers | Where-Object { $_ -ieq $preferred -or $_.Split('.')[0] -ieq $preferred })
+            if ($matched.Count -ne 1) { throw 'Selezionare un solo DC di consultazione incluso nell elenco GLPI / AD.' }
+            $preferred=$matched[0]
+        }
+        $SearchSettings=[pscustomobject]@{DomainController=$preferred;AllDomainControllers=$all}
+    }
     $uriText = $GlpiBaseUri.Trim().TrimEnd('/')
     if ($GlpiEnabled -and -not $uriText) { throw 'Specificare l''URL API di GLPI.' }
     if ($uriText) {
@@ -136,7 +147,7 @@ function Save-AssistenteITSettings {
     }
     $configuration = Get-Content -LiteralPath $Paths.ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($null -ne $graph) { $configuration | Add-Member -NotePropertyName Graph -NotePropertyValue $graph -Force }
-    foreach ($section in @(@{Name='HybridJoin';Value=$HybridJoinSettings},@{Name='RingManager';Value=$RingManagerSettings})) {
+    foreach ($section in @(@{Name='HybridJoin';Value=$HybridJoinSettings},@{Name='RingManager';Value=$RingManagerSettings},@{Name='Search';Value=$SearchSettings})) {
         if ($null -ne $section.Value) {
             $existing=Get-ExplorerGraphSetting $configuration $section.Name ([pscustomobject]@{})
             foreach ($property in $section.Value.PSObject.Properties) { $existing | Add-Member -Force NoteProperty $property.Name $property.Value }

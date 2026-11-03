@@ -29,7 +29,14 @@ CSV consentono di esaminare le eccezioni.
 GLPI usa i token delle impostazioni. Il seriale proviene dalle registrazioni
 Intune collegate tramite Device ID Entra, mai da un Managed Device ID usato
 come identificativo Entra. La ricerca GLPI preferisce il seriale, anche con
-nome GLPI diverso; senza seriale usa nomi esatti. Stato, ID, gruppo, CENSITO,
+nome GLPI diverso. Se una ricerca seriale completata non trova corrispondenze,
+prova anche il nome esatto, come per i PC senza seriale. Una scheda trovata
+solo per nome viene mostrata come Presente (solo nome), con avviso se il
+seriale Intune manca o differisce in GLPI. L identita hardware non viene
+confermata automaticamente e i duplicati restano espliciti. Un errore API
+non attiva il ripiego e resta Non verificabile.
+Le letture GLPI dei dettagli sono raggruppate e riutilizzate nella singola
+scansione; la cache non e condivisa tra ricerche o credenziali. Stato, ID, gruppo, CENSITO,
 inventario e dati Intune sono visibili nei dettagli. Assenza, duplicati ed
 errori di lettura sono distinti.
 

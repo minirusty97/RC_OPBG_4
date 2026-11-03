@@ -9,11 +9,15 @@ function ConvertTo-ExplorerIdentityGuid {
 
 function Get-ExplorerHybridLookupIds {
     param([object[]]$EntraRecords,[object[]]$AdRecords,[string[]]$Controllers)
-    foreach ($record in @($EntraRecords | Where-Object { (Get-ExplorerValue $_ 'TrustType') -eq 'ServerAd' })) {
-        $id=ConvertTo-ExplorerIdentityGuid (Get-ExplorerValue $record 'DeviceId')
-        if (-not $id) { continue }
-        $present=@($AdRecords | Where-Object { (ConvertTo-ExplorerIdentityGuid (Get-ExplorerValue $_ 'ObjectGUID')) -eq $id } | ForEach-Object { $_.DomainController } | Sort-Object -Unique)
-        if (@($Controllers | Where-Object { $present -notcontains $_ }).Count) { $id }
+    $byGuid=@{}
+    foreach ($ad in $AdRecords) {
+        $id=ConvertTo-ExplorerIdentityGuid (Get-ExplorerValue $ad 'ObjectGUID')
+        if ($id) { if (-not $byGuid.ContainsKey($id)) { $byGuid[$id]=@{} };$byGuid[$id][[string]$ad.DomainController]=$true }
+    }
+    foreach ($record in $EntraRecords) {
+        if ((Get-ExplorerValue $record 'TrustType') -ne 'ServerAd') { continue }
+        $id=ConvertTo-ExplorerIdentityGuid (Get-ExplorerValue $record 'DeviceId');if (-not $id) { continue }
+        foreach ($dc in $Controllers) { if (-not $byGuid.ContainsKey($id) -or -not $byGuid[$id].ContainsKey($dc)) { $id;break } }
     }
 }
 

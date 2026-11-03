@@ -105,7 +105,7 @@ function ConvertFrom-GlpiSecureString {
 function Invoke-GlpiRead {
     param([hashtable]$Session, [string]$Path, [hashtable]$Query = @{})
     # La lista di percorsi evita l'uso del connettore per modificare gli asset.
-    if ($Path -notmatch '^(initSession|killSession|listSearchOptions/Computer|search/Computer|Computer/[1-9][0-9]*|State/[1-9][0-9]*|Group/[1-9][0-9]*)$') {
+    if ($Path -notmatch '^(initSession|killSession|listSearchOptions/Computer|search/Computer|getMultipleItems|Computer/[1-9][0-9]*|State/[1-9][0-9]*|Group/[1-9][0-9]*)$') {
         throw "Endpoint GLPI non previsto dal connettore di consultazione."
     }
     $uri = $Session.BaseUri + '/' + $Path
@@ -119,6 +119,31 @@ function Invoke-GlpiRead {
         -ContentType 'application/json' -TimeoutSec $Session.TimeoutSeconds -ErrorAction Stop
 }
 
+function Get-GlpiLookupScope {
+    param([uri]$BaseUri,[Security.SecureString]$UserToken,[Security.SecureString]$AppToken)
+    $hash=[Security.Cryptography.SHA256]::Create()
+    try { $value=$BaseUri.AbsoluteUri.TrimEnd('/')+'|'+(ConvertFrom-GlpiSecureString $UserToken)+'|'+(ConvertFrom-GlpiSecureString $AppToken);return [BitConverter]::ToString($hash.ComputeHash([Text.Encoding]::UTF8.GetBytes($value))).Replace('-','') }
+    finally { $value=$null;$hash.Dispose() }
+}
+
+function Get-GlpiComputerBatch {
+    param($Session,[int[]]$Ids)
+    $records=@{};$wanted=@($Ids | Sort-Object -Unique)
+    for ($start=0;$start -lt $wanted.Count;$start+=20) {
+        $batch=@($wanted[$start..([Math]::Min($start+19,$wanted.Count-1))]);$query=@{'get_hateoas'='0';'expand_dropdowns'='0'}
+        for ($i=0;$i -lt $batch.Count;$i++) { $query['items['+$i+'][itemtype]']='Computer';$query['items['+$i+'][items_id]']=$batch[$i] }
+        $page=Invoke-GlpiRead -Session $Session -Path 'getMultipleItems' -Query $query
+        $rows=@($page)
+        if ($rows.Count -ne $batch.Count) { throw 'Lettura multipla GLPI incompleta: schede mancanti o non leggibili.' }
+        foreach ($row in $rows) {
+            $id=0
+            if (-not [int]::TryParse([string](Get-GlpiValue $row 'id'),[ref]$id) -or $batch -notcontains $id -or $records.ContainsKey($id)) { throw 'Identita delle schede GLPI non valida nella lettura multipla.' }
+            $records[$id]=$row
+        }
+    }
+    return ,$records
+}
+
 function Find-GlpiComputer {
     [CmdletBinding(DefaultParameterSetName='Name')]
     param(
@@ -129,7 +154,8 @@ function Find-GlpiComputer {
         [Parameter(Mandatory = $true)][Security.SecureString]$UserToken,
         [Security.SecureString]$AppToken,
         [ValidateRange(1, 500)][int]$PageSize = 100,
-        [ValidateRange(1, 120)][int]$TimeoutSeconds = 20
+        [ValidateRange(1, 120)][int]$TimeoutSeconds = 20,
+        [switch]$BulkRead, [System.Collections.IDictionary]$LookupCache, $ProgressQueue
     )
 
     if (-not $BaseUri.IsAbsoluteUri -or $BaseUri.Scheme -notin @('http', 'https') -or
@@ -150,6 +176,9 @@ function Find-GlpiComputer {
     if (-not $bySerial -and -not $byExactName -and -not $fragment) { throw 'Inserire una parte del nome macchina.' }
     if ($UserToken.Length -eq 0) { throw "User token GLPI vuoto." }
 
+    $serialSet=@{};foreach ($serial in $serials) { $serialSet[$serial]=$true }
+    $nameSet=@{};foreach ($name in $exactNames) { $nameSet[$name]=$true }
+
     $session = @{
         BaseUri = $BaseUri.AbsoluteUri.TrimEnd('/')
         TimeoutSeconds = $TimeoutSeconds
@@ -159,6 +188,8 @@ function Find-GlpiComputer {
     $stateCache = @{}
     $groupCache = @{}
     $results = @{}
+    if ($null -eq $LookupCache) { $LookupCache=@{} }
+    $scope='';if ($BulkRead) { $scope=Get-GlpiLookupScope $BaseUri $UserToken $AppToken }
 
     try {
         if ($null -ne $AppToken -and $AppToken.Length -gt 0) {
@@ -234,16 +265,31 @@ function Find-GlpiComputer {
                 throw "Paginazione GLPI incompleta: risultati ancora attesi dal server."
             }
 
+            $batchComputers=@{}
+            if ($BulkRead) {
+                $needed=@(foreach ($record in $records) {
+                    $id=Resolve-GlpiComputerId -Row $record.Values -IdOption $idOption -IndexedId $record.IndexedId
+                    if (-not $results.ContainsKey($id) -and -not $LookupCache.Contains($scope+'|Computer|'+$id)) { $id }
+                })
+                if ($needed.Count) { $batchComputers=Get-GlpiComputerBatch -Session $session -Ids $needed }
+            }
             foreach ($record in $records) {
                 $row = $record.Values
                 $id = Resolve-GlpiComputerId -Row $row -IdOption $idOption -IndexedId $record.IndexedId
                 if ($results.ContainsKey($id)) { continue }
-                $computer = Invoke-GlpiRead -Session $session -Path "Computer/$id"
+                $cacheKey=$scope+'|Computer|'+$id
+                if ($BulkRead -and $LookupCache.Contains($cacheKey)) {
+                    $cached=$LookupCache[$cacheKey]
+                    $name=[string]$cached.Name;$serial=([string]$cached.SerialNumber).Trim().ToUpperInvariant()
+                    if (($bySerial -and $serialSet.ContainsKey($serial)) -or ($byExactName -and $nameSet.ContainsKey($name.Trim())) -or (-not $bySerial -and -not $byExactName -and $name.IndexOf($fragment,[StringComparison]::OrdinalIgnoreCase) -ge 0)) { $results[$id]=$cached }
+                    continue
+                }
+                if ($BulkRead) { $computer=$batchComputers[$id] } else { $computer = Invoke-GlpiRead -Session $session -Path "Computer/$id" }
                 if ((Get-GlpiValue $computer 'id') -ne $id) { throw "Risposta Computer GLPI non valida." }
                 $name = [string](Get-GlpiValue $computer 'name')
                 if ([string](Get-GlpiValue $computer 'is_deleted') -in @('1','true')) { continue }
-                if ($bySerial) { if ($serials -notcontains ([string](Get-GlpiValue $computer 'serial')).Trim().ToUpperInvariant()) { continue } }
-                elseif ($byExactName) { if ($exactNames -notcontains $name) { continue } }
+                if ($bySerial) { if (-not $serialSet.ContainsKey(([string](Get-GlpiValue $computer 'serial')).Trim().ToUpperInvariant())) { continue } }
+                elseif ($byExactName) { if (-not $nameSet.ContainsKey($name.Trim())) { continue } }
                 elseif ($name.IndexOf($fragment, [StringComparison]::OrdinalIgnoreCase) -lt 0) { continue }
 
                 $stateId = [int](Get-GlpiValue $computer 'states_id')
@@ -299,8 +345,10 @@ function Find-GlpiComputer {
                     LastInventory = Get-GlpiValue $computer 'last_inventory_update'
                     Error = $null
                 }
+                if ($BulkRead) { $LookupCache[$cacheKey]=$results[$id] }
             }
             $offset += $records.Count
+            if ($null -ne $ProgressQueue) { $ProgressQueue.Enqueue([pscustomobject]@{Source='GLPI';Progress=('Schede GLPI lette: '+$offset+'/'+$total);Message=('Schede GLPI lette: '+$offset+'/'+$total)}) }
         } while ($offset -lt $total)
         }
     }

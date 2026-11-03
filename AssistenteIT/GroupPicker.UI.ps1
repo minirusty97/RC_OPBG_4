@@ -32,14 +32,14 @@ function Show-AssistenteITGroupPicker {
     $picker=New-Object Windows.Forms.Form;$picker.Name='RingGroupPicker';$picker.Text='Selezione gruppi Ring da Entra';$picker.ClientSize=New-Object Drawing.Size(1080,640);$picker.MinimumSize=New-Object Drawing.Size(900,540);$picker.StartPosition='CenterParent';$picker.Icon=$Owner.Icon;$picker.Font=$Owner.Font
     $layout=New-Object Windows.Forms.TableLayoutPanel;$layout.Dock='Fill';$layout.Padding=New-Object Windows.Forms.Padding(12);$layout.RowCount=4
     foreach ($height in @(70,45,-1,55)) { if ($height -lt 0) { [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent',100))) } else { [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',$height))) } }
-    $hint=New-Object Windows.Forms.Label;$hint.Dock='Fill';$hint.Text='Controlla: esclude gli appartenenti da quelli orfani. Destinazione: consente di aggiungere PC a quel gruppo, se statico e modificabile. Le etichette devono essere univoche. Cerca per inizio del nome; vuoto legge tutti i gruppi. Solo i gruppi spuntati vengono salvati.'
+    $hint=New-Object Windows.Forms.Label;$hint.Dock='Fill';$hint.Text='Controlla: esclude gli appartenenti da quelli orfani. Modifica: consente inserimenti e rimozioni esplicite per quel gruppo, se statico e modificabile. Le etichette devono essere univoche. Cerca per inizio del nome; vuoto legge tutti i gruppi. Solo i gruppi spuntati vengono salvati.'
     $search=New-Object Windows.Forms.FlowLayoutPanel;$search.Dock='Fill';$search.WrapContents=$false
     $prefix=New-Object Windows.Forms.TextBox;$prefix.Name='GroupNamePrefix';$prefix.Text='INTUNE';$prefix.Width=500
     $load=New-Object Windows.Forms.Button;$load.Name='LoadEntraGroups';$load.Text='Carica gruppi Entra';$load.Width=190;$load.Height=29
     $status=New-Object Windows.Forms.Label;$status.Width=310;$status.Height=38;$status.Text='Accesso del wrapper richiesto per leggere Entra.'
     $search.Controls.AddRange(@($prefix,$load,$status))
     $grid=New-Object Windows.Forms.DataGridView;$grid.Name='AvailableRingGroups';$grid.Dock='Fill';$grid.AllowUserToAddRows=$false;$grid.AllowUserToDeleteRows=$false;$grid.RowHeadersVisible=$false;$grid.AutoSizeColumnsMode='Fill';$grid.MultiSelect=$false
-    foreach ($spec in @(@('Monitor','Controlla',40),@('Destination','Destinazione',45))) { $column=New-Object Windows.Forms.DataGridViewCheckBoxColumn;$column.Name=$spec[0];$column.HeaderText=$spec[1];$column.FillWeight=$spec[2];[void]$grid.Columns.Add($column) }
+    foreach ($spec in @(@('Monitor','Controlla',40),@('Destination','Modifica',45))) { $column=New-Object Windows.Forms.DataGridViewCheckBoxColumn;$column.Name=$spec[0];$column.HeaderText=$spec[1];$column.FillWeight=$spec[2];[void]$grid.Columns.Add($column) }
     foreach ($spec in @(@('Label','Etichetta',65),@('Name','Nome gruppo Entra',180),@('Id','Object ID gruppo',160),@('Reason','Assegnazione / avvisi',120))) { $column=New-Object Windows.Forms.DataGridViewTextBoxColumn;$column.Name=$spec[0];$column.HeaderText=$spec[1];$column.FillWeight=$spec[2];$column.ReadOnly=$spec[0] -ne 'Label';[void]$grid.Columns.Add($column) }
     Set-AssistenteITGroupPickerRows -Grid $grid -Groups @() -Selected $Configured
     $grid.Add_CurrentCellDirtyStateChanged({if ($grid.IsCurrentCellDirty) { [void]$grid.CommitEdit('Commit') }})

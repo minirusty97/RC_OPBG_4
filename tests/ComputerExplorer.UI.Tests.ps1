@@ -47,6 +47,14 @@ try {
     Show-ExplorerSnapshot $snapshot
     if ($grid.SelectedRows.Count -ne 2) { throw 'Selection not retained after snapshot update.' }
     'PASS: native WinForms counters, multiple selection and removal button state.'
+    $snapshot | Add-Member NoteProperty RowsRevision 50
+    Show-ExplorerSnapshot $snapshot;$sameRow=$grid.Rows[0]
+    $pageUpdate=$snapshot|Select-Object *;$pageUpdate.Message='Synthetic page progress'
+    Show-ExplorerSnapshot $pageUpdate
+    if (-not [object]::ReferenceEquals($sameRow,$grid.Rows[0]) -or $grid.SelectedRows.Count -ne 2 -or $status.Text -notlike 'Synthetic page progress*') { throw 'Progress rebuilt native rows, lost selection or failed to update status.' }
+    $snapshot.PSObject.Properties.Remove('RowsRevision')
+    'PASS: native page progress preserves existing grid rows and selection while updating source/status controls.'
+
     if ($grid.AllowUserToResizeRows -or $grid.AutoSizeRowsMode -ne 'None') { throw 'Result row heights can still change.' }
     $script:CopyCell=$grid.Rows[0].Cells['Name']; $copyCellItem.PerformClick()
     if ([Windows.Forms.Clipboard]::GetText() -ne 'PC-UI-1') { throw 'Cell copy did not use displayed text.' }

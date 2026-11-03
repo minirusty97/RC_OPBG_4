@@ -118,7 +118,7 @@ function Close-TestState {
 }
 
 try {
-    @{DomainControllers=@(1..5|ForEach-Object{"dc$_.example.invalid"});Search=@{MinimumCharacters=2;CloudCacheMinutes=5};Glpi=@{Enabled=$false}}|ConvertTo-Json -Depth 4|Set-Content $configPath -Encoding UTF8
+    @{DomainControllers=@(1..5|ForEach-Object{"dc$_.example.invalid"});Search=@{MinimumCharacters=2;CloudCacheMinutes=5;AllDomainControllers=$true};Glpi=@{Enabled=$false}}|ConvertTo-Json -Depth 4|Set-Content $configPath -Encoding UTF8
     $cache=New-TestState $true;$task=$null
     try {
         $cache.State.AdGates['dc2.example.invalid']=New-Object Threading.ManualResetEventSlim($false)
@@ -265,7 +265,7 @@ try {
     }
     finally{Close-TestSearch $task;Close-TestState $cache}
 
-    @{DomainControllers=@(1..5|ForEach-Object{"dc$_.example.invalid"});Search=@{MinimumCharacters=2;CloudCacheMinutes=5;CloudReadTimeoutSeconds=1};Glpi=@{Enabled=$false}}|ConvertTo-Json -Depth 4|Set-Content $configPath -Encoding UTF8
+    @{DomainControllers=@(1..5|ForEach-Object{"dc$_.example.invalid"});Search=@{MinimumCharacters=2;CloudCacheMinutes=5;AllDomainControllers=$true;CloudReadTimeoutSeconds=1};Glpi=@{Enabled=$false}}|ConvertTo-Json -Depth 4|Set-Content $configPath -Encoding UTF8
     foreach ($blocked in @('Entra','Intune')) {
         $cache=New-TestState;$cache.State.Gates[$blocked].Reset();$task=$null
         $cache['tenant|'+$blocked]=[pscustomobject]@{Records=@('stale')}
@@ -288,7 +288,7 @@ try {
         }
         finally{Close-TestSearch $task;Close-TestState $cache}
     }
-    @{DomainControllers=@(1..5|ForEach-Object{"dc$_.example.invalid"});Search=@{MinimumCharacters=2;CloudCacheMinutes=5};Glpi=@{Enabled=$false}}|ConvertTo-Json -Depth 4|Set-Content $configPath -Encoding UTF8
+    @{DomainControllers=@(1..5|ForEach-Object{"dc$_.example.invalid"});Search=@{MinimumCharacters=2;CloudCacheMinutes=5;AllDomainControllers=$true};Glpi=@{Enabled=$false}}|ConvertTo-Json -Depth 4|Set-Content $configPath -Encoding UTF8
 
     foreach ($lookupFailure in @($false,$true)) {
         $cache=New-TestState;$task=$null;$cache.State.Hybrid=$true;$cache.State.HybridFailure=$lookupFailure

@@ -59,13 +59,13 @@ foreach ($kind in @('Hybrid','Ring')) {
   $u.Query.Clear()
   $access.ReadOnly=$false;Update-DmGrid;$u.Grid.Rows[0].Selected=$true;Update-DmButtons
   if (-not $u.Write.Enabled) { throw 'Verified write access did not enable selected-device actions.' }
-  if ($kind -eq 'Ring') { $u.Grid.SelectAll();$u.Ring.SelectedItem='Ring1';$u.Bulk.PerformClick();if ($row.TargetRing -ne 'Ring1' -or $second.TargetRing -or -not $u.Grid.Rows[1].Cells['TargetRing'].ReadOnly) { throw 'Bulk target failed for the orphan or exposed the already assigned device for writing.' } }
+  if ($kind -eq 'Ring') { $u.Grid.SelectAll();$u.Ring.SelectedItem='Ring1';$u.Bulk.PerformClick();if ($row.TargetRing -ne 'Ring1' -or $second.TargetRing -ne 'Ring1' -or $u.Grid.Rows[1].Cells['TargetRing'].ReadOnly) { throw 'Bulk target failed for an orphan or an already assigned selected device.' } }
   Write-ModuleUiImage $window $kind
  }
  finally { if ($null -ne $window) { $u=$script:DmUi;$u.Timer.Stop();$u.Timer.Dispose();$u.Worker.Close();$u.Worker.Dispose();$window.Icon.Dispose();$window.Dispose() } }
 }
 'PASS: both modules start exactly one full scan on first display, initially show all statuses, filter loaded rows without rescanning and refresh the complete inventory independently of active filters.'
-'PASS: both native module windows share fonts, icons, multi-selection, filters, counters, GLPI detail and independent read-only/write controls; Ring bulk assignment updates only selected orphans.'
+'PASS: both native module windows share fonts, icons, multi-selection, filters, counters, GLPI detail and independent read-only/write controls; Ring bulk targets include selected already assigned devices for explicit moves.'
 $owner=New-Object Windows.Forms.Form;$owner.Font=New-Object Drawing.Font('Segoe UI',9);$owner.Icon=[Drawing.SystemIcons]::Application
 $uiState=@{Seen=$false;Error='';Mode='Picker'};$uiTimer=New-Object Windows.Forms.Timer;$uiTimer.Interval=50
 $uiTimer.Add_Tick({
@@ -75,7 +75,7 @@ $uiTimer.Add_Tick({
    $grid=$dialog.Controls.Find('AvailableRingGroups',$true)[0]
    if ($dialog.Controls.Find('LoadEntraGroups',$true)[0].Enabled) { throw 'Picker attempted access before wrapper verification.' }
    Set-AssistenteITGroupPickerRows -Grid $grid -Groups @([pscustomobject]@{id='55555555-5555-4555-8555-555555555555';displayName='RENAMED-GROUP';AssignmentReason=''},[pscustomobject]@{id='66666666-6666-4666-8666-666666666666';displayName='DYNAMIC-GROUP';AssignmentReason='Appartenenza dinamica'}) -Selected @([pscustomobject]@{Id='55555555-5555-4555-8555-555555555555';Name='OLD-NAME';Label='Ring1';CanAssign=$true})
-   if ($grid.Rows.Count -ne 2 -or $grid.Rows[0].Cells['Monitor'].Value -ne $true -or $grid.Rows[0].Cells['Name'].Value -ne 'RENAMED-GROUP' -or -not $grid.Rows[1].Cells['Destination'].ReadOnly) { throw 'Group picker lost ID binding or allowed dynamic destinations.' }
+   if ($grid.Rows.Count -ne 2 -or $grid.Rows[0].Cells['Monitor'].Value -ne $true -or $grid.Rows[0].Cells['Name'].Value -ne 'RENAMED-GROUP' -or $grid.Rows[0].Cells['Destination'].ReadOnly -or $grid.Columns['Destination'].HeaderText -ne 'Modifica' -or -not $grid.Rows[1].Cells['Destination'].ReadOnly) { throw 'Group picker lost ID binding or allowed dynamic destinations.' }
    $grid.Rows[1].Cells['Monitor'].Value=$true;$grid.Rows[1].Cells['Label'].Value='MonitorOnly'
    Write-ModuleUiImage $dialog 'GROUP_PICKER';$dialog.Controls.Find('ConfirmSelectedGroups',$true)[0].PerformClick()
   }
@@ -84,7 +84,7 @@ $uiTimer.Add_Tick({
    if ($grid.Rows[0].Cells['Selected'].Value -eq $true -or $dialog.AcceptButton.Text -ne 'Annulla') { throw 'Registered selection was preconfirmed.' }
    $grid.Rows[0].Cells['Selected'].Value=$true;$dialog.Controls.Find('VerifyRegisteredSelection',$true)[0].PerformClick()
   }
-  else { if ($dialog.AcceptButton.Text -ne 'Annulla') { throw 'Ring confirmation defaults to applying writes.' };$dialog.Controls.Find('ConfirmRingAssignments',$true)[0].PerformClick() }
+  else { $review=@($dialog.Controls[0].Controls | Where-Object { $_ -is [Windows.Forms.RichTextBox] })[0];if ($review.Text -notlike '*Sposta*' -or $review.Text -notlike '*ORIGIN-SYNTHETIC / 66666666-6666-4666-8666-666666666666*' -or $review.Text -notlike '*GROUP-SYNTHETIC / 55555555-5555-4555-8555-555555555555*') { throw 'Move review hid the action or exact source/destination group IDs.' };Write-ModuleUiImage $dialog 'RING_MOVE_REVIEW';if ($dialog.AcceptButton.Text -ne 'Annulla') { throw 'Ring confirmation defaults to applying writes.' };$dialog.Controls.Find('ConfirmRingAssignments',$true)[0].PerformClick() }
   $uiState.Seen=$true
  }
  catch { $uiState.Error=$_.Exception.Message;$dialog.Close() }
@@ -96,7 +96,7 @@ try {
  $ids=Show-DmSelection -Candidates @([pscustomobject]@{Name='PC-SYNTHETIC';ObjectId='77777777-7777-4777-8777-777777777777';DeviceId='88888888-8888-4888-8888-888888888888';IsManaged=$false;Users='Synthetic';UserNotes=''}) -Owner $owner
  if (-not $uiState.Seen -or $uiState.Error -or $ids.Count -ne 1 -or $ids[0] -ne '77777777-7777-4777-8777-777777777777') { throw ('Registered selection failed: '+$uiState.Error) }
  $uiState.Mode='Review';$uiState.Seen=$false;$uiTimer.Start()
- $accepted=Show-DmRingReview -Plan ([pscustomobject]@{Items=@([pscustomobject]@{Name='PC-SYNTHETIC';ObjectId='77777777-7777-4777-8777-777777777777';DeviceId='88888888-8888-4888-8888-888888888888';TargetRing='Ring1';GroupName='GROUP-SYNTHETIC'})}) -Owner $owner
+ $accepted=Show-DmRingReview -Plan ([pscustomobject]@{Items=@([pscustomobject]@{Name='PC-SYNTHETIC';ObjectId='77777777-7777-4777-8777-777777777777';DeviceId='88888888-8888-4888-8888-888888888888';TargetRing='Ring1';GroupId='55555555-5555-4555-8555-555555555555';GroupName='GROUP-SYNTHETIC';Action='Sposta';RemoveGroups='ORIGIN-SYNTHETIC / 66666666-6666-4666-8666-666666666666'})}) -Owner $owner
  if (-not $accepted -or -not $uiState.Seen -or $uiState.Error) { throw ('Ring review failed: '+$uiState.Error) }
  'PASS: the native group picker preserves selected group IDs across renames, separates monitor/destination flags and disables unsupported destinations; Registered selection and Ring review require explicit confirmation.'
 }
