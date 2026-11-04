@@ -1,7 +1,9 @@
 # Stato condiviso per riprendere il lavoro
 
 Repository: `minirusty97/RC_OPBG_4`. Consultare sempre il main e la release
-effettiva: questo documento descrive la versione sorgente **1.2.0**. Include
+effettiva: questo documento descrive la versione sorgente **1.2.1**. La 1.2.1 corregge il blocco di cancellazione
+per figli AD con solo DN leggibile, con consenso esplicito e normale
+eliminazione LDAP del singolo figlio. La 1.2.0 include
 ricerca AD su un DC configurabile, dettagli GLPI raggruppati con cache per
 scansione, ripiego per nome esatto dopo seriale GLPI senza risultati e
 spostamenti Ring confermati. I moduli Hybrid/Ring continuano a eseguire una
@@ -48,22 +50,26 @@ dal tecnico in ambiente aziendale il tempo effettivo di Port-, le schede
 GLPI prima segnalate assenti, le OU effettive, i gruppi scelti, eventuali
 consensi nuovi e i diritti sulle singole chiavi BitLocker AD. Il successo su
 Intune e sull'archivio GLPI era stato confermato durante il lavoro sulla 1.0.23;
-la presenza di copie delle chiavi in AD non e stata confermata.
+il tecnico ha poi confermato l assenza di autorizzazione alla lettura delle
+informazioni BitLocker AD e la presenza di figli con soli DN leggibili.
 
 Per chat separate e regola versioni: docs/Sviluppo-Moduli.md e
 docs/Versionamento.md. Aggiornare questo stato a ogni lavoro concluso,
 distinguendo test automatici e osservazioni reali del tecnico.
 
-## Diagnosi e correzione in prova: figli AD non leggibili
+## Correzione 1.2.1: figli AD non leggibili
 
 Il tecnico ha confermato che mancano i diritti AD alla lettura delle informazioni
 BitLocker. Il DN del figlio viene restituito mentre classe e GUID rimangono
 vuoti; il filtro msFVE puo quindi restituire zero. La cancellazione manuale
 del computer dallo snap-in rimane un operazione distinta dalla lettura chiavi.
 
-Il ramo di diagnosi prepara la cancellazione ordinaria del singolo figlio per
+La 1.2.1 usa la cancellazione ordinaria del singolo figlio per
 DN, previa conferma esplicita del rischio chiavi AD, e conserva i controlli
 sull identita/protezione del computer. Mai tree-delete o modifica ACL. Si
 archiviano le chiavi recuperate e si segnala la copertura AD non garantita.
-Dettagli e limiti: docs/Eliminazione-Figli-AD.md. La release stabile resta 1.2.0
-e la ricompilazione e sospesa durante i test richiesti dal tecnico.
+Dettagli e limiti: docs/Eliminazione-Figli-AD.md. I 317 controlli Windows
+PowerShell 5.1 del ramo di diagnosi sono passati senza installer. Il tecnico
+ha successivamente richiesto la ricompilazione: la release 1.2.1 passa ora
+anche per i controlli standard Windows, installer e OTA. Non sono state
+eseguite cancellazioni su dispositivi aziendali durante i test.

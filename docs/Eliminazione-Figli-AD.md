@@ -1,4 +1,4 @@
-# Figli AD non leggibili: correzione in prova
+# Figli AD non leggibili: dalla versione 1.2.1
 
 La lettura delle informazioni BitLocker e la cancellazione in AD richiedono
 permessi distinti. Un tecnico puo vedere il DN di un figlio senza leggerne
@@ -39,8 +39,9 @@ Validazione con dati sintetici: figli DN-only, consenso mancante o per altro
 computer, normale DELETE senza controlli di sottoalbero, identita sostituita,
 nuovi figli, protezioni, rifiuti LDAP, oggetti non foglia, mancata conferma
 dell assenza, piani privati, WhatIf e sola lettura. I test non provano i diritti
-dell account aziendale. L installer resta alla 1.2.0 durante la diagnosi;
-nessuna nuova release viene pubblicata prima della decisione di ricompilare.
+dell account aziendale. La versione 1.2.1 include la correzione dopo 317
+controlli isolati su Windows PowerShell 5.1 e la conferma del tecnico di
+procedere alla ricompilazione. Installer e OTA seguono il consueto controllo CI.
 
 Fonti Microsoft:
 - https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-adts/8271b44d-a755-4872-a762-1ac57152099d
