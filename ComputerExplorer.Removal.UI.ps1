@@ -16,6 +16,7 @@ function Show-AssistenteITRemovalPreview {
     [void]$panel.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 45)))
     $intro = New-Object Windows.Forms.Label; $intro.Dock = 'Fill'
     $ready = @($Plan.Entries | Where-Object { [string]::IsNullOrWhiteSpace($_.Error) -and $_.Targets.Count -gt 0 }).Count
+    $unreadableEntries=@($Plan.Entries | Where-Object { -not $_.Error -and @($_.Targets | Where-Object Source -eq 'AD' | ForEach-Object { $_.AdChildren } | Where-Object { [bool](Get-UiSetting $_ 'Unreadable' $false) }).Count })
     $hasAdChildren = -not $archiveOnly -and @($Plan.Entries | Where-Object { [string]::IsNullOrWhiteSpace($_.Error) } | ForEach-Object { $_.Targets } | Where-Object { $_.Source -eq 'AD' -and $_.AdChildren.Count -gt 0 }).Count -gt 0
     if (-not $hasAdChildren) { $panel.RowStyles[2].Height = 0 }
     $intro.Text = 'Origini: {0}. Computer con oggetti pronti: {1}/{2}. Ordine: Intune, AD, Entra.' -f ($Plan.Sources -join ', '), $ready, $Plan.Entries.Count
@@ -59,6 +60,7 @@ function Show-AssistenteITRemovalPreview {
                 if ($archiveOnly) { [void]$lines.Add('    Oggetti di recupero BitLocker visibili: '+@($target.AdChildren | Where-Object ObjectClass -eq 'msFVE-RecoveryInformation').Count+'. Zero oggetti visibili non esclude restrizioni di lettura AD.') }
                 foreach ($child in $target.AdChildren) {
                     $label = $child.ObjectClass
+                    if ([bool](Get-UiSetting $child 'Unreadable' $false)) { $label='NON LEGGIBILE | Classe e identita non verificabili. Eliminazione ordinaria per DN; possibili chiavi AD non recuperate.' }
                     if ($child.ObjectClass -eq 'msFVE-RecoveryInformation') { if ($archiveOnly) { $label+=' | Recupero BitLocker: sola lettura per archivio' } else { $label += ' | Recupero BitLocker: queste informazioni verranno eliminate da AD' } }
                     [void]$lines.Add('    FIGLIO AD | ' + $label + ' | ID: ' + $child.Id)
                     [void]$lines.Add('      ' + $child.DistinguishedName)
@@ -81,6 +83,12 @@ function Show-AssistenteITRemovalPreview {
     if ($requiresMapping) {
         $panel.RowStyles[2].Height=80; $childConsent.Visible=$true; $confirm.Enabled=$false
         $childConsent.Text='Confermo di aver verificato le schede GLPI e i seriali elencati: alcune associazioni sono basate sul nome. Autorizzo il backup e, per l''eliminazione, anche la rimozione degli eventuali figli AD e record BitLocker.'
+    }
+    if ($unreadableEntries.Count -and -not $archiveOnly) {
+        $panel.RowStyles[0].Height=[Math]::Max(100,$panel.RowStyles[0].Height)
+        $intro.Text+=' AVVISO: presenti figli AD non leggibili. Il backup riguarda soltanto le chiavi recuperate dalle fonti accessibili.'
+        $panel.RowStyles[2].Height=120;$childConsent.Visible=$true;$confirm.Enabled=$false
+        $childConsent.Text+=' Confermo inoltre la cancellazione ordinaria dei figli AD non leggibili e accetto la possibile perdita delle chiavi AD non recuperate per: '+(@($unreadableEntries | ForEach-Object { $_.Name }) -join ', ')+'.'
     }
     $hybridEntries=@($Plan.Entries | Where-Object { -not $_.Error -and $null -ne (Get-UiSetting $_ 'HybridIdentity' $null) -and $_.HybridIdentity.RequiresConfirmation })
     $requiresHybrid=-not $archiveOnly -and $hybridEntries.Count -gt 0
@@ -105,7 +113,7 @@ function Show-AssistenteITRemovalPreview {
     $panel.Controls.Add($intro, 0, 0); $panel.Controls.Add($preview, 0, 1); $panel.Controls.Add($childConsent, 0, 2); $panel.Controls.Add($hybridConsent, 0, 3); $panel.Controls.Add($buttons, 0, 4)
     $dialog.Controls.Add($panel); $dialog.AcceptButton = $cancel; $dialog.CancelButton = $cancel
     try {
-        if ($dialog.ShowDialog($form) -eq 'OK') { return [pscustomobject]@{ IncludeAdChildren = ($hasAdChildren -and $childConsent.Checked); ConfirmGlpiMapping=($requiresMapping -and $childConsent.Checked);ConfirmBitLockerLossFor=[string[]]$previewDecision.LossNames;ConfirmHybridMismatchFor=[string[]]@($hybridEntries | Where-Object { $requiresHybrid -and $hybridConsent.Checked } | ForEach-Object { $_.Name }) } }
+        if ($dialog.ShowDialog($form) -eq 'OK') { return [pscustomobject]@{ ConfirmUnreadableAdChildrenFor=[string[]]@($unreadableEntries | Where-Object { -not $archiveOnly -and $childConsent.Checked } | ForEach-Object { $_.Name }); IncludeAdChildren = ($hasAdChildren -and $childConsent.Checked); ConfirmGlpiMapping=($requiresMapping -and $childConsent.Checked);ConfirmBitLockerLossFor=[string[]]$previewDecision.LossNames;ConfirmHybridMismatchFor=[string[]]@($hybridEntries | Where-Object { $requiresHybrid -and $hybridConsent.Checked } | ForEach-Object { $_.Name }) } }
         return $null
     }
     finally { $dialog.Dispose() }

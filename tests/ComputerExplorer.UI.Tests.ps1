@@ -124,8 +124,8 @@ try {
 
 
     function Test-RemovalConsentDialog {
-        param([bool]$HasChildren,[bool]$Accept,[bool]$Mapping=$false,[bool]$ArchiveOnly=$false)
-        $script:RemovalDialogHasChildren=$HasChildren; $script:RemovalDialogAccept=$Accept; $script:RemovalDialogMapping=$Mapping; $script:RemovalDialogArchiveOnly=$ArchiveOnly; $script:RemovalDialogError=''
+        param([bool]$HasChildren,[bool]$Accept,[bool]$Mapping=$false,[bool]$ArchiveOnly=$false,[bool]$Unreadable=$false)
+        $script:RemovalDialogUnreadable=$Unreadable; $script:RemovalDialogHasChildren=$HasChildren; $script:RemovalDialogAccept=$Accept; $script:RemovalDialogMapping=$Mapping; $script:RemovalDialogArchiveOnly=$ArchiveOnly; $script:RemovalDialogError=''
         $script:RemovalDialogSeen=$false
         $script:RemovalDialogTimer=New-Object Windows.Forms.Timer
         $script:RemovalDialogTimer.Interval=50
@@ -140,7 +140,8 @@ try {
                 $preview=@($layout.Controls | Where-Object { $_ -is [Windows.Forms.RichTextBox] })[0]
                 if ($null -eq $consent -or $null -eq $confirm -or $null -eq $preview) { throw 'Visible removal preview has incomplete controls.' }
                 if ($script:RemovalDialogHasChildren -or $script:RemovalDialogMapping) {
-                    if (-not $consent.Visible -or $consent.Checked -or $confirm.Enabled -or ($script:RemovalDialogHasChildren -and ($preview.Text -notlike '*msFVE-RecoveryInformation*' -or $preview.Text -notlike '*Recupero BitLocker*' -or $preview.Text -notlike '*ID: child-guid*'))) { throw 'Child metadata, warning or unchecked consent state missing.' }
+                    if (-not $consent.Visible -or $consent.Checked -or $confirm.Enabled -or ($script:RemovalDialogHasChildren -and -not $script:RemovalDialogUnreadable -and ($preview.Text -notlike '*msFVE-RecoveryInformation*' -or $preview.Text -notlike '*Recupero BitLocker*' -or $preview.Text -notlike '*ID: child-guid*'))) { throw 'Child metadata, warning or unchecked consent state missing.' }
+                    if ($script:RemovalDialogUnreadable -and ($preview.Text -notlike '*NON LEGGIBILE*' -or $consent.Text -notlike '*possibile perdita*')) { throw 'Unreadable child warning or explicit loss consent is missing.' }
                     $consent.Checked=$true
                     if (-not $confirm.Enabled) { throw 'Child consent did not enable deletion.' }
                     $consent.Checked=$false
@@ -159,6 +160,7 @@ try {
         })
         $children=@()
         if ($HasChildren) { $children=@([pscustomobject]@{Id='child-guid';DistinguishedName='CN=Recovery,CN=PC-UI,OU=Lab,DC=example,DC=invalid';ObjectClass='msFVE-RecoveryInformation'}) }
+        if ($Unreadable) { $children[0].Id='';$children[0].ObjectClass='';$children[0]|Add-Member NoteProperty Unreadable $true }
         $plan=[pscustomobject]@{PlanId='synthetic';Sources=@('AD');Entries=@([pscustomobject]@{Name='PC-UI';Error='';Targets=@([pscustomobject]@{Source='AD';DomainController='dc.example.invalid';Id='computer-guid';DistinguishedName='CN=PC-UI,OU=Lab,DC=example,DC=invalid';AdChildren=$children})})}
         $plan | Add-Member -NotePropertyName ArchiveOnly -NotePropertyValue $ArchiveOnly
         if ($Mapping -or $ArchiveOnly) { $plan.Entries[0] | Add-Member -NotePropertyName Backup -NotePropertyValue ([pscustomobject]@{ComputerId=901;Serial='SERIAL-UI';KeyCount=1;RequiresMappingConfirmation=$Mapping;Keys=@([pscustomobject]@{KeyId='recovery-guid';Volume='OS';Origins=@('AD:synthetic')})}) }
@@ -167,6 +169,7 @@ try {
             $decision=Show-RemovalPreview $plan
             if (-not $script:RemovalDialogSeen -or $script:RemovalDialogError) { throw ('Removal dialog verification failed: '+$script:RemovalDialogError) }
             if ($Accept) {
+                if ($script:RemovalDialogUnreadable -and ($decision.ConfirmUnreadableAdChildrenFor.Count -ne 1 -or $decision.ConfirmUnreadableAdChildrenFor[0] -ne 'PC-UI')) { throw 'Unreadable-child consent lost exact computer binding.' }
                 if ($null -eq $decision -or $decision.IncludeAdChildren -ne $HasChildren -or $decision.ConfirmGlpiMapping -ne $Mapping) { throw 'Removal dialog returned incorrect explicit child consent.' }
             }
             elseif ($null -ne $decision) { throw 'Cancelled preview returned an accepted removal decision.' }
@@ -176,6 +179,10 @@ try {
     Test-RemovalConsentDialog -HasChildren $true -Accept $false
     Test-RemovalConsentDialog -HasChildren $true -Accept $true
     Test-RemovalConsentDialog -HasChildren $false -Accept $true
+    Test-RemovalConsentDialog -HasChildren $true -Accept $false -Unreadable $true
+    Test-RemovalConsentDialog -HasChildren $true -Accept $true -Unreadable $true
+    Test-RemovalConsentDialog -HasChildren $true -Accept $true -Unreadable $true -Mapping $true
+    'PASS: native unreadable-child preview keeps loss consent unchecked, supports cancellation and binds accepted consent to the exact computer.'
     'PASS: native removal preview lists BitLocker child metadata, requires an unchecked explicit consent, supports revocation/cancel and leaves leaf-only confirmation unchanged.'
     Test-RemovalConsentDialog -HasChildren $true -Accept $true -Mapping $true
     Test-RemovalConsentDialog -HasChildren $false -Accept $true -Mapping $true -ArchiveOnly $true

@@ -59,33 +59,33 @@ function Get-RemovalAdChildren {
     $properties=@('ObjectGUID');if (-not $RecoveryOnly) { $properties+='ProtectedFromAccidentalDeletion' }
     $records = @(Get-ADObject -Server $Server -SearchBase $rootDn -SearchScope Subtree -LDAPFilter $filter -Properties $properties -ErrorAction Stop)
     $baseSeen = [bool]$RecoveryOnly
-    $children = New-Object 'System.Collections.Generic.List[object]'
+    $children = New-Object 'System.Collections.Generic.List[object]';$seenDns=@{};$seenIds=@{}
     foreach ($record in $records) {
-        $dn = [string]$record.DistinguishedName
-        $id = ConvertTo-RemovalId $record.ObjectGUID -Context ('AD | DC: '+$Server+' | Classe: '+$record.ObjectClass+' | DN: '+$dn)
-        if ($RecoveryOnly -and $record.ObjectClass -ne 'msFVE-RecoveryInformation') { throw 'La risposta AD per l''archivio contiene un oggetto non BitLocker.' }
-        if ($id -eq $rootId) {
-            if (-not [string]::Equals($dn, $rootDn, [StringComparison]::OrdinalIgnoreCase) -or $record.ObjectClass -ne 'computer') {
-                throw 'La base della ricerca AD non corrisponde al computer verificato.'
-            }
-            if ([bool]$record.ProtectedFromAccidentalDeletion) { throw ('Computer AD protetto da eliminazione accidentale: ' + $rootDn) }
-            $baseSeen = $true
-            continue
+        $dn=[string]$record.DistinguishedName
+        $isBase=[string]::Equals($dn,$rootDn,[StringComparison]::OrdinalIgnoreCase)
+        if (-not $isBase -and -not $dn.EndsWith(','+$rootDn,[StringComparison]::OrdinalIgnoreCase)) { throw 'La lettura AD contiene un oggetto esterno al computer selezionato.' }
+        if (-not $RecoveryOnly -and (Get-RemovalValue $record 'ProtectedFromAccidentalDeletion') -eq $true) { throw ('Oggetto AD protetto da eliminazione accidentale: '+$dn) }
+        $rawId=Get-RemovalValue $record 'ObjectGUID';$class=[string](Get-RemovalValue $record 'ObjectClass' '')
+        $unreadable=-not $isBase -and -not $RecoveryOnly -and ($null -eq $rawId -or [string]::IsNullOrWhiteSpace([string]$rawId) -or -not $class)
+        $id=''
+        if ($null -ne $rawId -and -not [string]::IsNullOrWhiteSpace([string]$rawId)) { $id=ConvertTo-RemovalId $rawId -Context ('AD | DC: '+$Server+' | Classe: '+$class+' | DN: '+$dn) }
+        if ($isBase) {
+            if ($id -ne $rootId -or $class -ne 'computer') { throw 'La base della ricerca AD non corrisponde al computer verificato.' }
+            $baseSeen=$true;continue
         }
-        if (-not $dn.EndsWith(',' + $rootDn, [StringComparison]::OrdinalIgnoreCase)) {
-            throw 'La lettura AD contiene un oggetto esterno al computer selezionato.'
-        }
-        if (-not $RecoveryOnly -and [bool]$record.ProtectedFromAccidentalDeletion) { throw ('Oggetto figlio AD protetto da eliminazione accidentale: ' + $dn) }
-        [void]$children.Add([pscustomobject]@{
-            Id = $id; DistinguishedName = $dn; ObjectClass = [string]$record.ObjectClass
-        })
+        if ($RecoveryOnly -and $class -ne 'msFVE-RecoveryInformation') { throw 'La risposta AD per l archivio contiene un oggetto non BitLocker.' }
+        if (-not $unreadable -and -not $id) { [void](ConvertTo-RemovalId $rawId -Context ('AD | DC: '+$Server+' | DN: '+$dn)) }
+        if ($id -eq $rootId -or $seenDns.ContainsKey($dn) -or ($id -and $seenIds.ContainsKey($id))) { throw 'Identita duplicate o discordanti nella risposta degli oggetti figli AD.' }
+        $seenDns[$dn]=$true;if ($id) { $seenIds[$id]=$true }
+        [void]$children.Add([pscustomobject]@{Id=$id;DistinguishedName=$dn;ObjectClass=$class;Unreadable=$unreadable})
     }
     if (-not $baseSeen) { throw 'Impossibile verificare la base della ricerca degli oggetti figli AD. Ripetere la verifica.' }
-    return @($children.ToArray() | Sort-Object Id -Unique)
+    return @($children.ToArray() | Sort-Object DistinguishedName -Unique)
 }
 
 function Test-RemovalSameAdChild {
     param($Expected, $Current)
+    if ([bool](Get-RemovalValue $Expected 'Unreadable' $false) -ne [bool](Get-RemovalValue $Current 'Unreadable' $false)) { return $false }
     foreach ($field in @('Id', 'DistinguishedName', 'ObjectClass')) {
         if (-not [string]::Equals([string]$Expected.$field, [string]$Current.$field, [StringComparison]::OrdinalIgnoreCase)) { return $false }
     }
@@ -95,6 +95,12 @@ function Test-RemovalSameAdChild {
 function Read-RemovalAdChildById {
     param($Child, $Target)
     try {
+        if ([bool](Get-RemovalValue $Child 'Unreadable' $false)) {
+            $live=Read-RemovalTargetById $Target
+            if ($null -eq $live) { return $null }
+            if (-not (Test-RemovalSameTarget $Target $live)) { throw 'Computer o figli AD cambiati dopo la conferma.' }
+            return @($live.AdChildren | Where-Object { $_.DistinguishedName -ieq $Child.DistinguishedName }) | Select-Object -First 1
+        }
         $properties=@('ObjectGUID');if (-not [bool](Get-RemovalValue $Target 'RecoveryOnly' $false)) { $properties+='ProtectedFromAccidentalDeletion' }
         $record = Get-ADObject -Server $Target.DomainController -Identity ([guid](ConvertTo-RemovalId $Child.Id)) -Properties $properties -ErrorAction Stop
         if (-not [bool](Get-RemovalValue $Target 'RecoveryOnly' $false) -and [bool]$record.ProtectedFromAccidentalDeletion) { throw ('Oggetto figlio AD protetto da eliminazione accidentale: ' + $record.DistinguishedName) }
@@ -189,10 +195,10 @@ function Test-RemovalSameTarget {
     }
     if ($Expected.Source -eq 'AD') {
         $expectedChildren = @{}
-        foreach ($child in $Expected.AdChildren) { $expectedChildren[$child.Id] = $child }
+        foreach ($child in $Expected.AdChildren) { $expectedChildren[$child.DistinguishedName] = $child }
         # Figli già assenti sono ammessi; aggiunte, spostamenti e nuove protezioni bloccano il piano.
         foreach ($child in $Current.AdChildren) {
-            if (-not $expectedChildren.ContainsKey($child.Id) -or -not (Test-RemovalSameAdChild $expectedChildren[$child.Id] $child)) { return $false }
+            if (-not $expectedChildren.ContainsKey($child.DistinguishedName) -or -not (Test-RemovalSameAdChild $expectedChildren[$child.DistinguishedName] $child)) { return $false }
         }
     }
     return $true
@@ -301,7 +307,7 @@ function New-ExplorerRemovalPlan {
     $view = @($entries | ForEach-Object {
         [pscustomobject]@{ Name = $_.Name; Error = $_.Error; HybridIdentity=(ConvertTo-RemovalHybridView $_.HybridIdentity); Backup=$_.Backup | Select-Object ComputerId,Name,GlpiName,Serial,EntityId,RequiresMappingConfirmation,Warning,MatchBy,@{Name='ArchiveAvailable';Expression={[bool](Get-RemovalValue $_ 'ArchiveAvailable' $true)}},@{Name='GlpiMatchCount';Expression={[int](Get-RemovalValue $_ 'GlpiMatchCount' 1)}},@{Name='KeyCount';Expression={$_.Keys.Count}},@{Name='Keys';Expression={@($_.Keys | Select-Object KeyId,Volume,CreatedAt,@{Name='Origins';Expression={@($_.Origins | ForEach-Object {[string]$_})}})}}; Targets = @($_.Targets | ForEach-Object {
             $copy = $_ | Select-Object Source, Name, Id, DomainController, DistinguishedName, LinkId, SerialNumber, OperatingSystem, TrustType, RecoveryOnly, RegisteredOnly, OnPremisesSyncEnabled, IsManaged
-            $children = @((Get-RemovalValue $_ 'AdChildren' @()) | ForEach-Object { $_ | Select-Object Id, DistinguishedName, ObjectClass })
+            $children = @((Get-RemovalValue $_ 'AdChildren' @()) | ForEach-Object { $_ | Select-Object Id, DistinguishedName, ObjectClass, Unreadable })
             $copy | Add-Member -NotePropertyName AdChildren -NotePropertyValue $children
             $copy
         }) }
@@ -353,24 +359,94 @@ function Read-RemovalTargetById {
     catch { if (Test-RemovalNotFound $_) { return $null }; throw }
 }
 
+function New-RemovalLeafDeleteRequest {
+    param([string]$DistinguishedName)
+    Add-Type -AssemblyName System.DirectoryServices.Protocols -ErrorAction Stop
+    # No subtree control: the DC must reject a non-leaf or an unauthorized delete.
+    return (New-Object System.DirectoryServices.Protocols.DeleteRequest($DistinguishedName))
+}
+
+function New-RemovalLdapConnection {
+    param([string]$Server)
+    if ($Server -notmatch '^[a-zA-Z0-9][a-zA-Z0-9.-]*$') { throw 'DC LDAP non valido.' }
+    Add-Type -AssemblyName System.DirectoryServices.Protocols -ErrorAction Stop
+    $connection=New-Object System.DirectoryServices.Protocols.LdapConnection($Server)
+    try {
+        $connection.AuthType=[System.DirectoryServices.Protocols.AuthType]::Negotiate
+        $connection.Timeout=[timespan]::FromSeconds(20)
+        $connection.SessionOptions.ProtocolVersion=3
+        $connection.SessionOptions.Signing=$true;$connection.SessionOptions.Sealing=$true
+        $connection.SessionOptions.ReferralChasing=[System.DirectoryServices.Protocols.ReferralChasingOptions]::None
+        $connection.Bind()
+        return $connection
+    }
+    catch { $connection.Dispose();throw }
+}
+
+function Remove-RemovalUnreadableAdLeaf {
+    [CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='High')]
+    param($Child,$Target)
+    Assert-ExplorerRemovalWriteAccess
+    if ($Target.Source -ne 'AD' -or -not [bool](Get-RemovalValue $Child 'Unreadable' $false) -or [bool](Get-RemovalValue $Target 'RecoveryOnly' $false)) { throw 'Eliminazione per DN non autorizzata per questo oggetto.' }
+    $live=Read-RemovalTargetById $Target
+    if ($null -eq $live) { return $false }
+    if (-not (Test-RemovalSameTarget $Target $live) -or -not $Child.DistinguishedName.EndsWith(','+$live.DistinguishedName,[StringComparison]::OrdinalIgnoreCase)) { throw 'Computer o percorso AD cambiati prima della cancellazione del figlio.' }
+    $matches=@($live.AdChildren | Where-Object { $_.DistinguishedName -ieq $Child.DistinguishedName })
+    if (-not $matches.Count) { return $false }
+    if ($matches.Count -ne 1 -or -not (Test-RemovalSameAdChild $Child $matches[0])) { throw 'Oggetto figlio AD cambiato dopo la conferma.' }
+    if (-not $PSCmdlet.ShouldProcess(($Target.DomainController+' / '+$Child.DistinguishedName),'Elimina singolo figlio AD non leggibile; chiavi AD non garantite')) { return $false }
+    $request=New-RemovalLeafDeleteRequest $Child.DistinguishedName
+    if ($request.DistinguishedName -cne $Child.DistinguishedName -or $request.Controls.Count -ne 0) { throw 'Richiesta di cancellazione LDAP non valida.' }
+    $connection=$null
+    try {
+        $connection=New-RemovalLdapConnection $Target.DomainController
+        $beforeWrite=Read-RemovalTargetById $Target
+        if ($null -eq $beforeWrite -or -not (Test-RemovalSameTarget $Target $beforeWrite)) { throw 'Computer AD cambiato durante la connessione LDAP.' }
+        if (-not @($beforeWrite.AdChildren | Where-Object { $_.DistinguishedName -ieq $Child.DistinguishedName }).Count) { return $false }
+        [void]$connection.SendRequest($request)
+    }
+    catch {
+        $exception=$_.Exception;$code=-1
+        while ($null -ne $exception) {
+            $response=Get-RemovalValue $exception 'Response'
+            if ($null -ne $response) { $code=[int]$response.ResultCode;break }
+            $exception=$exception.InnerException
+        }
+        if ($code -eq 32) { return $false }
+        if ($code -eq 50) { throw 'AD nega l eliminazione del figlio: permessi di cancellazione insufficienti.' }
+        if ($code -eq 66) { throw 'Il figlio AD contiene altri oggetti: la cancellazione ordinaria e stata rifiutata. Nessuna eliminazione di sottoalbero tentata.' }
+        throw 'Eliminazione LDAP del figlio non confermata. Aggiornare la ricerca prima di riprovare.'
+    }
+    finally { if ($null -ne $connection) { $connection.Dispose() } }
+    $after=Read-RemovalTargetById $Target
+    if ($null -ne $after -and @($after.AdChildren | Where-Object { $_.DistinguishedName -ieq $Child.DistinguishedName }).Count) { throw 'Cancellazione del figlio inviata ma assenza non confermata sul DC.' }
+    return $true
+}
+
 function Remove-RemovalTarget {
     param($Target, $Results, $ProgressQueue)
     Assert-ExplorerRemovalWriteAccess
     if ($Target.Source -eq 'AD') {
-        # Niente cancellazione ricorsiva: eliminare esclusivamente i GUID confermati,
-        # dai discendenti più profondi al computer. Eventuali nuovi figli restano intatti.
+        # Singoli figli confermati: per GUID se leggibili, per DN con consenso
+        # dedicato se non leggibili. Mai controlli di eliminazione del sottoalbero.
         foreach ($child in @($Target.AdChildren | Sort-Object @{Expression={$_.DistinguishedName.Length};Descending=$true}, Id)) {
             $state = 'Eliminato'; $errorText = ''
             try {
                 $live = Read-RemovalAdChildById $child $Target
                 if ($null -eq $live) { $state = 'Già assente' }
                 else {
-                    try { Remove-ADObject -Server $Target.DomainController -Identity ([guid]$child.Id) -Confirm:$false -ErrorAction Stop }
-                    catch { if (Test-RemovalNotFound $_) { $state = 'Già assente' } else { throw } }
+                    if ([bool](Get-RemovalValue $child 'Unreadable' $false)) {
+                        if (-not (Remove-RemovalUnreadableAdLeaf -Child $child -Target $Target -Confirm:$false)) { $state='Gia assente' }
+                    }
+                    else {
+                        try { Remove-ADObject -Server $Target.DomainController -Identity ([guid]$child.Id) -Confirm:$false -ErrorAction Stop }
+                        catch { if (Test-RemovalNotFound $_) { $state = 'Già assente' } else { throw } }
+                    }
                 }
             }
             catch { $state = 'Errore'; $errorText = $_.Exception.Message }
-            $result = New-RemovalResult $Target.Name 'AD (figlio)' $Target.DomainController $child.Id $state $errorText
+            $reportId=$child.Id;if ([bool](Get-RemovalValue $child 'Unreadable' $false)) { $reportId=$child.DistinguishedName }
+            $result = New-RemovalResult $Target.Name 'AD (figlio)' $Target.DomainController $reportId $state $errorText
             [void]$Results.Add($result); Send-RemovalProgress $ProgressQueue ($Target.Name + ' - AD (figlio): ' + $state) $result
             if ($state -eq 'Errore') { throw ('Rimozione oggetto figlio AD interrotta: ' + $errorText) }
         }
@@ -402,7 +478,8 @@ function Invoke-ExplorerRemovalPlan {
         [switch]$IncludeAdChildren,
         [switch]$ConfirmGlpiMapping,
         [string[]]$ConfirmBitLockerLossFor=@(),
-        [string[]]$ConfirmHybridMismatchFor=@()
+        [string[]]$ConfirmHybridMismatchFor=@(),
+        [string[]]$ConfirmUnreadableAdChildrenFor=@()
     )
     Assert-ExplorerRemovalWriteAccess
     if (-not $script:RemovalPlans.ContainsKey($PlanId)) { throw 'Anteprima non valida o già utilizzata. Ripetere la verifica.' }
@@ -422,6 +499,10 @@ function Invoke-ExplorerRemovalPlan {
             if ([string]::IsNullOrWhiteSpace($reason) -and -not $IncludeAdChildren -and -not $plan.ArchiveOnly -and
                 @($entry.Targets | Where-Object { $_.Source -eq 'AD' -and $_.AdChildren.Count -gt 0 }).Count -gt 0) {
                 $reason = 'Il computer contiene oggetti figli AD. Confermare esplicitamente la loro eliminazione nell''anteprima, incluse eventuali informazioni di recupero BitLocker.'
+            }
+            $unreadableAd=@($entry.Targets | Where-Object Source -eq 'AD' | ForEach-Object { $_.AdChildren } | Where-Object { [bool](Get-RemovalValue $_ 'Unreadable' $false) })
+            if ([string]::IsNullOrWhiteSpace($reason) -and $unreadableAd.Count -and ($plan.ArchiveOnly -or $ConfirmUnreadableAdChildrenFor -notcontains $entry.Name)) {
+                $reason='Confermare per questo computer la rimozione dei figli AD non leggibili e il rischio di perdita delle chiavi AD non recuperate.'
             }
             $hybrid=Get-RemovalValue $entry 'HybridIdentity' $null
             if ([string]::IsNullOrWhiteSpace($reason) -and -not $plan.ArchiveOnly -and $null -ne $hybrid -and $hybrid.RequiresConfirmation -and $ConfirmHybridMismatchFor -notcontains $entry.Name) {
@@ -504,6 +585,10 @@ function Invoke-ExplorerRemovalPlan {
                 }
             }
             if ($plan.ArchiveOnly) { continue }
+            if ($unreadableAd.Count) {
+                $warning=New-RemovalResult $entry.Name 'AD (avviso)' '' '' 'Avviso' 'Confermata eliminazione dei figli AD non leggibili. Archiviate solo le chiavi recuperate: le eventuali chiavi AD non lette non sono garantite nel backup.'
+                [void]$results.Add($warning);Send-RemovalProgress $ProgressQueue $entry.Name $warning
+            }
             $blocked = $false
             foreach ($target in @($entry.Targets | Sort-Object @{ Expression = { $order[$_.Source] } }, DomainController, Id)) {
                 $errorText = ''; $targetState = 'Eliminato'

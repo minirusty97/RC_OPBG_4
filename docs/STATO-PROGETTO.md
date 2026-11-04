@@ -53,3 +53,17 @@ la presenza di copie delle chiavi in AD non e stata confermata.
 Per chat separate e regola versioni: docs/Sviluppo-Moduli.md e
 docs/Versionamento.md. Aggiornare questo stato a ogni lavoro concluso,
 distinguendo test automatici e osservazioni reali del tecnico.
+
+## Diagnosi e correzione in prova: figli AD non leggibili
+
+Il tecnico ha confermato che mancano i diritti AD alla lettura delle informazioni
+BitLocker. Il DN del figlio viene restituito mentre classe e GUID rimangono
+vuoti; il filtro msFVE puo quindi restituire zero. La cancellazione manuale
+del computer dallo snap-in rimane un operazione distinta dalla lettura chiavi.
+
+Il ramo di diagnosi prepara la cancellazione ordinaria del singolo figlio per
+DN, previa conferma esplicita del rischio chiavi AD, e conserva i controlli
+sull identita/protezione del computer. Mai tree-delete o modifica ACL. Si
+archiviano le chiavi recuperate e si segnala la copertura AD non garantita.
+Dettagli e limiti: docs/Eliminazione-Figli-AD.md. La release stabile resta 1.2.0
+e la ricompilazione e sospesa durante i test richiesti dal tecnico.
