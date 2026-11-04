@@ -19,7 +19,10 @@ manifest; a previous chat or local copy may be behind the repository.
   in test data. Preserve the V1 archive reader.
 - Reuse the Computer Explorer removal/BitLocker pipeline. Use exact selected
   Object IDs, fresh identity checks and explicit confirmations. No recursive AD
-  deletion and no weakening of protected-object checks for deletion.
+  deletion and no weakening of protected-object checks for deletion. A DN-only
+  child can be deleted by ordinary LDAP leaf deletion after per-computer loss
+  consent and fresh parent-GUID/DN checks. The DC enforces child deletion rights;
+  do not send tree-delete controls or infer BitLocker absence from hidden metadata.
 - For Ring assignments use Entra object IDs, all configured monitored groups,
   manual destination selection and a fresh membership check. Never silently
   skip an unreadable group. Moves require an explicit origin/destination preview:

@@ -228,7 +228,7 @@ function Add-RemovalReportRow {
 }
 
 function Start-RemovalOperation {
-    param([ValidateSet('PrepareRemoval','Remove','PrepareArchive','Archive','ReadArchive','ReadKeys')][string]$Operation, [string[]]$Names, [string[]]$Sources, [string]$PlanId, [switch]$IncludeAdChildren, [switch]$ConfirmGlpiMapping, [int]$ComputerId, [string[]]$ConfirmBitLockerLossFor=@(),[string[]]$ConfirmHybridMismatchFor=@())
+    param([ValidateSet('PrepareRemoval','Remove','PrepareArchive','Archive','ReadArchive','ReadKeys')][string]$Operation, [string[]]$Names, [string[]]$Sources, [string]$PlanId, [switch]$IncludeAdChildren, [switch]$ConfirmGlpiMapping, [int]$ComputerId, [string[]]$ConfirmBitLockerLossFor=@(),[string[]]$ConfirmHybridMismatchFor=@(),[string[]]$ConfirmUnreadableAdChildrenFor=@())
     if ((Test-UiReadOnly) -and $Operation -in @('PrepareRemoval','Remove','PrepareArchive','Archive')) { throw 'Modulo in sola lettura: modifiche e archiviazioni non consentite.' }
     try {
         $script:Operation = $Operation; $script:Stopping = $false
@@ -240,7 +240,7 @@ function Start-RemovalOperation {
             $removalGrid.Rows.Clear(); $tabs.SelectedTab = $removalTab
         }
         $workerCode = {
-            param($ModulePath, $OperationName, $Names, $Sources, $ConfigFile, $PlanId, $Queue, $Cancellation, $IncludeAdChildren, $Credentials, $ConfirmMapping, $ComputerId, $SessionReadOnly, $ConfirmLossNames, $ConfirmHybridNames)
+            param($ModulePath, $OperationName, $Names, $Sources, $ConfigFile, $PlanId, $Queue, $Cancellation, $IncludeAdChildren, $Credentials, $ConfirmMapping, $ComputerId, $SessionReadOnly, $ConfirmLossNames, $ConfirmHybridNames, $ConfirmUnreadableNames)
             $ErrorActionPreference = 'Stop'
             Import-Module $ModulePath -ErrorAction Stop
             Set-ExplorerRemovalReadOnly -ReadOnly:$SessionReadOnly
@@ -266,10 +266,11 @@ function Start-RemovalOperation {
                 if ($ConfirmMapping) { $arguments.ConfirmGlpiMapping=$true }
                 if ($null -ne $ConfirmLossNames -and @($ConfirmLossNames).Count -gt 0) { $arguments.ConfirmBitLockerLossFor=$ConfirmLossNames }
                 if ($null -ne $ConfirmHybridNames -and @($ConfirmHybridNames).Count -gt 0) { $arguments.ConfirmHybridMismatchFor=$ConfirmHybridNames }
+                if ($null -ne $ConfirmUnreadableNames -and @($ConfirmUnreadableNames).Count -gt 0) { $arguments.ConfirmUnreadableAdChildrenFor=$ConfirmUnreadableNames }
                 Invoke-ExplorerRemovalPlan @arguments
             }
         }
-        [void]$script:Pipeline.AddScript($workerCode.ToString()).AddArgument((Join-Path $PSScriptRoot 'ComputerExplorer.Removal.psm1')).AddArgument($Operation).AddArgument($Names).AddArgument($Sources).AddArgument($ConfigPath).AddArgument($PlanId).AddArgument($script:Queue).AddArgument($script:RemovalCancellation).AddArgument([bool]$IncludeAdChildren).AddArgument($script:GlpiCredentials).AddArgument([bool]$ConfirmGlpiMapping).AddArgument($ComputerId).AddArgument((Test-UiReadOnly)).AddArgument($ConfirmBitLockerLossFor).AddArgument($ConfirmHybridMismatchFor)
+        [void]$script:Pipeline.AddScript($workerCode.ToString()).AddArgument((Join-Path $PSScriptRoot 'ComputerExplorer.Removal.psm1')).AddArgument($Operation).AddArgument($Names).AddArgument($Sources).AddArgument($ConfigPath).AddArgument($PlanId).AddArgument($script:Queue).AddArgument($script:RemovalCancellation).AddArgument([bool]$IncludeAdChildren).AddArgument($script:GlpiCredentials).AddArgument([bool]$ConfirmGlpiMapping).AddArgument($ComputerId).AddArgument((Test-UiReadOnly)).AddArgument($ConfirmBitLockerLossFor).AddArgument($ConfirmHybridMismatchFor).AddArgument($ConfirmUnreadableAdChildrenFor)
         $script:StartedAt = [datetime]::Now; $script:StageMessage = 'Verifica degli oggetti selezionati...'
         if ($Operation -eq 'Remove') { $script:StageMessage = 'Backup BitLocker, verifica e successiva eliminazione...' }
         elseif ($Operation -eq 'Archive') { $script:StageMessage='Archiviazione BitLocker su GLPI...' }
@@ -851,7 +852,7 @@ $timer.Add_Tick({
             $decision = Show-RemovalPreview $output[0]
             if ($null -ne $decision) {
                 $operation='Remove'; if ($finishedOperation -eq 'PrepareArchive') { $operation='Archive' }
-                Start-RemovalOperation -Operation $operation -PlanId $output[0].PlanId -IncludeAdChildren:$decision.IncludeAdChildren -ConfirmGlpiMapping:$decision.ConfirmGlpiMapping -ConfirmBitLockerLossFor $decision.ConfirmBitLockerLossFor -ConfirmHybridMismatchFor $decision.ConfirmHybridMismatchFor
+                Start-RemovalOperation -Operation $operation -PlanId $output[0].PlanId -IncludeAdChildren:$decision.IncludeAdChildren -ConfirmGlpiMapping:$decision.ConfirmGlpiMapping -ConfirmBitLockerLossFor $decision.ConfirmBitLockerLossFor -ConfirmHybridMismatchFor $decision.ConfirmHybridMismatchFor -ConfirmUnreadableAdChildrenFor (Get-UiSetting $decision 'ConfirmUnreadableAdChildrenFor' @())
             }
         }
         elseif ($finishedOperation -eq 'ReadKeys' -and -not $failed -and $output.Count -eq 1) {
