@@ -12,41 +12,33 @@ try {
    [CmdletBinding()]param($Method,$Uri,$OutputType,$Headers)
    if ($Method -ne 'GET') { throw 'Capability verification attempted a write.' }
    [void]$script:Capability.Requests.Add($Uri)
-   if ($Uri -eq 'https://graph.microsoft.com/v1.0/informationProtection/bitlocker/recoveryKeys') {
-    if (-not $Headers['User-Agent']) { throw 'Metadata request has no documented User-Agent.' }
+   if ($Uri -notin @('https://graph.microsoft.com/v1.0/devices?$top=1&$select=id','https://graph.microsoft.com/v1.0/deviceManagement/managedDevices?$top=1&$select=id')) { throw 'Unexpected endpoint, BitLocker metadata, secret read, paging or deletion simulation.' }
+   if ($Uri -like '*managedDevices*') {
     if ($script:Capability.Mode -eq 'Denied') {
-     $ex=New-Object InvalidOperationException('Do not disclose this recovery password: 000011-000011-000011-000011-000011-000011-000011-000011')
+     $ex=New-Object InvalidOperationException('SYNTHETIC_PRIVATE_BODY')
      $ex | Add-Member NoteProperty ResponseStatusCode 403
      $record=New-Object Management.Automation.ErrorRecord($ex,'SyntheticGraphFailure',[Management.Automation.ErrorCategory]::PermissionDenied,$null)
      $record.ErrorDetails=New-Object Management.Automation.ErrorDetails('{"error":{"code":"Authorization_RequestDenied","message":"Bearer SYNTHETIC_TOKEN_DO_NOT_DISCLOSE","innerError":{"request-id":"77777777-7777-4777-8777-777777777777"}}}')
      throw $record
     }
     if ($script:Capability.Mode -eq 'Malformed') { return [pscustomobject]@{unexpected='body'} }
-    if ($script:Capability.Mode -eq 'Empty') { return [pscustomobject]@{value=@()} }
-    return [pscustomobject]@{value=@([pscustomobject]@{id='11111111-1111-4111-8111-111111111111';deviceId='22222222-2222-4222-8222-222222222222'});'@odata.nextLink'='https://graph.microsoft.com/v1.0/informationProtection/bitlocker/recoveryKeys?$skiptoken=not-followed'}
    }
-   if ($Uri -notin @('https://graph.microsoft.com/v1.0/devices?$top=1&$select=id','https://graph.microsoft.com/v1.0/deviceManagement/managedDevices?$top=1&$select=id')) { throw 'Unexpected endpoint, secret read, paging or deletion simulation.' }
-   [pscustomobject]@{value=@()}
+   [pscustomobject]@{value=@();'@odata.nextLink'='https://graph.microsoft.com/v1.0/devices?$skiptoken=not-followed'}
   }
-  foreach ($mode in @('Success','Empty')) {
-   $script:Capability.Mode=$mode;$script:Capability.Requests.Clear()
-   $report=@(Get-ExplorerGraphPermissionStatus -Definitions $Definitions -Context $context -Probe)
-   $bl=@($report | Where-Object Id -eq 'bitlocker-read')[0]
-   if ($script:Capability.Requests.Count -ne 3 -or -not $bl.Available -or -not $bl.ScopeGranted -or $bl.OperationVerified -or $bl.Verification -ne 'MetadataVerified' -or $bl.CheckStatus -ne 'Parziale') { throw 'Metadata access, including an empty list, was presented as proof of secret access or scanned beyond one metadata page.' }
-   if (@($report | Where-Object { $_.Id -in @('entra-remove','intune-remove') -and $_.Available -and -not $_.OperationVerified -and $_.Verification -eq 'NotTestable' }).Count -ne 2) { throw 'Granted delete scopes were reported as a verified deletion.' }
-   if (@($report | Where-Object { $_.Id -in @('entra-read','intune-read') -and $_.OperationVerified -and $_.CheckStatus -eq 'Verificata' }).Count -ne 2) { throw 'Successful harmless reads were not independently verified.' }
-  }
-  'PASS: preflight performs only the two inventory GETs and one identified metadata page; it never reads a secret, follows metadata pages, simulates deletion or equates metadata/empty results with key access.'
+  $report=@(Get-ExplorerGraphPermissionStatus -Definitions $Definitions -Context $context -Probe)
+  if ($script:Capability.Requests.Count -ne 2 -or @($report | Where-Object { $_.Id -in @('bitlocker-read','entra-remove','intune-remove') -and $_.Available -and -not $_.OperationVerified -and $_.Verification -eq 'ScopeOnly' }).Count -ne 3) { throw 'BitLocker or write capability was probed or not gated by scope.' }
+  if (@($report | Where-Object { $_.Id -in @('entra-read','intune-read') -and $_.OperationVerified -and $_.CheckStatus -eq 'Verificata' }).Count -ne 2) { throw 'Successful harmless reads were not independently verified.' }
+  'PASS: access checks only test limited inventory reads. BitLocker and write capabilities are gated by granted scopes without metadata, secret or write requests.'
   foreach ($mode in @('Denied','Malformed')) {
    $script:Capability.Mode=$mode
    $report=@(Get-ExplorerGraphPermissionStatus -Definitions $Definitions -Context $context -Probe)
-   $bl=@($report | Where-Object Id -eq 'bitlocker-read')[0]
-   if ($bl.Available -or -not $bl.ScopeGranted -or $bl.OperationVerified -or $bl.CheckStatus -ne 'Non disponibile') { throw 'Failed backend verification was hidden by a granted OAuth scope.' }
-   if ($mode -eq 'Denied' -and ($bl.Detail -notlike '*HTTP 403*' -or $bl.Detail -notlike '*Authorization_RequestDenied*' -or $bl.Detail -notlike '*77777777-7777-4777-8777-777777777777*')) { throw 'Safe diagnostic identifiers were lost.' }
-   $text=$report | ConvertTo-Json -Depth 5
-   if ($text -match 'SYNTHETIC_TOKEN_DO_NOT_DISCLOSE|000011-000011') { throw 'Raw Graph errors or secrets leaked into the login report.' }
+   $intune=@($report | Where-Object Id -eq 'intune-read')[0]
+   if ($intune.Available -or -not $intune.ScopeGranted -or $intune.OperationVerified -or $intune.CheckStatus -ne 'Non disponibile') { throw 'Failed backend verification was hidden by a granted OAuth scope.' }
+   if (@($report | Where-Object { $_.Id -eq 'intune-remove' -and $_.Available }).Count) { throw 'Write availability survived failed prerequisite read.' }
+   if ($mode -eq 'Denied' -and ($intune.Detail -notlike '*HTTP 403*' -or $intune.Detail -notlike '*Authorization_RequestDenied*' -or $intune.Detail -notlike '*77777777-7777-4777-8777-777777777777*')) { throw 'Safe diagnostic identifiers were lost.' }
+   if (($report | ConvertTo-Json -Depth 5) -match 'SYNTHETIC_TOKEN_DO_NOT_DISCLOSE|SYNTHETIC_PRIVATE_BODY') { throw 'Raw Graph error or token leaked into the login report.' }
   }
-  'PASS: a granted BitLocker scope with a denied/malformed metadata request is unavailable, with safe HTTP/code/correlation diagnostics and no raw body, token or password.'
+  'PASS: denied or malformed reads remain unavailable despite granted scopes, with safe diagnostics and related writes disabled.'
   $context.Scopes=@('Device.Read.All');$script:Capability.Requests.Clear()
   $report=@(Get-ExplorerGraphPermissionStatus -Definitions $Definitions -Context $context -Probe)
   if ($script:Capability.Requests.Count -ne 1 -or @($report | Where-Object Id -eq 'bitlocker-read')[0].ScopeGranted) { throw 'Missing consent caused an unauthorized probe or an implicit permission request.' }

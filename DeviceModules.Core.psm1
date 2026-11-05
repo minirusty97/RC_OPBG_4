@@ -122,7 +122,7 @@ function Add-DmInventory {
         try {
             $credentials=Read-ExplorerGlpiCredentials -Path $EnvPath -UseAppToken:([bool](Get-DmValue $glpi 'UseAppToken' $true))
             if ($null -eq $credentials) { throw 'Configurare i token GLPI nelle Impostazioni del wrapper.' }
-            $arguments=@{BaseUri=[uri]$glpi.BaseUri;UserToken=$credentials.User;PageSize=[int](Get-DmValue $glpi 'PageSize' 100);TimeoutSeconds=[int](Get-DmValue $glpi 'TimeoutSeconds' 20);BulkRead=$true;LookupCache=@{};ProgressQueue=$ProgressQueue}
+            $arguments=@{BaseUri=[uri]$glpi.BaseUri;UserToken=$credentials.User;PageSize=[int](Get-DmValue $glpi 'PageSize' 100);TimeoutSeconds=[int](Get-DmValue $glpi 'TimeoutSeconds' 20);BulkRead=$true;AllProfileEntities=$true;LookupCache=@{};ProgressQueue=$ProgressQueue}
             if ([bool](Get-DmValue $glpi 'UseAppToken' $true)) { $arguments.AppToken=$credentials.App }
             $allSerials=@($Rows | Where-Object { $_.IntuneSerial -and -not $_.SerialConflict } | ForEach-Object { $_.IntuneSerial } | Sort-Object -Unique)
             $serialRecords=@();$nameRecords=@();$bySerial=@{};$byName=@{}
@@ -154,6 +154,7 @@ function Add-DmInventory {
                         if ($row.GlpiRecords.Count -eq 1) { $row.GlpiState='Presente (solo nome)' }
                     }
                 }
+                if ($row.GlpiState -eq 'Assente') { $row.GlpiError='Nessuna scheda attiva corrispondente nelle entità autorizzate al profilo API GLPI.' }
                 if ($row.SerialConflict) { $row.GlpiError+=' Seriali discordanti: nessuna associazione hardware automatica confermata.' }
             }
             $glpiState='OK';$glpiError=''

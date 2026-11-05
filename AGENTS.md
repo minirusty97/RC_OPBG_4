@@ -6,9 +6,12 @@ manifest; a previous chat or local copy may be behind the repository.
 
 - Windows PowerShell 5.1, WinForms, STA. Preserve UTF-8 BOM and CRLF in existing
   PowerShell files; Italian strings in new PowerShell files also need a BOM.
-- Authenticate only through the bottom Accesso button in the suite wrapper.
-  Feature actions assert the existing delegated session. No certificate mode,
-  incremental-consent dialogs, automatic module installation or app fallback.
+- Start interactive authentication only from Accesso in the suite wrapper.
+  Startup may restore the previously confirmed delegated account through the
+  Windows user token cache in silent mode. Feature actions assert the verified
+  session. Keep account metadata local and leave token storage to the SDK.
+  No certificate mode, incremental-consent dialogs, automatic module
+  installation or app fallback.
 - Keep read and write access separate in the manifest, UI and backend. Optional
   Entra groups can restrict each module further. Graph roles still govern the
   actual operation; do not prove a write permission with a destructive probe.

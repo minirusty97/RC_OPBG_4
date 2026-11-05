@@ -37,6 +37,7 @@ riporta visualizzati sul totale e selezionati. I contatori dei gruppi consideran
 
 Intune arricchisce l'inventario tramite Azure AD Device ID. GLPI usa seriale
 Intune quando disponibile, poi il nome esatto se il seriale non trova schede.
+La consultazione copre tutte le entità autorizzate al profilo API GLPI.
 Un risultato solo per nome viene segnalato da verificare se il seriale manca
 o e diverso in GLPI; non conferma da solo l identita hardware. Mostra ID, nome effettivo,
 stato, gruppo, CENSITO e inventario nei dettagli. Le ricerche raggruppate

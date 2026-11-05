@@ -268,34 +268,26 @@ function Get-ExplorerGraphPermissionStatus {
     foreach ($definition in @($Definitions)) {
         $alternatives=Get-ExplorerGraphSetting $definition 'AnyOf' @()
         $available=@($alternatives | Where-Object { $scopes -contains $_ }).Count -gt 0
-        $detail='Ambito concesso; fattibilita dell''operazione non verificata.'
+        $detail='Ambito concesso. L''autorizzazione effettiva viene valutata durante l''operazione.'
         $verification='ScopeOnly';$checkStatus='Solo ambito'
-        if ([string]$definition.Id -in @('entra-remove','intune-remove','groups-write')) { $verification='NotTestable';$checkStatus='Non verificabile';$detail='Ambito concesso. Scrittura non provata: ruolo e diritti sul singolo oggetto non verificati.' }
         if (-not $available) { $detail='Consenso mancante: '+($alternatives -join ' oppure ');$verification='MissingScope';$checkStatus='Non disponibile' }
         [void]$statuses.Add([pscustomobject]@{Id=[string]$definition.Id;Name=[string]$definition.Name;Available=$available;ScopeGranted=$available;Verification=$verification;OperationVerified=$false;CheckStatus=$checkStatus;Detail=$detail})
     }
     if ($Probe) {
-        foreach ($readProbe in @(@{Id='entra-read';Uri='https://graph.microsoft.com/v1.0/devices?$top=1&$select=id'},@{Id='intune-read';Uri='https://graph.microsoft.com/v1.0/deviceManagement/managedDevices?$top=1&$select=id'},@{Id='groups-read';Uri='https://graph.microsoft.com/v1.0/groups?$top=1&$select=id'},@{Id='bitlocker-read';Uri='https://graph.microsoft.com/v1.0/informationProtection/bitlocker/recoveryKeys'})) {
+        foreach ($readProbe in @(@{Id='entra-read';Uri='https://graph.microsoft.com/v1.0/devices?$top=1&$select=id'},@{Id='intune-read';Uri='https://graph.microsoft.com/v1.0/deviceManagement/managedDevices?$top=1&$select=id'},@{Id='groups-read';Uri='https://graph.microsoft.com/v1.0/groups?$top=1&$select=id'})) {
             $status=@($statuses | Where-Object Id -eq $readProbe.Id)
             if ($status.Count -ne 1 -or -not $status[0].Available) { continue }
             if ($null -ne $ProgressQueue) { $ProgressQueue.Enqueue([pscustomobject]@{Kind='Verification';Message=('Verifica lettura: '+$status[0].Name)}) }
             try {
                 $arguments=@{Method='GET';Uri=$readProbe.Uri;OutputType='PSObject';ErrorAction='Stop'}
-                if ($readProbe.Id -eq 'bitlocker-read') { $arguments.Headers=@{'User-Agent'='AssistenteIT-AccessCheck'} }
-                # One metadata page only. No /{keyId}, $select=key, $top or paging.
                 $page=Invoke-MgGraphRequest @arguments
                 $values=Get-ExplorerGraphSetting $page 'value'
                 if ($null -eq $values -or -not ($values -is [Array] -or $values -is [Collections.IList])) { throw 'Risposta Graph non valida.' }
                 $status[0].Verification='ReadVerified';$status[0].OperationVerified=$true;$status[0].CheckStatus='Verificata'
                 $status[0].Detail='Ambito concesso; GET di lettura riuscita. Accesso limitato agli oggetti autorizzati.'
-                if ($readProbe.Id -eq 'bitlocker-read') {
-                    $status[0].Verification='MetadataVerified';$status[0].OperationVerified=$false;$status[0].CheckStatus='Parziale'
-                    $status[0].Detail='Elenco metadati accessibile. Password non richiesta; lettura della chiave sul dispositivo non verificata.'
-                }
             }
             catch {
-                $stage='InitialRead';if ($readProbe.Id -eq 'bitlocker-read') { $stage='BitLockerMetadata' }
-                $safeError=New-ExplorerGraphOperationError -Failure $_ -Stage $stage
+                $safeError=New-ExplorerGraphOperationError -Failure $_ -Stage InitialRead
                 $status[0].Available=$false;$status[0].Verification='ProbeFailed';$status[0].CheckStatus='Non disponibile';$status[0].OperationVerified=$false
                 $status[0].Detail='Ambito concesso, ma verifica non riuscita: '+$safeError.Message
             }

@@ -16,7 +16,7 @@ function Show-AssistenteITModuleAccess {
     $grid.AutoSizeColumnsMode='Fill';$grid.MultiSelect=$false;$grid.AutoSizeRowsMode='AllCells';$grid.DefaultCellStyle.WrapMode='True'
     [void]$grid.Columns.Add('Name','Funzione');[void]$grid.Columns.Add('State','Esito');[void]$grid.Columns.Add('Detail','Dettaglio')
     $grid.Columns['Name'].FillWeight=28;$grid.Columns['State'].FillWeight=24;$grid.Columns['Detail'].FillWeight=48
-    $hint=New-Object Windows.Forms.Label;$hint.Text='Verificata: richiesta di lettura riuscita. Parziale: solo metadati BitLocker, senza password. Le cancellazioni non vengono provate. I diritti possono dipendere dal singolo dispositivo e dai ruoli del tecnico.';$hint.SetBounds(18,398,724,60)
+    $hint=New-Object Windows.Forms.Label;$hint.Text='La verifica usa richieste di lettura limitate. I servizi applicano i diritti del tecnico sul singolo dispositivo durante ciascuna operazione.';$hint.SetBounds(18,398,724,60)
     $codeBox=New-Object Windows.Forms.TextBox;$codeBox.ReadOnly=$true;$codeBox.Visible=$false;$codeBox.SetBounds(18,464,200,25)
     $browserButton=New-Object Windows.Forms.Button;$browserButton.Text='Apri accesso Microsoft';$browserButton.Visible=$false;$browserButton.SetBounds(230,461,190,30)
     $browserButton.Add_Click({ [void][Diagnostics.Process]::Start('https://microsoft.com/devicelogin') })
@@ -59,7 +59,7 @@ function Show-AssistenteITModuleAccess {
             if ($state.Cancelled) { $dialog.Close();return }
             if ($state.Pipeline.Streams.Error.Count -gt 0 -or $output.Count -ne 1) { throw 'Verifica non completata. Controllare configurazione, connessione e consensi con il sistemista.' }
             $state.Result=$output[0]
-            foreach ($permission in $state.Result.Permissions) {
+            foreach ($permission in @($state.Result.Permissions | Where-Object Id -in @('entra-read','intune-read','groups-read'))) {
                 $label='Non disponibile';if ($permission.Available) { $label='Solo ambito' }
                 $check=$permission.PSObject.Properties['CheckStatus'];if ($null -ne $check) { $label=[string]$check.Value }
                 $index=$grid.Rows.Add($permission.Name,$label,$permission.Detail)
@@ -68,7 +68,7 @@ function Show-AssistenteITModuleAccess {
                 else { $grid.Rows[$index].DefaultCellStyle.BackColor=[Drawing.Color]::LemonChiffon }
             }
             $grid.ClearSelection()
-            $status.Text=('Account: {0}. App: {1}.{2}Verifica completata; nessuna richiesta di nuovi permessi verra avviata nel modulo.' -f $state.Result.Account,$state.Result.AppName,[Environment]::NewLine)
+            $status.Text=('Account: {0}. App: {1}.{2}Verifica delle letture completata.' -f $state.Result.Account,$state.Result.AppName,[Environment]::NewLine)
             if (-not $VerifyOnly -and @($state.Result.Permissions | Where-Object { -not $_.Available }).Count) { $open.Text='Apri funzioni disponibili' }
             $open.Enabled=$true
         }

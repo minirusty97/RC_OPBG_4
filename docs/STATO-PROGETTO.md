@@ -1,9 +1,10 @@
 # Stato condiviso per riprendere il lavoro
 
 Repository: `minirusty97/RC_OPBG_4`. Consultare sempre il main e la release
-effettiva. La versione sorgente **1.2.2** corregge le ricerche GLPI per
-seriale e nome raggruppate e il pulsante Apri scheda GLPI di Gestione Ring
-e Verifica Hybrid Join. La 1.2.1 corregge il blocco di cancellazione
+effettiva. La versione sorgente **1.3.0** verifica l'accesso salvato
+all'apertura e cerca le schede Hybrid e Ring nelle entità autorizzate al
+profilo API GLPI. La 1.2.2 corregge le ricerche GLPI per seriale e nome
+raggruppate e il pulsante Apri scheda GLPI. La 1.2.1 corregge il blocco di cancellazione
 per figli AD con solo DN leggibile, con consenso esplicito e normale
 eliminazione LDAP del singolo figlio. La 1.2.0 include
 ricerca AD su un DC configurabile, dettagli GLPI raggruppati con cache per
@@ -17,8 +18,9 @@ scansione completa automatica, vista Tutti e filtri locali; F5 rilegge tutto.
 | Verifica Hybrid Join | Start-HybridJoin.ps1 | HybridJoin.Core.psm1; docs/Hybrid-Join.md |
 | Gestione Ring Intune | Start-RingManager.ps1 | RingManager.Core.psm1; docs/Gestione-Ring.md |
 
-Decisioni condivise: accesso delegato unico dal pulsante in basso; niente
-certificati o login dalle funzioni. Ogni modulo distingue lettura e scrittura.
+Il wrapper ripristina in modo silenzioso l'account delegato confermato.
+Il pulsante Accesso in basso gestisce il login interattivo. Ogni modulo
+distingue lettura e scrittura e usa la sessione verificata del wrapper.
 GLPI resta alla versione 10.0.11 senza plugin aggiuntivi. Le Note BitLocker
 sono in chiaro per recupero estremo, append senza sovrascrittura, con lettura
 compatibile degli archivi V1. Non riportare chiavi reali in log o repository.
@@ -80,3 +82,19 @@ la configurazione. Gli errori di apertura appaiono nella barra di stato.
 I test riproducono l'ordine invertito dei criteri e il clic nelle finestre
 native. Le schede visibili al profilo del token GLPI vanno confermate
 nell'ambiente del tecnico.
+
+## Accesso e inventario in 1.3.0
+
+Al primo accesso confermato si salva un riferimento all'account. Graph
+PowerShell e Windows gestiscono la cache protetta dei token. All'apertura
+si verifica il medesimo account nella configurazione attiva, con
+acquisizione silenziosa e letture limitate di Entra, Intune e gruppi.
+Le autorizzazioni alle scritture e alle chiavi sono valutate dai servizi
+quando si eseguono le operazioni.
+
+Hybrid e Ring estendono la consultazione a tutte le entità del profilo API.
+Su GLPI 10.0.11 il cambio di contesto seleziona tutte le entità quando
+`entities_id` viene omesso. Un errore di selezione rende l'inventario
+non verificabile. I test coprono una scheda fuori dall'entità predefinita
+e il ripristino della sessione con risposte sintetiche. La verifica con
+i criteri di accesso del tenant e il profilo GLPI in uso avviene sul posto.

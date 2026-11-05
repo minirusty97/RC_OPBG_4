@@ -19,26 +19,56 @@ try {
     [AssistenteIT.GraphAuthConsole]::RegisterOwner($form.Handle)
     $gui=[long]$form.Handle
     Import-Module $Graph -ErrorAction Stop
+    $suiteRoot=Split-Path $Bridge -Parent
+    $suite=Import-Module (Join-Path $suiteRoot 'AssistenteIT/AssistenteIT.Core.psm1') -PassThru -ErrorAction Stop
+    & $suite {
+        param($Window,$Path)
+        $ErrorActionPreference='Stop'
+        $tenant='11111111-1111-4111-8111-111111111111'
+        $client='22222222-2222-4222-8222-222222222222'
+        $account='synthetic@example.invalid'
+        $saved=[pscustomobject]@{
+            SchemaVersion=1;Account=$account;ClientId=$client;TenantId=$tenant
+            Scopes=@('Device.Read.All','DeviceManagementManagedDevices.ReadWrite.All');UseBroker=$false
+            Record=[pscustomobject]@{username=$account;authority='login.microsoftonline.com';homeAccountId=('33333333-3333-4333-8333-333333333333.'+$tenant);tenantId=$tenant;clientId=$client;version='1.0'}
+        }
+        $auth=[pscustomobject]@{AuthenticationMode='Delegated';TenantId=$tenant;ClientId=$client}
+        $script:FakeSilentToken=@{Calls=0;Token='';Fail=$false}
+        function script:Get-AssistenteITSilentGraphToken {
+            param($Credential,$Scopes)
+            $script:FakeSilentToken.Calls++
+            if ($Credential.GetType().FullName -ne 'Azure.Identity.InteractiveBrowserCredential' -or ($Scopes -join ',') -ne 'https://graph.microsoft.com/.default') { throw 'Wrong silent credential or scope.' }
+            if ($script:FakeSilentToken.Fail) { throw 'Synthetic interaction required.' }
+            [pscustomobject]@{Token=$script:FakeSilentToken.Token}
+        }
+        if ($null -ne (Restore-AssistenteITGraphContext $Path $auth $Window)) { throw 'A missing record restored a session.' }
+        $saved | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $Path -Encoding UTF8
+        $foreign=$auth | Select-Object *;$foreign.ClientId='44444444-4444-4444-8444-444444444444'
+        if ($null -ne (Restore-AssistenteITGraphContext $Path $foreign $Window) -or $script:FakeSilentToken.Calls -ne 0) { throw 'Foreign configuration was used to get a token.' }
+        $null=New-AssistenteITSilentGraphCredential -Saved $saved -WindowHandle $Window
+        $saved.UseBroker=$true
+        $null=New-AssistenteITSilentGraphCredential -Saved $saved -WindowHandle $Window
+        $script:FakeSilentToken.Fail=$true
+        if ($null -ne (Restore-AssistenteITGraphContext $Path $auth $Window) -or $script:FakeSilentToken.Calls -ne 1) { throw 'Interaction-required session was accepted or retried.' }
+        $script:FakeSilentToken.Fail=$false
+        $payload=@{appid=$client;tid=$tenant;upn=$account;aud='00000003-0000-0000-c000-000000000000';scp='Device.Read.All'} | ConvertTo-Json -Compress
+        $script:FakeSilentToken.Token='header.'+[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($payload)).TrimEnd('=').Replace('+','-').Replace('/','_')+'.signature'
+        $context=Restore-AssistenteITGraphContext $Path $auth $Window
+        $sdkSession=[Microsoft.Graph.PowerShell.Authentication.GraphSession]::Instance
+        if ($null -eq $context -or $context.AuthType -ne 'Delegated' -or ($context.Scopes -join ',') -ne 'Device.Read.All' -or $null -eq $sdkSession.GraphHttpClient -or $script:FakeSilentToken.Calls -ne 2) { throw 'Silent restore did not bind the real SDK client and freshly granted scopes.' }
+    } $form.Handle (Join-Path (Split-Path $Report -Parent) 'saved-session.json')
     $sharedContext=0
-    foreach ($phase in @('Prepare','Read','Read')) {
+    foreach ($phase in 1..3) {
      $worker=[RunspaceFactory]::CreateRunspace();$worker.ApartmentState='STA';$worker.ThreadOptions='ReuseThread';$worker.Open()
      $pipeline=[PowerShell]::Create();$pipeline.Runspace=$worker
      try {
       [void]$pipeline.AddScript({
-       param($Graph,$Phase)
+       param($Graph)
        $ErrorActionPreference='Stop';Import-Module $Graph -ErrorAction Stop
-       if ($Phase -eq 'Prepare') {
-        $core=@([AppDomain]::CurrentDomain.GetAssemblies() | Where-Object {$_.GetName().Name -eq 'Microsoft.Graph.Authentication.Core'})[0]
-        $sdk=@([AppDomain]::CurrentDomain.GetAssemblies() | Where-Object {$_.GetName().Name -eq 'Microsoft.Graph.Authentication'})[0]
-        $session=$core.GetType('Microsoft.Graph.PowerShell.Authentication.GraphSession',$true).GetProperty('Instance').GetValue($null,$null)
-        $context=[Activator]::CreateInstance($sdk.GetType('Microsoft.Graph.PowerShell.Authentication.AuthContext',$true))
-        $context.Account='synthetic@example.invalid';$context.ClientId='22222222-2222-4222-8222-222222222222';$context.Scopes=[string[]]@('Device.Read.All')
-        $session.AuthContext=$context
-       }
        $current=Get-MgContext -ErrorAction Stop
        if ($null -eq $current -or $current.Account -ne 'synthetic@example.invalid' -or $current.ClientId -ne '22222222-2222-4222-8222-222222222222' -or $current.Scopes -notcontains 'Device.Read.All') { throw 'Bundled Graph SDK lost the verified context between module runspaces.' }
        $true
-      }.ToString()).AddArgument($Graph).AddArgument($phase)
+      }.ToString()).AddArgument($Graph)
       $invocation=$pipeline.BeginInvoke()
       if (-not $invocation.AsyncWaitHandle.WaitOne(15000)) { $pipeline.Stop();throw 'Shared SDK context test timed out.' }
       $result=@($pipeline.EndInvoke($invocation))
@@ -51,6 +81,7 @@ try {
     $core=@([AppDomain]::CurrentDomain.GetAssemblies() | Where-Object {$_.GetName().Name -eq 'Microsoft.Graph.Authentication.Core'})[0]
     $session=$core.GetType('Microsoft.Graph.PowerShell.Authentication.GraphSession',$true).GetProperty('Instance').GetValue($null,$null)
     $session.AuthContext=$null
+    $session.GraphHttpClient.Dispose();$session.GraphHttpClient=$null
     $assembly=@([AppDomain]::CurrentDomain.GetAssemblies() | Where-Object { $_.GetName().Name -eq 'Microsoft.Graph.Authentication.Core' })[0]
     $type=$assembly.GetType('Microsoft.Graph.PowerShell.Authentication.Core.Utilities.WindowHandleUtlities',$true)
     $method=$type.GetMethod('GetConsoleOrTerminalWindow',[Reflection.BindingFlags]'Public,Static')
@@ -89,6 +120,7 @@ try {
     finally { $process.Dispose() }
     $result=Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
     if ($result.SharedContext -ne 3 -or $result.Before -ne 0 -or $result.During -ne $result.Gui -or $result.After -ne $result.Gui -or $result.Reused -ne $result.Gui -or $result.Visible -or $result.VisibleAfter -or $result.VisibleReused -or $result.Console -eq 0 -or $result.Released -eq 0 -or $result.Released -eq $result.Gui -or $result.ReleasedAgain -ne $result.Released -or $result.RestoredOwner -ne $result.OriginalOwner) { throw ('The bundled Graph SDK must use the visible GUI while its native console stays hidden and ownership is released safely: '+($result|ConvertTo-Json -Compress)) }
+    'PASS: the bundled Graph SDK creates the silent client, rejects missing, foreign and interaction-required sessions, and uses freshly granted delegated scopes.'
     'PASS: the bundled Graph SDK preserves the verified context across disposed and reopened STA module runspaces without another login.'
     'PASS: bundled Graph SDK resolves the visible GUI for login and reuse, keeps the native console hidden throughout and restores its original owner before GUI disposal.'
 }

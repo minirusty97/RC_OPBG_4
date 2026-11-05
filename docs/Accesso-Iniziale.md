@@ -1,43 +1,45 @@
 # Accesso comune e autorizzazioni dei moduli
 
-Da Assistente IT 1.0.19 **Accesso** e un pulsante separato nella barra inferiore, accanto a Impostazioni, Cartella dati e Cerca aggiornamenti. Le schede dei moduli mostrano **Apri modulo**, inizialmente disabilitato.
+**Stato accesso** mostra l'account Microsoft e l'esito delle letture.
+**Accesso** è nella barra inferiore, accanto a Impostazioni, Cartella dati e
+Cerca aggiornamenti.
 
 ## Flusso
 
-1. Configurare tenant/app in Impostazioni, se necessario.
-2. Premere **Accesso** e completare il login Microsoft.
-3. Controllare il riepilogo dei permessi e confermare l'accesso. Nessun modulo viene aperto automaticamente.
-4. Il wrapper abilita ciascun modulo per il quale sono soddisfatti i requisiti di lettura, indicando **Sola lettura** o **Lettura e scrittura (ambiti concessi)**.
-5. Premere **Apri modulo** sulla scheda desiderata. Il modulo usa la sessione gia verificata, senza un secondo login o nuovi consensi.
+1. Dopo l'aggiornamento a 1.3.0, premere **Accesso** una volta, completare il
+   login Microsoft e confermare. Il wrapper salva il riferimento all'account
+   confermato nella cartella dati personale.
+2. Alle aperture successive, il wrapper prova a ripristinare la sessione in
+   background e abilita i moduli per i quali le letture richieste riescono.
+3. Usare **Accesso** se il pannello chiede di rinnovare la sessione, per
+   esempio dopo una richiesta di MFA o un cambio di app o tenant.
 
-I moduli sono ospitati in runspace STA separati nello stesso processo, cosi possono condividere il contesto statico del Graph SDK senza passare token su riga di comando o tramite file. Chiudere i moduli prima di cambiare accesso/impostazioni, aggiornare o uscire dal wrapper. Questa scelta mantiene la sessione coerente e non interrompe operazioni attive.
+Microsoft Graph PowerShell e Windows gestiscono la cache dei token per il
+profilo utente. Il file `Config/graph-session.json` contiene solo i dati
+dell'account e della registrazione necessari a selezionare la sessione.
+Il ripristino usa acquisizione silenziosa anche per il rinnovo dei token
+durante le richieste. L'autenticazione interattiva parte dal pulsante Accesso.
 
-## Permessi e modalita
+I moduli condividono la sessione verificata tramite runspace STA nello stesso
+processo. Chiudere i moduli prima di cambiare accesso o impostazioni.
 
-Il manifest di ogni modulo dichiara `GraphPermissions`, `ReadPermissionIds` e `WritePermissionIds`. Basta un requisito di lettura disponibile tra quelli dichiarati per abilitare il modulo; le singole fonti/funzioni mantengono i loro controlli specifici. Senza un requisito di scrittura disponibile il modulo si apre in sola lettura: eliminazioni e archiviazioni GLPI sono disabilitate e rifiutate anche dai comandi di scrittura.
+## Permessi e modalità
 
-Esempio dei riferimenti ai requisiti dichiarati in `GraphPermissions`:
+Il manifest dichiara gli ambiti e i requisiti di lettura e scrittura per
+ogni modulo. Un modulo può richiedere tutte le sue letture per aprirsi.
+Il wrapper mostra **Sola lettura** o **Lettura e scrittura (ambiti concessi)**
+sulla scheda del modulo.
 
-```json
-"ReadPermissionIds": ["entra-read", "intune-read"],
-"WritePermissionIds": ["entra-remove", "intune-remove"]
-```
+| Lettura | Richiesta di verifica |
+| --- | --- |
+| Entra ID | Un dispositivo, con il solo ID |
+| Intune | Un dispositivo gestito, con il solo ID |
+| Gruppi | Un gruppo, con il solo ID |
+| Appartenenze dell'account | Controllo quando il manifest configura regole di gruppo |
 
-Gli ambiti OAuth sono concessi all'app: non descrivono da soli tutti i diritti di ogni collega. I ruoli Entra/Intune e le autorizzazioni effettive su AD/GLPI restano il controllo del servizio. Da 1.0.20 il riepilogo distingue l'ambito concesso dalla verifica effettivamente eseguita:
-
-| Funzione | Test iniziale | Esito positivo |
-| --- | --- | --- |
-| Ricerca Entra / Intune | GET di lettura limitata | Verificata, nei limiti degli oggetti accessibili all'utente |
-| Password BitLocker | Una pagina di `GET /informationProtection/bitlocker/recoveryKeys`, senza proprieta `key` | Parziale: accesso all'elenco metadati; lettura password non verificata |
-| Eliminazione Entra / Intune | Controllo ambito e prerequisiti di lettura; nessuna DELETE | Non verificabile senza eseguire l'operazione |
-
-Le richieste BitLocker includono lo User-Agent richiesto dalla documentazione, non usano `$top`, non seguono le pagine successive e non interrogano la singola chiave. Un elenco vuoto conferma soltanto che la richiesta e stata accettata. Un errore del servizio mantiene separati `ScopeGranted` e `Available` e mostra la funzione come non disponibile.
-
-L'accesso ai metadati non dimostra quello alla password: Entra prevede anche il diritto personalizzato `microsoft.directory/bitlockerKeys/metadata/read`, distinto da `microsoft.directory/bitlockerKeys/key/read`, e puo limitare i diritti al singolo dispositivo o unita amministrativa. Il test non promette di provare il recupero effettivo.
-
-Le API di cancellazione non espongono una simulazione documentata che verifichi tutti i diritti senza cancellare. `-WhatIf` interrompe l'operazione nel client, quindi non prova l'autorizzazione Microsoft. Non vengono inviate DELETE di prova, nemmeno verso identificativi inesistenti, e non vengono richiesti nuovi consensi per analizzare i ruoli.
-
-Solo le letture realmente eseguite sono verdi; verifiche parziali o non eseguibili sono gialle. Il successivo controllo del servizio rimane determinante.
+Gli esiti delle letture indicano la risposta effettiva del servizio.
+BitLocker e scritture sono abilitati in base agli ambiti e ai prerequisiti.
+I servizi verificano i diritti effettivi al momento dell'operazione.
 
 ## Gruppi facoltativi per modulo
 
@@ -73,7 +75,7 @@ Finestre e collegamenti usano l'identita Windows **AssistenteIT.Desktop** e l'ic
 
 Gli errori della ricerca chiavi distinguono ricerca Intune, Azure AD Device ID, elenco metadati, lettura password e risposta non valida. Quando disponibili mostrano stato HTTP, codice Graph e request-id; non riportano corpi di risposta, token o password. Un HTTP 400 non viene presentato come prova di un ruolo mancante.
 
-Riferimenti per i controlli: [elenco metadati BitLocker](https://learn.microsoft.com/en-us/graph/api/bitlocker-list-recoverykeys), [permessi distinti per metadati e password](https://learn.microsoft.com/en-us/entra/identity/role-based-access-control/custom-device-permissions), [cancellazione Entra](https://learn.microsoft.com/en-us/graph/api/device-delete), [WhatIf nel cmdlet](https://learn.microsoft.com/en-us/powershell/module/microsoft.graph.identity.directorymanagement/remove-mgdevice).
+[Cache di Graph PowerShell](https://learn.microsoft.com/powershell/microsoftgraph/authentication-commands) · [Acquisizione senza interazione](https://learn.microsoft.com/dotnet/api/azure.identity.interactivebrowsercredentialoptions.disableautomaticauthentication)
 
 Riferimenti: [AppUserModelID](https://learn.microsoft.com/en-us/windows/win32/shell/appids), [scope .default](https://learn.microsoft.com/en-us/entra/identity-platform/scopes-oidc#the-default-scope), [appartenenze dell'utente](https://learn.microsoft.com/en-us/graph/api/user-list-transitivememberof).
 
