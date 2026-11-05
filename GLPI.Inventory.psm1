@@ -3,7 +3,7 @@
     Connettore di consultazione GLPI REST API V1.
     Usato da Computer Explorer e dai moduli di inventario.
     Gli stati vengono letti dal server; non ci sono ID di stato prefissati.
-    Vengono effettuate solo richieste GET, inclusa apertura/chiusura della sessione.
+    La consultazione usa GET. Per l'inventario multi-entità il contesto della sessione API è selezionato con changeActiveEntities.
 #>
 Set-StrictMode -Version 2.0
 
@@ -155,7 +155,7 @@ function Find-GlpiComputer {
         [Security.SecureString]$AppToken,
         [ValidateRange(1, 500)][int]$PageSize = 100,
         [ValidateRange(1, 120)][int]$TimeoutSeconds = 20,
-        [switch]$BulkRead, [System.Collections.IDictionary]$LookupCache, $ProgressQueue
+        [switch]$BulkRead, [switch]$AllProfileEntities, [System.Collections.IDictionary]$LookupCache, $ProgressQueue
     )
 
     if (-not $BaseUri.IsAbsoluteUri -or $BaseUri.Scheme -notin @('http', 'https') -or
@@ -190,6 +190,7 @@ function Find-GlpiComputer {
     $results = @{}
     if ($null -eq $LookupCache) { $LookupCache=@{} }
     $scope='';if ($BulkRead) { $scope=Get-GlpiLookupScope $BaseUri $UserToken $AppToken }
+    if ($AllProfileEntities) { $scope+='|all-entities' }
 
     try {
         if ($null -ne $AppToken -and $AppToken.Length -gt 0) {
@@ -203,6 +204,13 @@ function Find-GlpiComputer {
         $session.Headers['Session-Token'] = $token
         $token = $null
         $sessionOpened = $true
+        if ($AllProfileEntities) {
+            # GLPI 10.0.11 selects all profile entities only when entities_id is
+            # omitted. An explicit "all" is cast to integer 0 by that version.
+            $changed=Invoke-RestMethod -Method POST -Uri ($session.BaseUri+'/changeActiveEntities') -Headers $session.Headers `
+                -ContentType 'application/json' -Body '{"is_recursive":true}' -TimeoutSec $session.TimeoutSeconds -ErrorAction Stop
+            if ([string]$changed -ine 'true') { throw 'Impossibile attivare tutte le entità autorizzate del profilo GLPI.' }
+        }
 
         # Identifica le colonne tramite tabella/campo; non assume numeri fissi.
         $options = Invoke-GlpiRead -Session $session -Path 'listSearchOptions/Computer'

@@ -1,6 +1,7 @@
 ﻿#requires -version 5.1
 Set-StrictMode -Version 2.0
 . (Join-Path $PSScriptRoot 'LegacyMigration.ps1')
+. (Join-Path $PSScriptRoot 'Graph.Session.ps1')
 . (Join-Path (Split-Path $PSScriptRoot -Parent) 'Graph.Authentication.ps1')
 . (Join-Path (Split-Path $PSScriptRoot -Parent) 'Glpi.Credentials.ps1')
 
@@ -55,7 +56,7 @@ function Get-AssistenteITPaths {
     }
     $data = [IO.Path]::GetFullPath($DataRoot)
     $config = Join-Path $data 'Config'
-    return [pscustomobject]@{DataRoot=$data; ConfigDirectory=$config; ConfigPath=(Join-Path $config 'computer-explorer.config.local.json'); EnvPath=(Join-Path $config '.env')}
+    return [pscustomobject]@{DataRoot=$data; ConfigDirectory=$config; ConfigPath=(Join-Path $config 'computer-explorer.config.local.json'); EnvPath=(Join-Path $config '.env'); GraphSessionPath=(Join-Path $config 'graph-session.json')}
 }
 
 function Initialize-AssistenteIT {
@@ -192,20 +193,26 @@ function Open-AssistenteITActivity {
 
 function Initialize-AssistenteITModuleAccess {
     [CmdletBinding()]
-    param([Parameter(Mandatory=$true)]$Module,[Parameter(Mandatory=$true)][string]$ConfigPath,$ProgressQueue)
+    param([Parameter(Mandatory=$true)]$Module,[Parameter(Mandatory=$true)][string]$ConfigPath,$ProgressQueue,[string]$SessionPath,[IntPtr]$WindowHandle)
     $settings=Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
     $authentication=ConvertTo-ExplorerGraphAuthentication (Get-ExplorerGraphSetting $settings 'Graph')
     $definitions=Get-ExplorerGraphSetting $Module 'GraphPermissions' @()
-    $scopes=@($definitions | ForEach-Object { $_.AnyOf[0] } | Sort-Object -Unique)
-    # Request a scope only if removing it would leave a declared requirement
-    # uncovered. For example Intune ReadWrite already covers its read requirement.
-    foreach ($candidate in @($scopes)) {
-        $remaining=@($scopes | Where-Object { $_ -ne $candidate })
-        $uncovered=@($definitions | Where-Object { @($_.AnyOf | Where-Object { $remaining -contains $_ }).Count -eq 0 })
-        if ($uncovered.Count -eq 0) { $scopes=$remaining }
+    if ($SessionPath) {
+        $context=Restore-AssistenteITGraphContext -Path $SessionPath -Authentication $authentication -WindowHandle $WindowHandle
+        if ($null -eq $context) { return }
     }
-    if ($authentication.AuthenticationMode -eq 'Interactive' -and [bool](Get-ExplorerGraphSetting $Module 'NeedsGroupMembership' $false)) { $scopes=@($scopes+@('User.Read') | Sort-Object -Unique) }
-    $context=Initialize-ExplorerGraphSession -Scopes $scopes -GraphAuthentication $authentication -ProgressQueue $ProgressQueue
+    else {
+        $scopes=@($definitions | ForEach-Object { $_.AnyOf[0] } | Sort-Object -Unique)
+        # Request a scope only if removing it would leave a declared requirement
+        # uncovered. For example Intune ReadWrite already covers its read requirement.
+        foreach ($candidate in @($scopes)) {
+            $remaining=@($scopes | Where-Object { $_ -ne $candidate })
+            $uncovered=@($definitions | Where-Object { @($_.AnyOf | Where-Object { $remaining -contains $_ }).Count -eq 0 })
+            if ($uncovered.Count -eq 0) { $scopes=$remaining }
+        }
+        if ($authentication.AuthenticationMode -eq 'Interactive' -and [bool](Get-ExplorerGraphSetting $Module 'NeedsGroupMembership' $false)) { $scopes=@($scopes+@('User.Read') | Sort-Object -Unique) }
+        $context=Initialize-ExplorerGraphSession -Scopes $scopes -GraphAuthentication $authentication -ProgressQueue $ProgressQueue
+    }
     $permissions=@(Get-ExplorerGraphPermissionStatus -Definitions $definitions -Context $context -ProgressQueue $ProgressQueue -Probe)
     $appName=[string](Get-ExplorerGraphSetting $context 'AppName' '')
     if ([string]::IsNullOrWhiteSpace($appName)) { $appName=[string]$context.ClientId }
@@ -327,4 +334,4 @@ function Get-AssistenteITModuleStartInfo {
     return $info
 }
 
-Export-ModuleMember -Function Initialize-AssistenteITWindowIdentity, Get-AssistenteITAccessDefinition, Get-AssistenteITModuleAccess, Start-AssistenteITModule, Initialize-AssistenteITModuleAccess, ConvertTo-ExplorerGraphAuthentication, Read-AssistenteITManifest, Get-AssistenteITPaths, Initialize-AssistenteIT, Save-AssistenteITSettings, Enable-AssistenteITDependencies, Get-AssistenteITPrerequisites, Open-AssistenteITActivity, Get-AssistenteITModuleStartInfo, Move-AssistenteITUserData
+Export-ModuleMember -Function Save-AssistenteITGraphSession, Initialize-AssistenteITWindowIdentity, Get-AssistenteITAccessDefinition, Get-AssistenteITModuleAccess, Start-AssistenteITModule, Initialize-AssistenteITModuleAccess, ConvertTo-ExplorerGraphAuthentication, Read-AssistenteITManifest, Get-AssistenteITPaths, Initialize-AssistenteIT, Save-AssistenteITSettings, Enable-AssistenteITDependencies, Get-AssistenteITPrerequisites, Open-AssistenteITActivity, Get-AssistenteITModuleStartInfo, Move-AssistenteITUserData

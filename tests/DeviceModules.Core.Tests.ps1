@@ -43,7 +43,8 @@ try {
     }
     function script:Read-ExplorerGlpiCredentials {param($Path,$UseAppToken);[pscustomobject]@{User=(ConvertTo-SecureString synthetic -AsPlainText -Force);App=(ConvertTo-SecureString synthetic -AsPlainText -Force)} }
     function script:Find-GlpiComputer {
-        param($BaseUri,$UserToken,$AppToken,$PageSize,$TimeoutSeconds,$SerialNumber,$ExactName,$BulkRead,$LookupCache,$ProgressQueue)
+        param($BaseUri,$UserToken,$AppToken,$PageSize,$TimeoutSeconds,$SerialNumber,$ExactName,$BulkRead,$AllProfileEntities,$LookupCache,$ProgressQueue)
+        if (-not $AllProfileEntities) { throw 'Module inventory used only the default API entity.' }
         [void]$script:DmFixture.Finds.Add(@{Serials=$SerialNumber;Names=$ExactName})
         if ($script:DmFixture.Mode -eq 'GlpiDenied') { throw 'Synthetic GLPI read failure.' }
         if ($SerialNumber -and $script:DmFixture.Mode -like 'SerialMiss*') { return @() }

@@ -38,8 +38,7 @@ $bootstrapTestTimer.Add_Tick({
   $status=$dialog.Controls.Find('GraphAccessStatus',$true)[0]
   if ($testState.Mode -eq 'Success' -and $open.Enabled) {
    $rows=$dialog.Controls.Find('GraphAccessPermissions',$true)[0].Rows
-   if ($rows.Count -ne 5 -or @($rows | Where-Object { $_.Cells['Name'].Value -eq 'Eliminazione Entra ID' -and $_.Cells['State'].Value -eq 'Non disponibile' }).Count -ne 1) { throw 'Missing consent is not reported before opening the module.' }
-   if (@($rows | Where-Object { $_.Cells['Name'].Value -eq 'Lettura chiavi BitLocker cloud' -and $_.Cells['State'].Value -eq 'Parziale' }).Count -ne 1 -or @($rows | Where-Object { $_.Cells['Name'].Value -eq 'Eliminazione Intune' -and $_.Cells['State'].Value -eq 'Non verificabile' }).Count -ne 1) { throw 'The login UI claims that metadata or granted write scope proves the actual operation.' }
+   if ($rows.Count -ne 2 -or @($rows | Where-Object { $_.Cells['State'].Value -ne 'Verificata' -or $_.Cells['Name'].Value -notin @('Ricerca Entra ID','Ricerca Intune') }).Count) { throw 'The login UI includes operations that cannot be verified by safe reads.' }
    $testState.Seen=$true;$bootstrapTestTimer.Stop()
    $bitmap=New-Object Drawing.Bitmap($dialog.Width,$dialog.Height)
    try { $dialog.DrawToBitmap($bitmap,(New-Object Drawing.Rectangle(0,0,$bitmap.Width,$bitmap.Height)));$memory=New-Object IO.MemoryStream;try { $bitmap.Save($memory,[Drawing.Imaging.ImageFormat]::Png);Write-Host ('CAPABILITY_UI_PNG:'+ [Convert]::ToBase64String($memory.ToArray())) } finally { $memory.Dispose() } }
@@ -73,7 +72,7 @@ try {
  }
  if ([BootstrapUiFixture]::Connections -ne 3) { throw 'Native bootstrap retried authentication unexpectedly.' }
  'PASS: module operations reuse the process SDK session after initial verification without a second authentication or credential handoff file.'
- 'PASS: the native initial wrapper reports partial consent before module opening and refuses opening after denied or cancelled authentication, with exactly one login attempt each.'
+ 'PASS: the native initial wrapper reports verified reads before module opening and refuses opening after denied or cancelled authentication, with exactly one login attempt each.'
  $GraphAccess=$savedAccess;$tokens=$null;$errors=$null
  $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'Start-ComputerExplorer.ps1'),[ref]$tokens,[ref]$errors)
  foreach ($name in @('Test-UiGraphPermission','Show-RemovalSources')) { $definition=$ast.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name},$true);Set-Item ('Function:'+$name) $definition.Body.GetScriptBlock() }

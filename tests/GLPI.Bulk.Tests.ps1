@@ -3,17 +3,25 @@ $ErrorActionPreference='Stop'
 $module=Import-Module (Join-Path $PSScriptRoot '../GLPI.Inventory.psm1') -Force -PassThru
 try {
  & $module {
-    $script:BulkFixture=@{Mode='';Batch=0;Single=0;Dropdown=0;Sizes=(New-Object 'Collections.Generic.List[int]')}
+    $script:BulkFixture=@{Mode='';Batch=0;Single=0;Dropdown=0;ScopeChanges=0;AllEntities=$false;Closed=0;Sizes=(New-Object 'Collections.Generic.List[int]')}
     function script:Invoke-RestMethod {
-        [CmdletBinding()]param($Method,$Uri,$Headers,$ContentType,$TimeoutSec)
-        if ($Method -ne 'GET') { throw 'Inventory attempted a write.' }
+        [CmdletBinding()]param($Method,$Uri,$Headers,$ContentType,$TimeoutSec,$Body)
         $f=$script:BulkFixture;$parsed=[uri]$Uri;$q=@{}
+        if ($parsed.AbsolutePath -like '*/changeActiveEntities') {
+            if ($Method -ne 'POST' -or $Body -cne '{"is_recursive":true}' -or $Headers['Session-Token'] -ne 'synthetic') { throw 'GLPI 10.0.11 requires an authenticated session update with the entity ID omitted.' }
+            $f.ScopeChanges++
+            if ($f.Mode -eq 'ScopeDenied') { return $false }
+            $f.AllEntities=$true
+            return $true
+        }
+        if ($Method -ne 'GET') { throw 'Inventory attempted an asset write.' }
         foreach ($part in $parsed.Query.TrimStart('?').Split('&')) { if (-not $part) { continue };$pair=$part.Split('=',2);$q[[uri]::UnescapeDataString($pair[0])]=[uri]::UnescapeDataString($pair[1]) }
-        if ($parsed.AbsolutePath -like '*/initSession') { return @{session_token='synthetic'} }
-        if ($parsed.AbsolutePath -like '*/killSession') { return @{} }
+        if ($parsed.AbsolutePath -like '*/initSession') { $f.AllEntities=$false;return @{session_token='synthetic'} }
+        if ($parsed.AbsolutePath -like '*/killSession') { $f.Closed++;return @{} }
         if ($parsed.AbsolutePath -like '*/listSearchOptions/Computer') { return ('{"1":{"table":"glpi_computers","field":"name"},"2":{"table":"glpi_computers","field":"id"},"5":{"table":"glpi_computers","field":"serial"}}'|ConvertFrom-Json) }
         if ($parsed.AbsolutePath -like '*/search/Computer') {
             $ids=@(1..45)
+            if ($f.Mode -eq 'EntityVisibility' -and -not $f.AllEntities) { $ids=@(1..44) }
             if ($q['criteria[0][value]'] -ne 'PORT-') {
                 $wanted=@();for ($i=0;$q.ContainsKey('criteria['+$i+'][value]');$i++) { $wanted+=@($q['criteria['+$i+'][value]'].Trim('^','$')) }
                 $prefix='PORT-'
@@ -68,6 +76,14 @@ try {
             throw 'Reordered criteria hid existing GLPI computers during serial and exact-name lookup.'
         }
         'PASS: reversed GLPI query criteria preserve both serial matches and both exact-name matches.'
+        $script:BulkFixture.Mode='EntityVisibility'
+        $defaultEntity=@(Find-GlpiComputer @args -ExactName 'PORT-45')
+        $allEntities=@(Find-GlpiComputer @args -ExactName 'PORT-45' -AllProfileEntities)
+        if ($defaultEntity.Count -ne 0 -or $allEntities.Count -ne 1 -or $allEntities[0].GlpiId -ne 45 -or $script:BulkFixture.ScopeChanges -ne 1) { throw 'An existing asset outside the default entity was not visible in the authorized inventory.' }
+        $script:BulkFixture.Mode='ScopeDenied';$closed=$script:BulkFixture.Closed;$failed=$false
+        try { $null=Find-GlpiComputer @args -SerialNumber 'S-45' -AllProfileEntities } catch { $failed=$_.Exception.Message -like '*profilo GLPI*' }
+        if (-not $failed -or $script:BulkFixture.Closed -ne $closed+1) { throw 'The connector hid an unconfirmed entity scope as absence or leaked its session.' }
+        'PASS: inventory finds an authorized computer outside the default entity. A rejected entity selection fails explicitly and closes the API session.'
         foreach ($mode in @('Missing','Foreign','Duplicate')) {
             $script:BulkFixture.Mode=$mode;$args.LookupCache=@{};$out=@();$failed=$false
             try { $out=@(Find-GlpiComputer @args -NameFragment 'PORT-') } catch { $failed=$true }

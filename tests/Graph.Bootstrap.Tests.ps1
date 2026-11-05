@@ -21,7 +21,7 @@ try {
         }
         function script:Invoke-MgGraphRequest {
             [CmdletBinding()]param($Method,$Uri,$OutputType,$Headers)
-            if ($Method -ne 'GET' -or ($Uri -match 'recoveryKeys' -and ($Uri -ne 'https://graph.microsoft.com/v1.0/informationProtection/bitlocker/recoveryKeys' -or -not $Headers['User-Agent']))) { throw 'Preflight must not write or read recovery passwords.' }
+            if ($Method -ne 'GET' -or $Uri -match 'recoveryKeys') { throw 'Preflight must not write or read recovery passwords.' }
             [void]$script:Bootstrap.Requests.Add($Uri)
             if ($script:Bootstrap.Mode -eq 'IntuneDenied' -and $Uri -like '*managedDevices*') { throw 'Synthetic Intune RBAC denied.' }
             [pscustomobject]@{value=@()}
@@ -31,8 +31,8 @@ try {
         $login=$script:Bootstrap.Logins[0]
         if ($login.Scopes.Count -ne 1 -or $login.Scopes[0] -ne 'https://graph.microsoft.com/.default' -or $login.TenantId -ne $tenant -or $login.ClientId -ne $client -or $login.ContextScope -ne 'CurrentUser') { throw 'Dedicated bootstrap requested unapproved feature scopes or changed app identity.' }
         $statuses=@(Get-ExplorerGraphPermissionStatus -Definitions $Definitions -Context $context -Probe)
-        if ($statuses.Count -ne 5 -or @($statuses | Where-Object { -not $_.Available }).Count -ne 1 -or @($statuses | Where-Object Id -eq 'entra-remove')[0].Available -or $script:Bootstrap.Requests.Count -ne 3 -or $queue.Count -ne 2) { throw 'Initial verification did not expose the missing Entra-delete consent or used destructive probes.' }
-        'PASS: dedicated bootstrap uses only existing app grants via .default, displays missing Entra removal and safely probes Entra/Intune reads and BitLocker metadata without reading passwords or modifying devices.'
+        if ($statuses.Count -ne 5 -or @($statuses | Where-Object { -not $_.Available }).Count -ne 1 -or @($statuses | Where-Object Id -eq 'entra-remove')[0].Available -or $script:Bootstrap.Requests.Count -ne 2 -or $queue.Count -ne 2) { throw 'Initial verification did not expose the missing Entra-delete consent or used destructive probes.' }
+        'PASS: dedicated bootstrap uses only existing app grants via .default, displays missing Entra removal and probes only Entra and Intune reads, with BitLocker and deletion gated by scope.'
         Connect-ExplorerGraph -Sources Entra,Intune -ForBitLocker -GraphAuthentication $auth
         Connect-ExplorerGraph -Sources Intune -ForRemoval -ForBitLocker -GraphAuthentication $auth
         $rejected=$false;try { Connect-ExplorerGraph -Sources Entra -ForRemoval -GraphAuthentication $auth } catch { $rejected=$_.Exception.Message -like '*verifica iniziale*' }

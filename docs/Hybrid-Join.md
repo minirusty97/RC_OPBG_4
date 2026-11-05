@@ -30,7 +30,8 @@ GLPI usa i token delle impostazioni. Il seriale proviene dalle registrazioni
 Intune collegate tramite Device ID Entra, mai da un Managed Device ID usato
 come identificativo Entra. La ricerca GLPI preferisce il seriale, anche con
 nome GLPI diverso. Se una ricerca seriale completata non trova corrispondenze,
-prova anche il nome esatto, come per i PC senza seriale. Una scheda trovata
+prova anche il nome esatto, come per i PC senza seriale. La consultazione
+copre tutte le entità autorizzate al profilo API GLPI. Una scheda trovata
 solo per nome viene mostrata come Presente (solo nome), con avviso se il
 seriale Intune manca o differisce in GLPI. L identita hardware non viene
 confermata automaticamente e i duplicati restano espliciti. Un errore API

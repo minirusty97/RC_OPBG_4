@@ -3,6 +3,23 @@ $ErrorActionPreference='Stop'
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { Write-Host 'SKIP: native hub workflow requires Windows.';return }
 $root=Split-Path $PSScriptRoot -Parent
 $source=Get-Content (Join-Path $root 'Start-AssistenteIT.ps1') -Raw -Encoding UTF8
+$restoreCall='            Initialize-AssistenteITModuleAccess -Module $Definition -ConfigPath $Config -SessionPath $SessionPath -WindowHandle $WindowHandle'
+if (-not $source.Contains($restoreCall)) { throw 'The hub startup worker was not found.' }
+$fixtureRestore=@'
+            $core=Get-Module AssistenteIT.Core
+            & $core {
+                function script:Restore-AssistenteITGraphContext {
+                    param($Path,$Authentication,$WindowHandle)
+                    if (-not [IO.File]::Exists($Path) -or $WindowHandle -eq [IntPtr]::Zero) { throw 'The wrapper lost its session path or window handle.' }
+                    [HubUiFixture]::Restores++
+                    if ([HubUiFixture]::RestoreValid) {
+                        Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
+                        return [HubUiFixture]::Context
+                    }
+                }
+            }
+'@
+$source=$source.Replace($restoreCall,$fixtureRestore+[Environment]::NewLine+$restoreCall)
 $marker="try {`r`n    if (`$SmokeTestOutput) {"
 $position=$source.IndexOf($marker,[StringComparison]::Ordinal)
 if ($position -lt 0) { $marker="try {`n    if (`$SmokeTestOutput) {";$position=$source.IndexOf($marker,[StringComparison]::Ordinal) }
@@ -13,7 +30,7 @@ $probePath=Join-Path $root ('hub-ui-'+[guid]::NewGuid().ToString('N')+'.local.ps
 $probe=@'
 $hubProbeTimer=$null
 try {
- Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class HubUiFixture { public static object Context; public static int Connections; [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr handle,uint message,IntPtr w,IntPtr l); }'
+ Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class HubUiFixture { public static object Context; public static int Connections; public static int Restores; public static bool RestoreValid; [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr handle,uint message,IntPtr w,IntPtr l); }'
  $sdkDirectory=Join-Path $paths.DataRoot 'FakeSdk/Microsoft.Graph.Authentication';[void][IO.Directory]::CreateDirectory($sdkDirectory)
  @"
 function Get-MgContext { [CmdletBinding()]param() return [HubUiFixture]::Context }
@@ -27,6 +44,7 @@ function Invoke-MgGraphRequest { [CmdletBinding()]param(`$Method,`$Uri,`$OutputT
 Export-ModuleMember -Function Get-MgContext,Disconnect-MgGraph,Connect-MgGraph,Invoke-MgGraphRequest
 "@ | Set-Content (Join-Path $sdkDirectory 'Microsoft.Graph.Authentication.psm1') -Encoding UTF8
  $env:PSModulePath=(Split-Path $sdkDirectory -Parent)+[IO.Path]::PathSeparator+$env:PSModulePath
+ $prerequisites.GraphAvailable=$true
  $configuration=Get-Content $paths.ConfigPath -Raw | ConvertFrom-Json
  $configuration.Graph.AuthenticationMode='Delegated';$configuration.Graph.TenantId='11111111-1111-4111-8111-111111111111';$configuration.Graph.ClientId='22222222-2222-4222-8222-222222222222'
  $configuration | ConvertTo-Json -Depth 10 | Set-Content $paths.ConfigPath -Encoding UTF8
@@ -51,6 +69,8 @@ Export-ModuleMember -Function Get-MgContext,Disconnect-MgGraph,Connect-MgGraph,I
  if (-not $settingsProbe.Seen -or $settingsProbe.Error -or $saved.Search.DomainController -ne 'dc1.example.invalid' -or $saved.Search.AllDomainControllers) { throw ('Search settings UI failed: '+$settingsProbe.Error) }
  'PASS: native search settings expose one configured consultation DC, preserve the full controller list and save without opening Graph login.'
 
+ Start-AssistenteITSavedAccessCheck
+ if ($sessionStatus.Text -notlike '*collegare*' -or [HubUiFixture]::Connections -ne 0 -or [HubUiFixture]::Restores -ne 0) { throw 'Startup without a saved session attempted to authenticate.' }
  $button=$script:ModuleButtons['computer-explorer']
  if ($button.Enabled -or $button.Text -ne 'Apri modulo' -or $accessButton.Parent -ne $toolbar -or $accessButton.Text -ne 'Accesso' -or $releaseButton.Text -ne 'Cerca aggiornamenti') { throw 'Hub exposes login on module cards or enables modules before verification.' }
  if ([AssistenteIT.WindowIdentity]::CurrentId() -ne 'AssistenteIT.Desktop' -or [AssistenteIT.WindowIdentity]::WindowId($form.Handle) -ne 'AssistenteIT.Desktop' -or $null -eq $form.Icon -or -not [Windows.Forms.Application]::RenderWithVisualStyles) { throw 'Application identity, icon or native visual style is missing.' }
@@ -73,6 +93,17 @@ Export-ModuleMember -Function Get-MgContext,Disconnect-MgGraph,Connect-MgGraph,I
  $hubProbeTimer.Start();$accessButton.PerformClick()
  if (-not $hubProbeState.Seen -or $hubProbeState.Error -or -not $button.Enabled -or $script:ModuleAccessLabels['computer-explorer'].Text -ne 'Sola lettura') { throw ('Initial access did not enable the correct module mode: '+$hubProbeState.Error) }
  'PASS: bottom Accesso verifies the common session once and enables the module in read-only mode without opening it automatically.'
+ '{}' | Set-Content -LiteralPath $paths.GraphSessionPath -Encoding UTF8
+ foreach ($valid in @($false,$true)) {
+  [HubUiFixture]::RestoreValid=$valid
+  Start-AssistenteITSavedAccessCheck
+  if ($button.Enabled -or $sessionStatus.Text -notlike '*in corso*') { throw 'Startup kept the old authorization while checking.' }
+  $restoreWatch=[Diagnostics.Stopwatch]::StartNew()
+  while ($null -ne $script:AccessTask -and $restoreWatch.Elapsed.TotalSeconds -lt 10) { [Windows.Forms.Application]::DoEvents();Start-Sleep -Milliseconds 20 }
+  if ($null -ne $script:AccessTask -or $button.Enabled -ne $valid -or [HubUiFixture]::Connections -ne 1 -or [Windows.Forms.Application]::OpenForms.Count -ne 1) { throw 'The startup verification opened a login or enabled the wrong modules.' }
+ }
+ if ([HubUiFixture]::Restores -ne 2 -or $sessionStatus.Text -notlike '*Accesso verificato*synthetic@example.invalid*' -or $accessPanel.Text -ne 'Stato accesso' -or $accessReads.Text -notlike '*Ricerca Entra ID*' -or $accessReads.Text -like '*BitLocker*') { throw 'Missing status panel, account or limited read verification results.' }
+ 'PASS: native hub revalidates saved access in the background, locks modules until verification and requires manual access only for missing or unusable sessions.'
  $button.PerformClick();$watch=[Diagnostics.Stopwatch]::StartNew();$moduleWindow=$null
  while ($null -eq $moduleWindow -and $watch.Elapsed.TotalSeconds -lt 12) {
   [Windows.Forms.Application]::DoEvents();Start-Sleep -Milliseconds 20
@@ -93,6 +124,8 @@ Export-ModuleMember -Function Get-MgContext,Disconnect-MgGraph,Connect-MgGraph,I
 }
 finally {
  if ($null -ne $hubProbeTimer) { $hubProbeTimer.Stop();$hubProbeTimer.Dispose() }
+ $accessTimer.Stop();$accessTimer.Dispose()
+ if ($null -ne $script:AccessTask) { $script:AccessTask.Pipeline.Stop();$script:AccessTask.Pipeline.Dispose() }
  $moduleTimer.Stop();$moduleTimer.Dispose();$updateTimer.Stop();$updateTimer.Dispose()
  if ((Get-AssistenteITOpenModules) -eq 0) { $form.Dispose() }
  $applicationIcon.Dispose();$activity.Dispose()

@@ -87,7 +87,7 @@ function Show-AssistenteITSettings {
     $searchDcLabel=New-Object Windows.Forms.Label;$searchDcLabel.Text='DC di consultazione (uno dei DC configurati in GLPI / AD)';$searchDcLabel.SetBounds(18,18,560,30)
     $searchDc=New-Object Windows.Forms.TextBox;$searchDc.Name='ExplorerSearchDc';$searchDc.Text=[string](Get-DmValue $searchSettings 'DomainController' '');$searchDc.SetBounds(18,55,560,25)
     $allDcs=New-Object Windows.Forms.CheckBox;$allDcs.Name='ExplorerAllSearchDcs';$allDcs.Text='Diagnostica: consulta tutti i DC configurati';$allDcs.Checked=[bool](Get-DmValue $searchSettings 'AllDomainControllers' $false);$allDcs.SetBounds(18,100,560,30)
-    $searchHint=New-Object Windows.Forms.Label;$searchHint.Text='Vuoto: usa srvDC1 se presente nell elenco, altrimenti il primo DC. La lettura ordinaria usa un solo DC. La diagnostica su tutti i DC richiede piu tempo. Le cancellazioni continuano a verificare tutti i DC configurati; questa scelta non ne modifica l elenco.';$searchHint.SetBounds(18,155,560,120)
+    $searchHint=New-Object Windows.Forms.Label;$searchHint.Text='Campo vuoto: usa il DC preferito se disponibile, altrimenti il primo dell elenco. La lettura ordinaria usa un solo DC. La diagnostica su tutti i DC richiede piu tempo. Le cancellazioni continuano a verificare tutti i DC configurati; questa scelta non ne modifica l elenco.';$searchHint.SetBounds(18,155,560,120)
     $searchPage.Controls.AddRange(@($searchDcLabel,$searchDc,$allDcs,$searchHint))
     $hybridServerLabel=New-Object Windows.Forms.Label;$hybridServerLabel.Text='Server AD (vuoto: primo DC configurato)';$hybridServerLabel.SetBounds(18,18,560,24)
     $hybridServer=New-Object Windows.Forms.TextBox;$hybridServer.Name='HybridAdServer';$hybridServer.Text=[string]$hybridSettings.AdServer;$hybridServer.SetBounds(18,44,560,25)
@@ -144,6 +144,7 @@ $script:UpdateInfo=$null; $script:DownloadedUpdate=$null; $script:UpdateOperatio
 $script:UpdateQueue=New-Object 'System.Collections.Concurrent.ConcurrentQueue[object]'
 $script:ModuleTasks=New-Object 'System.Collections.Generic.List[object]'
 $script:Access=$null
+$script:AccessTask=$null
 $script:ModuleButtons=@{}
 $script:ModuleAccessLabels=@{}
 
@@ -167,11 +168,69 @@ function Update-AssistenteITModuleAvailability {
         $script:ModuleButtons[$entry.Id].Enabled=$verified.CanOpen
         $label=$script:ModuleAccessLabels[$entry.Id]
         $label.Text='Eseguire Accesso per abilitare il modulo';$label.ForeColor=[Drawing.Color]::DimGray
+        if ($null -ne $script:AccessTask) { $label.Text='Verifica accesso in corso' }
         if ($null -ne $script:Access -and -not $verified.CanOpen) { $label.Text=$verified.Reason;$label.ForeColor=[Drawing.Color]::DarkOrange }
         elseif ($verified.CanOpen) {
             $label.Text='Sola lettura';$label.ForeColor=[Drawing.Color]::SteelBlue
             if ($verified.AccessMode -eq 'ReadWrite') { $label.Text='Lettura e scrittura (ambiti concessi)';$label.ForeColor=[Drawing.Color]::DarkGreen }
         }
+    }
+}
+
+function Set-AssistenteITAccessStatus {
+    param($Access,[string]$Message)
+    $script:Access=$Access
+    $sessionStatus.Text=$Message
+    $sessionStatus.ForeColor=[Drawing.Color]::DimGray
+    $accessReads.Text=''
+    if ($null -ne $Access) {
+        $reads=@($Access.Permissions | Where-Object Id -in @('entra-read','intune-read','groups-read'))
+        if (@($reads | Where-Object OperationVerified).Count) {
+            $sessionStatus.Text='Accesso verificato — '+$Access.Account
+            $sessionStatus.ForeColor=[Drawing.Color]::DarkGreen
+        }
+        else {
+            $sessionStatus.Text='Account '+$Access.Account+' — letture non disponibili'
+            $sessionStatus.ForeColor=[Drawing.Color]::DarkOrange
+        }
+        $accessReads.Text=(@($reads | ForEach-Object { $_.Name+' · '+$_.CheckStatus }) -join '   |   ')
+        if ($Access.GroupError) { $accessReads.Text+='   |   Appartenenze non verificate' }
+    }
+    Update-AssistenteITModuleAvailability
+}
+
+function Start-AssistenteITSavedAccessCheck {
+    if ($null -ne $script:AccessTask) { return }
+    if (-not $prerequisites.GraphAvailable) {
+        Set-AssistenteITAccessStatus $null 'Microsoft Graph non disponibile.'
+        return
+    }
+    if (-not [IO.File]::Exists($paths.GraphSessionPath)) {
+        Set-AssistenteITAccessStatus $null "Seleziona Accesso per collegare l’account Microsoft."
+        return
+    }
+
+    $pipeline=[PowerShell]::Create()
+    try {
+        $worker={
+            param($Root,$Definition,$Config,$SessionPath,$WindowHandle)
+            $ErrorActionPreference='Stop'
+            Import-Module (Join-Path $Root 'AssistenteIT/AssistenteIT.Core.psm1') -ErrorAction Stop
+            Initialize-AssistenteITModuleAccess -Module $Definition -ConfigPath $Config -SessionPath $SessionPath -WindowHandle $WindowHandle
+        }
+        $definition=Get-AssistenteITAccessDefinition -Modules $manifest.Modules
+        [void]$pipeline.AddScript($worker.ToString()).AddArgument($PSScriptRoot).AddArgument($definition).AddArgument($paths.ConfigPath).AddArgument($paths.GraphSessionPath).AddArgument($form.Handle)
+        $invocation=$pipeline.BeginInvoke()
+        $script:AccessTask=@{Pipeline=$pipeline;Invocation=$invocation;Stop=$null;Deadline=[datetime]::UtcNow.AddSeconds(45)}
+        Set-AssistenteITAccessStatus $null 'Verifica della sessione Microsoft in corso...'
+        $accessButton.Enabled=$false
+        $settingsButton.Enabled=$false
+        $accessTimer.Start()
+    }
+    catch {
+        $pipeline.Dispose()
+        $script:AccessTask=$null
+        Set-AssistenteITAccessStatus $null 'Verifica della sessione non riuscita. Usa Accesso.'
     }
 }
 
@@ -215,17 +274,18 @@ $form = New-Object Windows.Forms.Form
 $applicationIcon = New-Object Drawing.Icon((Join-Path $PSScriptRoot 'assets/AssistenteIT.ico'))
 $form.Icon = $applicationIcon
 $form.Text = '{0} - {1}' -f $manifest.Product, $manifest.Version
-$form.Size = New-Object Drawing.Size(940, 850); $form.MinimumSize=New-Object Drawing.Size(800, 600)
+$form.Size = New-Object Drawing.Size(940, 925); $form.MinimumSize=New-Object Drawing.Size(800, 600)
 $form.StartPosition='CenterScreen'; $form.Font=New-Object Drawing.Font('Segoe UI', 10)
 $layout = New-Object Windows.Forms.TableLayoutPanel
-$layout.Dock='Fill'; $layout.Padding=New-Object Windows.Forms.Padding(20); $layout.ColumnCount=1; $layout.RowCount=5
+$layout.Dock='Fill'; $layout.Padding=New-Object Windows.Forms.Padding(20); $layout.ColumnCount=1; $layout.RowCount=6
 [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 75)))
 [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent', 100)))
 [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 52)))
+[void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 88)))
 [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 95)))
 [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 60)))
 $heading = New-Object Windows.Forms.Label; $heading.Dock='Fill'
-$heading.Text = $manifest.Product + "`r`nEsegui Accesso dalla barra in basso, poi scegli un modulo abilitato."
+$heading.Text = $manifest.Product + "`r`nScegli un modulo abilitato. Lo stato dell’accesso Microsoft è visibile qui sotto."
 $heading.Font = New-Object Drawing.Font('Segoe UI', 12)
 $modulePanel = New-Object Windows.Forms.FlowLayoutPanel; $modulePanel.Dock='Fill'; $modulePanel.AutoScroll=$true; $modulePanel.FlowDirection='TopDown'; $modulePanel.WrapContents=$false
 $modulePanel.Add_SizeChanged({ foreach ($card in $modulePanel.Controls) { $card.Width=[Math]::Max(500,$modulePanel.ClientSize.Width-26);foreach ($control in $card.Controls) { if ($control -is [Windows.Forms.Button]) { $control.Left=$card.Width-167 } else { $control.Width=$card.Width-205 } } } })
@@ -254,22 +314,29 @@ $releaseButton = New-Object Windows.Forms.Button; $releaseButton.Name='CheckUpda
 $installUpdateButton=New-Object Windows.Forms.Button; $installUpdateButton.Text='Installa aggiornamento'; $installUpdateButton.Size=New-Object Drawing.Size(180,34); $installUpdateButton.Visible=$false
 $accessButton.Add_Click({
     if ((Get-AssistenteITOpenModules) -gt 0) { $status.Text='Chiudi i moduli prima di cambiare accesso.';return }
-    $script:Access=$null;Update-AssistenteITModuleAvailability
+    if ($null -ne $script:AccessTask) { return }
+    Set-AssistenteITAccessStatus $null 'Accesso Microsoft in corso...'
     try {
         . (Join-Path $PSScriptRoot 'AssistenteIT/Graph.Access.ps1')
         $definition=Get-AssistenteITAccessDefinition -Modules $manifest.Modules
-        $script:Access=Show-AssistenteITModuleAccess -InstallRoot $PSScriptRoot -Module $definition -ConfigPath $paths.ConfigPath -VerifyOnly -Owner $form
-        if ($null -ne $script:Access) { $status.Text='Accesso verificato: '+$script:Access.Account+'. Moduli abilitati secondo i permessi disponibili.' }
-        else { $status.Text='Accesso non completato. I moduli restano disabilitati.' }
+        $verified=Show-AssistenteITModuleAccess -InstallRoot $PSScriptRoot -Module $definition -ConfigPath $paths.ConfigPath -VerifyOnly -Owner $form
+        Set-AssistenteITAccessStatus $verified 'Accesso da completare. Seleziona Accesso.'
+        if ($null -ne $verified) {
+            $saved=$false
+            try { $saved=Save-AssistenteITGraphSession -Path $paths.GraphSessionPath -Access $verified } catch { }
+            if (-not $saved) {
+                try { [IO.File]::Delete($paths.GraphSessionPath) } catch { }
+                $sessionStatus.Text+=' (sessione disponibile per questa apertura)'
+            }
+        }
     }
-    catch { $status.Text='Accesso non riuscito: '+$_.Exception.Message }
-    finally { Update-AssistenteITModuleAvailability }
+    catch { Set-AssistenteITAccessStatus $null 'Accesso non riuscito. Seleziona Accesso per riprovare.' }
 })
 $settingsButton.Add_Click({
     try {
         $before=[IO.File]::ReadAllText($paths.ConfigPath)
         Show-AssistenteITSettings
-        if ($before -cne [IO.File]::ReadAllText($paths.ConfigPath)) { $script:Access=$null;Update-AssistenteITModuleAvailability;$status.Text='Impostazioni salvate. Eseguire nuovamente Accesso.' }
+        if ($before -cne [IO.File]::ReadAllText($paths.ConfigPath)) { Start-AssistenteITSavedAccessCheck }
     }
     catch { [void][Windows.Forms.MessageBox]::Show($form, $_.Exception.Message, 'Impostazioni', 'OK', 'Error') }
 })
@@ -286,6 +353,19 @@ $installUpdateButton.Add_Click({
     }
 })
 $toolbar.Controls.AddRange(@($accessButton,$settingsButton,$dataButton,$releaseButton,$installUpdateButton))
+$accessPanel=New-Object Windows.Forms.GroupBox
+$accessPanel.Name='GraphSessionPanel';$accessPanel.Text='Stato accesso';$accessPanel.Dock='Fill'
+$accessRows=New-Object Windows.Forms.TableLayoutPanel
+$accessRows.Dock='Fill';$accessRows.Padding=New-Object Windows.Forms.Padding(10,3,10,6)
+$accessRows.ColumnCount=1;$accessRows.RowCount=2
+[void]$accessRows.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent',45)))
+[void]$accessRows.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent',55)))
+$sessionStatus=New-Object Windows.Forms.Label
+$sessionStatus.Name='GraphSessionStatus';$sessionStatus.Dock='Fill';$sessionStatus.TextAlign='MiddleLeft'
+$accessReads=New-Object Windows.Forms.Label
+$accessReads.Name='GraphSessionReads';$accessReads.Dock='Fill';$accessReads.TextAlign='MiddleLeft'
+$accessRows.Controls.Add($sessionStatus,0,0);$accessRows.Controls.Add($accessReads,0,1)
+$accessPanel.Controls.Add($accessRows)
 $components = New-Object Windows.Forms.GroupBox; $components.Text='Componenti aggiuntivi'; $components.Dock='Fill'
 $componentRows=New-Object Windows.Forms.TableLayoutPanel
 $componentRows.Dock='Fill'; $componentRows.Padding=New-Object Windows.Forms.Padding(10,3,10,6)
@@ -303,12 +383,34 @@ $components.Controls.Add($componentRows)
 $status = New-Object Windows.Forms.Label; $status.Dock='Fill'; $status.Padding=New-Object Windows.Forms.Padding(0,8,0,0)
 $status.Text='Aggiornamenti: in attesa del controllo.'
 $layout.Controls.Add($heading,0,0); $layout.Controls.Add($modulePanel,0,1); $layout.Controls.Add($toolbar,0,2)
-$layout.Controls.Add($components,0,3); $layout.Controls.Add($status,0,4)
+$layout.Controls.Add($accessPanel,0,3); $layout.Controls.Add($components,0,4); $layout.Controls.Add($status,0,5)
 $form.Controls.Add($layout)
 Initialize-AssistenteITWindowIdentity -InstallRoot $PSScriptRoot -Window $form
-Update-AssistenteITModuleAvailability
+Set-AssistenteITAccessStatus $null "Verifica dell’accesso all’apertura."
+$accessTimer=New-Object Windows.Forms.Timer;$accessTimer.Interval=100
+$accessTimer.Add_Tick({
+    $task=$script:AccessTask
+    if ($null -eq $task) { return }
+    if (-not $task.Invocation.IsCompleted) {
+        if ($null -eq $task.Stop -and [datetime]::UtcNow -gt $task.Deadline) { $task.Stop=$task.Pipeline.BeginStop($null,$null) }
+        return
+    }
+    $accessTimer.Stop()
+    $script:AccessTask=$null
+    $result=$null
+    $message='Sessione non convalidata. Seleziona Accesso.'
+    try {
+        if ($null -ne $task.Stop) { $task.Pipeline.EndStop($task.Stop) }
+        $output=@($task.Pipeline.EndInvoke($task.Invocation))
+        if ($task.Pipeline.Streams.Error.Count -gt 0 -or $output.Count -gt 1) { throw 'Verifica sessione incompleta.' }
+        if ($output.Count -eq 1) { $result=$output[0] }
+    }
+    catch { $message='Verifica della sessione non riuscita. Usa Accesso.' }
+    finally { $task.Pipeline.Dispose() }
+    Set-AssistenteITAccessStatus $result $message
+})
 $moduleTimer=New-Object Windows.Forms.Timer;$moduleTimer.Interval=300
-$moduleTimer.Add_Tick({ $running=Get-AssistenteITOpenModules;$accessButton.Enabled=$running -eq 0;$settingsButton.Enabled=$running -eq 0 });$moduleTimer.Start()
+$moduleTimer.Add_Tick({ $idle=(Get-AssistenteITOpenModules) -eq 0 -and $null -eq $script:AccessTask;$accessButton.Enabled=$idle;$settingsButton.Enabled=$idle });$moduleTimer.Start()
 $form.Add_FormClosing({param($sender,$eventArgs) if ((Get-AssistenteITOpenModules) -gt 0) { $eventArgs.Cancel=$true;$status.Text='Chiudi i moduli aperti prima di uscire da Assistente IT.' } })
 $updateTimer=New-Object Windows.Forms.Timer; $updateTimer.Interval=250
 $updateTimer.Add_Tick({
@@ -338,7 +440,12 @@ $updateTimer.Add_Tick({
     }
     if ($success -and $operation -eq 'Download') { Install-AssistenteITDownloadedUpdate }
 })
-$form.Add_Shown({ if (-not $SmokeTestOutput) { try { Start-AssistenteITUpdateOperation Check } catch { $status.Text=$_.Exception.Message; $releaseButton.Enabled=$true } } })
+$form.Add_Shown({
+    if (-not $SmokeTestOutput) {
+        Start-AssistenteITSavedAccessCheck
+        try { Start-AssistenteITUpdateOperation Check } catch { $status.Text=$_.Exception.Message; $releaseButton.Enabled=$true }
+    }
+})
 try {
     if ($SmokeTestOutput) {
         $form.CreateControl(); $form.PerformLayout()
@@ -350,6 +457,11 @@ finally {
     $updateTimer.Stop(); $updateTimer.Dispose()
     if ($null -ne $script:UpdatePipeline) { $script:UpdatePipeline.Stop(); $script:UpdatePipeline.Dispose() }
     if ($null -ne $script:UpdateWorker) { $script:UpdateWorker.Close(); $script:UpdateWorker.Dispose() }
+    $accessTimer.Stop();$accessTimer.Dispose()
+    if ($null -ne $script:AccessTask) {
+        $script:AccessTask.Pipeline.Stop()
+        $script:AccessTask.Pipeline.Dispose()
+    }
     $moduleTimer.Stop();$moduleTimer.Dispose()
     $form.Dispose(); $applicationIcon.Dispose(); $activity.Dispose()
 }

@@ -27,7 +27,7 @@ Per una distribuzione che deve rispettare esclusivamente i diritti dell'operator
 | Eliminazione registrazioni Entra | `Directory.AccessAsUser.All` | Per esempio Cloud Device Administrator, Intune Administrator o Windows 365 Administrator, oppure ruolo personalizzato compatibile |
 | Eliminazione dispositivi Intune | `DeviceManagementManagedDevices.ReadWrite.All` | Ruolo Intune con il diritto di eliminare i dispositivi interessati |
 
-Per tutte le funzioni sono necessari tutti e cinque gli ambiti. Da 1.0.18 il wrapper accede con `.default` e mostra prima dell'apertura del modulo gli ambiti gia autorizzati. Le funzioni prive di consenso non richiedono permessi aggiuntivi durante l'uso. Se il sistemista non autorizza `Directory.AccessAsUser.All`, l'eliminazione Entra viene segnalata come non disponibile; ricerca, chiavi e Intune rimangono utilizzabili con i rispettivi consensi e diritti.
+Per tutte le funzioni sono necessari tutti e cinque gli ambiti. Il wrapper accede con `.default` e usa gli ambiti concessi per abilitare le operazioni. Il pannello Stato accesso mostra gli esiti delle richieste di lettura. Le funzioni prive di consenso non richiedono permessi aggiuntivi durante l'uso. Se il sistemista non autorizza `Directory.AccessAsUser.All`, l'eliminazione Entra viene segnalata come non disponibile; ricerca, chiavi e Intune rimangono utilizzabili con i rispettivi consensi e diritti.
 
 `Directory.AccessAsUser.All` e l'ambito delegato richiesto da Microsoft per `DELETE /devices`: non viene sostituito con `Device.ReadWrite.All`, che la documentazione elenca per l'accesso applicativo. E un ambito ampio: il sistemista deve valutarlo e limitarne l'utilizzo con assegnazioni, ruoli e criteri del tenant. Con l'app dedicata il wrapper non lo aggiunge alla richiesta se non e tra i consensi gia concessi.
 
@@ -67,7 +67,10 @@ Esempio con identificativi fittizi:
 
 Le configurazioni esistenti rimangono nella modalita salvata: l'aggiornamento non attiva automaticamente l'app dedicata. **Accesso utente (app Microsoft)** conserva il flusso precedente; in quella modalita gli ID salvati non selezionano l'app aziendale.
 
-La sessione viene riutilizzata solo se delegata, nello stesso tenant e con lo stesso Client ID, ambiente Global e cache personale `CurrentUser`. Nel wrapper una sessione precedente viene sostituita dall'accesso configurato; durante le funzioni una sessione differente viene rifiutata senza login o cambio di identita. Un login fallito o annullato non apre il modulo. Gli ambiti mancanti vengono segnalati nel riepilogo; le funzioni interessate non richiedono altri consensi e non usano l'app Microsoft come ripiego.
+Dalla 1.3.0 il wrapper verifica all'avvio la sessione delegata dell'account
+confermato al primo Accesso. Il ripristino controlla tenant, Client ID e
+account e usa la cache personale del Graph SDK. Se Microsoft richiede
+interazione, il pannello Stato accesso invita a usare il pulsante Accesso.
 
 ## Verifiche ed errori
 
