@@ -1,7 +1,7 @@
 ﻿#requires -version 5.1
 <#
     Connettore di consultazione GLPI REST API V1.
-    Base iniziale per Computer Explorer: verificare sul GLPI aziendale prima dell'integrazione.
+    Usato da Computer Explorer e dai moduli di inventario.
     Gli stati vengono letti dal server; non ci sono ID di stato prefissati.
     Vengono effettuate solo richieste GET, inclusa apertura/chiusura della sessione.
 #>
@@ -250,7 +250,10 @@ function Find-GlpiComputer {
                     if ($bySerial) { $query['criteria['+$i+'][field]']=$serialOption }
                     $query['criteria['+$i+'][searchtype]']='contains'
                     $query['criteria['+$i+'][value]']='^'+$batch[$i]+'$'
-                    if ($i -gt 0) { $query['criteria['+$i+'][link]']='OR' }
+                    # GLPI follows the order of the query parameters, which a hashtable
+                    # does not preserve. The first link is ignored and a missing link
+                    # later in the list is treated as AND.
+                    $query['criteria['+$i+'][link]']='OR'
                 }
             }
             $page = Invoke-GlpiRead -Session $session -Path 'search/Computer' -Query $query

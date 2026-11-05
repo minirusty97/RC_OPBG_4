@@ -217,6 +217,7 @@ function Show-DeviceModuleWindow {
     Add-Type -AssemblyName System.Windows.Forms;Add-Type -AssemblyName System.Drawing
     [Windows.Forms.Application]::EnableVisualStyles()
     Import-Module (Join-Path $PSScriptRoot 'DeviceModules.Core.psm1') -ErrorAction Stop
+    Import-Module (Join-Path $PSScriptRoot 'ComputerExplorer.Core.psm1') -ErrorAction Stop
     . (Join-Path $PSScriptRoot 'ComputerExplorer.Recovery.UI.ps1')
     . (Join-Path $PSScriptRoot 'ComputerExplorer.Removal.UI.ps1')
     if ($null -eq $GraphAccess -or -not $GraphAccess.CanOpen) { throw 'Eseguire Accesso dal wrapper prima di aprire il modulo.' }
@@ -278,7 +279,20 @@ function Show-DeviceModuleWindow {
             if (-not $assignments.Count) { $u.Status.Text='Scegliere un Ring di destinazione nelle righe, oppure impostarlo sui selezionati.';return };Start-DmTask RingPlan $assignments
         }
     })
-    $u.OpenGlpi.Add_Click({$u=$script:DmUi;if ($u.Grid.SelectedRows.Count -ne 1 -or $u.Grid.SelectedRows[0].Tag.GlpiRecords.Count -ne 1) { return };$config=Read-ExplorerConfiguration $u.ConfigPath;$base=([string]$config.Settings.Glpi.BaseUri).TrimEnd('/');$id=[int]$u.Grid.SelectedRows[0].Tag.GlpiRecords[0].GlpiId;if ($base -match '^https?://' -and $base -match '/apirest\.php$' -and $id -gt 0) { [void][Diagnostics.Process]::Start(($base -replace '/apirest\.php$','')+'/front/computer.form.php?id='+$id) }})
+    $u.OpenGlpi.Add_Click({
+        $u=$script:DmUi
+        if ($u.Grid.SelectedRows.Count -ne 1 -or $u.Grid.SelectedRows[0].Tag.GlpiRecords.Count -ne 1) { return }
+        try {
+            $config=Read-ExplorerConfiguration $u.ConfigPath
+            $base=([string]$config.Settings.Glpi.BaseUri).TrimEnd('/')
+            $id=[int]$u.Grid.SelectedRows[0].Tag.GlpiRecords[0].GlpiId
+            if ($base -notmatch '^https?://' -or $base -notmatch '/apirest\.php$' -or $id -le 0) {
+                throw 'URL o identificativo della scheda GLPI non valido.'
+            }
+            Start-Process -FilePath (($base -replace '/apirest\.php$','')+'/front/computer.form.php?id='+$id) -ErrorAction Stop
+        }
+        catch { $u.Status.Text='Apertura scheda GLPI non riuscita. '+$_.Exception.Message }
+    })
     $u.Export.Add_Click({$u=$script:DmUi;$save=New-Object Windows.Forms.SaveFileDialog;$save.Filter='File CSV (*.csv)|*.csv';$save.DefaultExt='csv';$save.AddExtension=$true;$save.FileName=$u.Kind+'-'+(Get-Date -Format 'yyyyMMdd-HHmmss')+'.csv';try { if ($save.ShowDialog($u.Form) -eq 'OK') { Save-DmCsv -Rows @($u.Grid.Rows | ForEach-Object { $_.Tag }) -Path $save.FileName -Kind $u.Kind;$u.Status.Text='CSV esportato: '+$save.FileName } } catch { $u.Status.Text='Esportazione non riuscita: '+$_.Exception.Message } finally { $save.Dispose() }})
     $form.KeyPreview=$true;$form.Add_KeyDown({param($sender,$eventArgs);if ($eventArgs.KeyCode -eq 'F5' -and $script:DmUi.Refresh.Enabled) { $script:DmUi.Refresh.PerformClick();$eventArgs.Handled=$true }})
     $form.Add_FormClosing({param($sender,$eventArgs);$u=$script:DmUi;if ($null -ne $u.Pipeline) { $eventArgs.Cancel=$true;if ($u.Writing) { $u.Status.Text='Attendere il completamento delle operazioni.' } else { $u.Closing=$true;$u.Stop.PerformClick() } }})
