@@ -37,8 +37,10 @@ confermata automaticamente e i duplicati restano espliciti. Un errore API
 non attiva il ripiego e resta Non verificabile.
 Le letture GLPI dei dettagli sono raggruppate e riutilizzate nella singola
 scansione; la cache non e condivisa tra ricerche o credenziali. Stato, ID, gruppo, CENSITO,
-inventario e dati Intune sono visibili nei dettagli. Assenza, duplicati ed
-errori di lettura sono distinti.
+inventario e dati Intune sono visibili nei dettagli. Le ricerche raggruppate
+considerano ogni seriale o nome come alternativa. **Apri scheda GLPI**
+apre l'unica scheda associata alla riga selezionata. Assenza, duplicati
+ed errori di lettura sono distinti.
 
 ## Pulizia Registered
 

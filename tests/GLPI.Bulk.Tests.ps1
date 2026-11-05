@@ -16,8 +16,14 @@ try {
             $ids=@(1..45)
             if ($q['criteria[0][value]'] -ne 'PORT-') {
                 $wanted=@();for ($i=0;$q.ContainsKey('criteria['+$i+'][value]');$i++) { $wanted+=@($q['criteria['+$i+'][value]'].Trim('^','$')) }
-                if ($q['criteria[0][field]'] -eq '5') { $ids=@($ids|Where-Object { $wanted -contains ('S-'+$_) }) }
-                else { $ids=@($ids|Where-Object { $wanted -contains ('PORT-'+$_) }) }
+                $prefix='PORT-'
+                if ($q['criteria[0][field]'] -eq '5') { $prefix='S-' }
+                # GLPI 10 follows insertion order after parsing the query string.
+                # Exercise the order [1, 0], with the missing link defaulting to AND.
+                if ($f.Mode -eq 'ReorderedCriteria' -and $wanted.Count -eq 2 -and $q['criteria[0][link]'] -ne 'OR') {
+                    $ids=@($ids | Where-Object { ($prefix+$_) -eq $wanted[1] -and ($prefix+$_) -eq $wanted[0] })
+                }
+                else { $ids=@($ids | Where-Object { $wanted -contains ($prefix+$_) }) }
             }
             $range=$q.range.Split('-');$start=[int]$range[0];$end=[int]$range[1]
             $page=@();if ($start -lt $ids.Count) { $page=@($ids[$start..([math]::Min($end,$ids.Count-1))]|ForEach-Object { @{ '1'=('PORT-'+$_);'2'=$_ } }) }
@@ -55,6 +61,13 @@ try {
         $before=$script:BulkFixture.Batch;$args.UserToken=$other;$rows=@(Find-GlpiComputer @args -ExactName 'PORT-1')
         if ($rows.Count -ne 1 -or $script:BulkFixture.Batch -ne $before+1) { throw 'Inventory cache crossed credential boundaries.' }
         'PASS: fresh default reads bypass the inventory cache; different credentials cannot reuse its records.'
+        $script:BulkFixture.Mode='ReorderedCriteria'
+        $bySerial=@(Find-GlpiComputer @args -SerialNumber @('S-1','S-2'))
+        $byName=@(Find-GlpiComputer @args -ExactName @('PORT-3','PORT-4'))
+        if ((@($bySerial | ForEach-Object GlpiId) -join ',') -ne '1,2' -or (@($byName | ForEach-Object GlpiId) -join ',') -ne '3,4') {
+            throw 'Reordered criteria hid existing GLPI computers during serial and exact-name lookup.'
+        }
+        'PASS: reversed GLPI query criteria preserve both serial matches and both exact-name matches.'
         foreach ($mode in @('Missing','Foreign','Duplicate')) {
             $script:BulkFixture.Mode=$mode;$args.LookupCache=@{};$out=@();$failed=$false
             try { $out=@(Find-GlpiComputer @args -NameFragment 'PORT-') } catch { $failed=$true }

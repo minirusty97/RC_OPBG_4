@@ -25,11 +25,20 @@ function Start-DmTask {
  param([string]$Operation,$Payload=$null)
  [void]$script:ModuleScanCalls.Add([pscustomobject]@{Kind=$script:DmUi.Kind;Operation=$Operation;Payload=$Payload})
 }
+$configPath=Join-Path $PSScriptRoot 'module.config.json'
+'{"Glpi":{"BaseUri":"https://glpi.example.invalid/helpdesk/apirest.php/"}}' | Set-Content -LiteralPath $configPath -Encoding UTF8
+$script:OpenedGlpiUrl=''
+$script:FailBrowser=$false
+function Start-Process {
+ [CmdletBinding()]param([string]$FilePath)
+ if ($script:FailBrowser) { throw 'Synthetic browser error.' }
+ $script:OpenedGlpiUrl=$FilePath
+}
 foreach ($kind in @('Hybrid','Ring')) {
  $window=$null
  try {
   $access.ReadOnly=$true
-  $window=Show-DeviceModuleWindow -Kind $kind -ConfigPath synthetic -EnvPath synthetic -GraphAccess $access -SmokeTest
+  $window=Show-DeviceModuleWindow -Kind $kind -ConfigPath $configPath -EnvPath synthetic -GraphAccess $access -SmokeTest
   $u=$script:DmUi;$script:ModuleScanCalls.Clear();$u.SuppressInitialScan=$false
   $window.Show();[Windows.Forms.Application]::DoEvents()
   if ($script:ModuleScanCalls.Count -ne 1 -or $script:ModuleScanCalls[0].Operation -ne 'Snapshot' -or $null -ne $script:ModuleScanCalls[0].Payload -or -not $u.InitialScanStarted -or $u.Filter.SelectedItem -ne 'Tutti') { throw 'Opening a module did not start one full unfiltered scan with all-results view.' }
@@ -43,6 +52,13 @@ foreach ($kind in @('Hybrid','Ring')) {
   if ($kind -eq 'Ring') { [void]$u.Ring.Items.Add('Ring1');[void]$u.Grid.Columns['TargetRing'].Items.Add('Ring1') }
   Update-DmGrid;$u.Grid.Rows[0].Selected=$true
   if ($u.Write.Enabled -or $u.Details.Text -notlike '*GLPI-RENAMED*' -or $u.Details.Text -notlike '*SYNTHETIC-SERIAL*' -or $u.Counter.Text -notlike '*Selezionati: 1') { throw 'Read-only selection enabled writes or lost GLPI detail/counters.' }
+  $script:OpenedGlpiUrl=''
+  $u.OpenGlpi.PerformClick()
+  if ($script:OpenedGlpiUrl -cne 'https://glpi.example.invalid/helpdesk/front/computer.form.php?id=12') { throw 'Opening the selected GLPI computer did not use its configured server and exact asset ID.' }
+  $script:FailBrowser=$true
+  $u.OpenGlpi.PerformClick()
+  $script:FailBrowser=$false
+  if ($u.Status.Text -notlike '*Synthetic browser error.*') { throw 'Opening a GLPI computer failed outside the status bar.' }
   if ($kind -eq 'Ring' -and -not $u.Grid.Rows[0].Cells['TargetRing'].ReadOnly) { throw 'Read-only Ring mode exposed an editable target.' }
   if ($u.Grid.Rows.Count -ne 2 -or $u.Counter.Text -ne 'Visualizzati: 2/2 | Selezionati: 1') { throw 'Default view hides loaded device status or loses full-scan totals.' }
   if ($kind -eq 'Ring') {
@@ -66,6 +82,7 @@ foreach ($kind in @('Hybrid','Ring')) {
 }
 'PASS: both modules start exactly one full scan on first display, initially show all statuses, filter loaded rows without rescanning and refresh the complete inventory independently of active filters.'
 'PASS: both native module windows share fonts, icons, multi-selection, filters, counters, GLPI detail and independent read-only/write controls; Ring bulk targets include selected already assigned devices for explicit moves.'
+'PASS: both module windows open the selected GLPI asset in read-only mode and report browser errors in the status bar.'
 $owner=New-Object Windows.Forms.Form;$owner.Font=New-Object Drawing.Font('Segoe UI',9);$owner.Icon=[Drawing.SystemIcons]::Application
 $uiState=@{Seen=$false;Error='';Mode='Picker'};$uiTimer=New-Object Windows.Forms.Timer;$uiTimer.Interval=50
 $uiTimer.Add_Tick({

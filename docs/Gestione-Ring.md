@@ -39,7 +39,10 @@ Intune arricchisce l'inventario tramite Azure AD Device ID. GLPI usa seriale
 Intune quando disponibile, poi il nome esatto se il seriale non trova schede.
 Un risultato solo per nome viene segnalato da verificare se il seriale manca
 o e diverso in GLPI; non conferma da solo l identita hardware. Mostra ID, nome effettivo,
-stato, gruppo, CENSITO e inventario nei dettagli. Duplicati, conflitti seriali
+stato, gruppo, CENSITO e inventario nei dettagli. Le ricerche raggruppate
+considerano ogni seriale o nome come alternativa, indipendentemente
+dall'ordine dei criteri. **Apri scheda GLPI** apre l'unica scheda associata
+alla riga selezionata. Duplicati, conflitti seriali
 e fonti non verificabili sono espliciti. Il modulo consulta GLPI: assegnare un
 Ring aggiunge l'appartenenza Entra e non modifica la scheda GLPI.
 

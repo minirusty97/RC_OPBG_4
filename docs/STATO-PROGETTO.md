@@ -1,7 +1,9 @@
 # Stato condiviso per riprendere il lavoro
 
 Repository: `minirusty97/RC_OPBG_4`. Consultare sempre il main e la release
-effettiva: questo documento descrive la versione sorgente **1.2.1**. La 1.2.1 corregge il blocco di cancellazione
+effettiva. La versione sorgente **1.2.2** corregge le ricerche GLPI per
+seriale e nome raggruppate e il pulsante Apri scheda GLPI di Gestione Ring
+e Verifica Hybrid Join. La 1.2.1 corregge il blocco di cancellazione
 per figli AD con solo DN leggibile, con consenso esplicito e normale
 eliminazione LDAP del singolo figlio. La 1.2.0 include
 ricerca AD su un DC configurabile, dettagli GLPI raggruppati con cache per
@@ -35,23 +37,18 @@ confermate e modificabili. Le origini solo monitorate o ereditate bloccano
 lo spostamento. Errori dopo l aggiunta mantengono la destinazione e un esito
 parziale; nessun rollback o ritentativo automatico della scrittura.
 
-La lettura ordinaria di Computer Explorer preferisce srvDC1 nell elenco
-personale, altrimenti il primo DC. Le impostazioni consentono un DC diverso
-o tutti per diagnostica. BitLocker e cancellazioni conservano tutti i DC.
+La lettura ordinaria di Computer Explorer usa un DC configurabile.
+Le impostazioni consentono di consultare tutti i DC per diagnostica.
+BitLocker e cancellazioni continuano a usare tutti i DC configurati.
 GLPI preferisce il seriale Intune: solo dopo una ricerca seriale completata
 senza risultati usa nome esatto con avviso e identita hardware da verificare.
 La cache di inventario resta per scansione/credenziali e non sostituisce le
 riletture fresche di archivio/cancellazione.
 
-Verifica: test isolati dei backend, finestre WinForms su Windows PowerShell
-5.1, regressioni Computer Explorer e installer/OTA in CI. I test usano dati
-sintetici e non provano i diritti del tenant aziendale. Restano da verificare
-dal tecnico in ambiente aziendale il tempo effettivo di Port-, le schede
-GLPI prima segnalate assenti, le OU effettive, i gruppi scelti, eventuali
-consensi nuovi e i diritti sulle singole chiavi BitLocker AD. Il successo su
-Intune e sull'archivio GLPI era stato confermato durante il lavoro sulla 1.0.23;
-il tecnico ha poi confermato l assenza di autorizzazione alla lettura delle
-informazioni BitLocker AD e la presenza di figli con soli DN leggibili.
+I controlli CI coprono backend con dati sintetici, finestre WinForms su
+Windows PowerShell 5.1, installer e aggiornamenti OTA. Prestazioni,
+visibilita dell'inventario e diritti effettivi dipendono dalla
+configurazione di ciascuna installazione.
 
 Per chat separate e regola versioni: docs/Sviluppo-Moduli.md e
 docs/Versionamento.md. Aggiornare questo stato a ogni lavoro concluso,
@@ -59,17 +56,27 @@ distinguendo test automatici e osservazioni reali del tecnico.
 
 ## Correzione 1.2.1: figli AD non leggibili
 
-Il tecnico ha confermato che mancano i diritti AD alla lettura delle informazioni
-BitLocker. Il DN del figlio viene restituito mentre classe e GUID rimangono
-vuoti; il filtro msFVE puo quindi restituire zero. La cancellazione manuale
-del computer dallo snap-in rimane un operazione distinta dalla lettura chiavi.
+Con autorizzazioni di lettura parziali, AD puo restituire il DN del
+figlio con classe e GUID vuoti. Il filtro msFVE puo restituire zero
+risultati in questo caso.
 
 La 1.2.1 usa la cancellazione ordinaria del singolo figlio per
 DN, previa conferma esplicita del rischio chiavi AD, e conserva i controlli
 sull identita/protezione del computer. Mai tree-delete o modifica ACL. Si
 archiviano le chiavi recuperate e si segnala la copertura AD non garantita.
-Dettagli e limiti: docs/Eliminazione-Figli-AD.md. I 317 controlli Windows
-PowerShell 5.1 del ramo di diagnosi sono passati senza installer. Il tecnico
-ha successivamente richiesto la ricompilazione: la release 1.2.1 passa ora
-anche per i controlli standard Windows, installer e OTA. Non sono state
-eseguite cancellazioni su dispositivi aziendali durante i test.
+La release 1.2.1 ha superato i controlli Windows, installer e OTA.
+Il comportamento dei figli con solo DN e descritto in
+docs/Eliminazione-Figli-AD.md.
+
+## Correzione 1.2.2: ricerca e apertura schede GLPI
+
+In GLPI 10.0.11 i criteri di una richiesta sono elaborati nell'ordine di
+arrivo. Il primo criterio non usa il proprio operatore. Un criterio
+successivo senza operatore viene combinato con AND. Il connettore ora
+dichiara OR su ogni seriale o nome delle ricerche raggruppate.
+
+Il pulsante Apri scheda GLPI carica esplicitamente il modulo che legge
+la configurazione. Gli errori di apertura appaiono nella barra di stato.
+I test riproducono l'ordine invertito dei criteri e il clic nelle finestre
+native. Le schede visibili al profilo del token GLPI vanno confermate
+nell'ambiente del tecnico.
