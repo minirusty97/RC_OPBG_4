@@ -27,28 +27,41 @@ la ricerca: non viene ignorato e non produce falsi orfani.
 
 All’apertura parte automaticamente la lettura completa dei gruppi selezionati,
 di tutte le loro appartenenze transitive e dei dispositivi Entra.
-**Aggiorna dati / F5** ripete l’intera scansione anche se sono attivi filtri. I candidati sono Windows, ServerAd, Corporate,
-gestiti MDM e abilitati. Le appartenenze sono confrontate con **Object ID
-Entra**, non con Device ID. La vista iniziale **Tutti** mostra lo stato di ogni candidato, sia orfano
-sia gia assegnato. **Filtra elenco** e i filtri di stato selezionano solo i
-risultati gia caricati, senza nuove richieste ai servizi. E possibile isolare
-orfani, gia assegnati, appartenenze multiple e anomalie GLPI. Il contatore
-riporta visualizzati sul totale e selezionati. I contatori dei gruppi considerano gli oggetti transitivi letti.
+**Aggiorna** (F5) ripete l’intera scansione. I candidati sono Windows, ServerAd,
+Corporate, gestiti MDM e abilitati. Le appartenenze sono confrontate tramite
+**Object ID Entra**. Il riepilogo in alto mostra i dispositivi Entra letti,
+i PC idonei, assegnati e orfani, le operazioni verificate nella sessione e
+il numero di dispositivi per Ring. Il conteggio per gruppo incrocia le
+appartenenze transitive con l'inventario Entra già letto.
+
+La vista iniziale mostra tutti i candidati. Sopra i pulsanti in basso ci sono
+due righe separate. **Filtra per nome** si combina con il filtro su **Ring
+attuali**, **GLPI**, **Stato GLPI** o **Reparto GLPI**. Il filtro per Ring
+può includere un gruppo anche per i PC che appartengono a più Ring. Il
+contatore mostra righe visibili, totali e selezionate. **Ring per righe
+selezionate** imposta la destinazione per i PC selezionati. I filtri e la
+scelta della destinazione operano sui dati già caricati.
 
 Intune arricchisce l'inventario tramite Azure AD Device ID. GLPI usa seriale
 Intune quando disponibile, poi il nome esatto se il seriale non trova schede.
 La consultazione copre tutte le entità autorizzate al profilo API GLPI.
 Un risultato solo per nome viene segnalato da verificare se il seriale manca
-o e diverso in GLPI; non conferma da solo l identita hardware. Mostra ID, nome effettivo,
-stato, gruppo, CENSITO e inventario nei dettagli. Le ricerche raggruppate
+o è diverso in GLPI. La griglia mostra Computer, Ring attuali, Ring
+destinazione, Seriale Intune, Stato GLPI, Reparto GLPI, Asset ID, Censito e
+GLPI. **Reparto GLPI** usa il Fornitore della scheda **Gestione**, letto con
+le informazioni amministrative e risolto una volta per fornitore per
+scansione. Se il profilo API non può leggerlo, appare **Non verificabile**
+nel reparto e la scheda resta visibile. **Asset ID** usa il numero
+inventario GLPI e rimane vuoto quando il campo è assente, per esempio sulle
+VM. Gli identificativi e il nome della scheda restano nei dettagli. Le ricerche raggruppate
 considerano ogni seriale o nome come alternativa, indipendentemente
-dall'ordine dei criteri. **Apri scheda GLPI** apre l'unica scheda associata
+dall'ordine dei criteri. **Apri su GLPI** apre l'unica scheda associata
 alla riga selezionata. Duplicati, conflitti seriali
 e fonti non verificabili sono espliciti. Il modulo consulta GLPI: assegnare un
 Ring aggiunge l'appartenenza Entra e non modifica la scheda GLPI.
 
 Scegliere manualmente un Ring nelle righe dei PC, anche gia assegnati, oppure
-impostarlo sulle righe selezionate. **Verifica modifiche** prepara una lista
+impostarlo sulle righe selezionate. **Verifica ed Applica** prepara una lista
 con azione, PC, Object ID, destinazione e ogni origine da rimuovere, con nome
 e ID del gruppo. **Applica modifiche** richiede conferma esplicita; Invio
 rimane associato ad Annulla. I filtri locali non applicano alcuna modifica.

@@ -46,7 +46,7 @@ function Get-RingGroups {
         }
         if ($seen.ContainsKey($id)) { throw 'Lo stesso gruppo e selezionato piu volte.' };$seen[$id]=$true
         $reason=Test-RingWritable $group
-        [void]$groups.Add([pscustomobject]@{Id=$id;Name=$name;Label=$label;Destination=[bool]$entry.CanAssign;IsWritable=([bool]$entry.CanAssign -and -not $reason);Reason=$reason;MemberCount=0})
+        [void]$groups.Add([pscustomobject]@{Id=$id;Name=$name;Label=$label;Destination=[bool]$entry.CanAssign;IsWritable=([bool]$entry.CanAssign -and -not $reason);Reason=$reason;MemberCount=0;DeviceCount=0})
     }
     return $groups.ToArray()
 }
@@ -81,19 +81,26 @@ function Get-RingManagerSnapshot {
     $groups=@(Get-RingGroups -Options $settings.Options -ProgressQueue $ProgressQueue)
     $members=Get-RingMemberIndex -Groups $groups -ProgressQueue $ProgressQueue
     $devices=@(Get-DmEntraInventory $ProgressQueue)
-    $eligible=@($devices | Where-Object { Test-RingEligible $_ });$groupsById=@{}
+    $groupsById=@{}
     foreach ($group in $groups) { $groupsById[$group.Id]=$group }
+    $eligible=@(foreach ($device in $devices) {
+        $id=ConvertTo-DmId $device.id
+        foreach ($groupId in $members[$id]) { $groupsById[$groupId].DeviceCount++ }
+        if (Test-RingEligible $device) { $device }
+    })
     $rows=@(foreach ($device in @($eligible | Sort-Object displayName,id)) {
         $id=ConvertTo-DmId $device.id;$deviceId=ConvertTo-DmId $device.deviceId
         $currentIds=@();if ($members.ContainsKey($id)) { $currentIds=@($members[$id].ToArray() | Sort-Object -Unique) }
         $rings=@($currentIds | ForEach-Object { $groupsById[$_].Label })
         [pscustomobject]@{Key=$id;Name=[string]$device.displayName;ObjectId=$id;DeviceId=$deviceId;DeviceIds=@($deviceId);Rings=($rings -join ', ');CurrentGroupIds=$currentIds;Orphan=($rings.Count -eq 0);State=$(if ($rings.Count -gt 1) {'Piu Ring'} elseif ($rings.Count) {'Assegnato'} else {'Orfano'});TargetRing='';LastSignIn=(Get-DmValue $device 'approximateLastSignInDateTime')}
     })
-    $sources=Add-DmInventory -Rows $rows -Config $settings.Config -Access $GraphAccess -EnvPath $EnvPath -ProgressQueue $ProgressQueue
+    $sources=Add-DmInventory -Rows $rows -Config $settings.Config -Access $GraphAccess -EnvPath $EnvPath -ProgressQueue $ProgressQueue -IncludeSupplier
     if ((Assert-DmSession $GraphAccess -ReadIds @('entra-read','groups-read')) -cne $context) { throw 'Sessione cambiata durante la lettura. Aggiornare i dati.' }
     foreach ($row in $rows) { $script:RingRows[$row.Key]=$row | ConvertTo-Json -Depth 15 | ConvertFrom-Json }
     $script:RingContext=$context
-    [pscustomobject]@{Rows=$rows;Groups=$groups;Sources=$sources;CapturedAtUtc=[datetimeoffset]::UtcNow;Summary=($devices.Count.ToString()+' dispositivi Entra; '+$eligible.Count+' Windows Hybrid Corporate MDM abilitati; '+@($rows | Where-Object Orphan).Count+' orfani. '+$groups.Count+' Ring verificati, inclusi quelli solo monitorati.')}
+    $orphans=@($rows | Where-Object Orphan).Count
+    $statistics=[pscustomobject]@{DeviceTotal=$devices.Count;EligibleTotal=$eligible.Count;AlreadyAssigned=($eligible.Count-$orphans);OrphanRemaining=$orphans}
+    [pscustomobject]@{Rows=$rows;Groups=$groups;Sources=$sources;CapturedAtUtc=[datetimeoffset]::UtcNow;Statistics=$statistics;Summary=($devices.Count.ToString()+' dispositivi Entra; '+$eligible.Count+' Windows Hybrid Corporate MDM abilitati; '+$orphans+' orfani. '+$groups.Count+' Ring verificati, inclusi quelli solo monitorati.')}
 }
 
 function Get-RingDeviceLive {

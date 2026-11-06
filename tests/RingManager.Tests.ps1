@@ -16,7 +16,7 @@ try {
     function script:Assert-DmSession {param($Access,$ReadIds,$WriteId);if ($Access.ReadOnly -and $WriteId) { throw 'sola lettura' };if ($script:RingFixture.Mode -eq 'ForeignSession') { return 'foreign-context' };'synthetic-context'}
     function script:Read-DmSettings {param($ConfigPath,$Section);[pscustomobject]@{Config=[pscustomobject]@{};Options=[pscustomobject]@{Groups=@([pscustomobject]@{Id=(Ring-TestId 1);Name='OLD-NAME';Label='Ring1';CanAssign=$true},[pscustomobject]@{Id=(Ring-TestId 2);Name='GROUP-2';Label='Ring2';CanAssign=$script:RingFixture.CanMove})}}}
     function script:Get-DmEntraInventory {param($ProgressQueue);$script:RingFixture.Devices}
-    function script:Add-DmInventory {param($Rows,$Config,$Access,$EnvPath,$ProgressQueue);[pscustomobject]@{IntuneState='OK';GlpiState='OK';IntuneError='';GlpiError=''}}
+    function script:Add-DmInventory {param($Rows,$Config,$Access,$EnvPath,$ProgressQueue,[switch]$IncludeSupplier);if (-not $IncludeSupplier) { throw 'Ring inventory did not request the GLPI supplier.' };[pscustomobject]@{IntuneState='OK';GlpiState='OK';IntuneError='';GlpiError=''}}
     function script:Get-FixtureMembership {
         param($Id,[switch]$Transitive)
         $f=$script:RingFixture;$ids=@($f.Members[$Id])
@@ -29,7 +29,9 @@ try {
         if ($Uri -match '/groups/([^/]+)/transitiveMembers') {
             if ($script:RingFixture.Mode -eq 'MembershipDenied') { throw 'Synthetic membership denial.' }
             $group=$Matches[1]
-            foreach ($device in $script:RingFixture.Devices) { $all=@(Get-FixtureMembership $device.id -Transitive | ForEach-Object { $_.id });if ($all -contains $group) { @{id=$device.id} } };return
+            foreach ($device in $script:RingFixture.Devices) { $all=@(Get-FixtureMembership $device.id -Transitive | ForEach-Object { $_.id });if ($all -contains $group) { @{id=$device.id} } }
+            if ($group -eq (Ring-TestId 2)) { @{id=(Ring-TestId 42)} }
+            return
         }
         if ($Uri -match '/devices/([^/]+)/(memberOf|transitiveMemberOf)') { Get-FixtureMembership $Matches[1] -Transitive:($Matches[2] -eq 'transitiveMemberOf');return }
         throw ('Unexpected collection in Ring fixture: '+$Uri)
@@ -69,9 +71,16 @@ try {
         throw ('Unexpected Graph request in Ring fixture: '+$Method+' '+$Uri)
     }
     Reset-RingFixture;$access=$script:RingFixture.Access
+    $script:RingFixture.Members[(Ring-TestId 13)]=@((Ring-TestId 2))
     $snapshot=Get-RingManagerSnapshot -ConfigPath synthetic -EnvPath synthetic -GraphAccess $access
     if ($snapshot.Rows.Count -ne 2 -or @($snapshot.Rows | Where-Object Orphan).Count -ne 1 -or @($snapshot.Rows | Where-Object ObjectId -eq (Ring-TestId 12))[0].State -ne 'Assegnato' -or $script:RingFixture.Writes.Count -or -not $snapshot.Groups[0].IsWritable) { throw 'Discovery lost monitored groups, nullable ordinary group metadata, eligibility or read-only behavior.' }
     if ($snapshot.Groups[0].Name -ne 'GROUP-1') { throw 'A pinned group ID was replaced by its old name.' }
+    $stats=$snapshot.Statistics
+    if ($stats.DeviceTotal -ne 4 -or $stats.EligibleTotal -ne 2 -or $stats.AlreadyAssigned -ne 1 -or $stats.OrphanRemaining -ne 1 -or
+        $snapshot.Groups[0].DeviceCount -ne 0 -or $snapshot.Groups[1].DeviceCount -ne 2 -or $snapshot.Groups[1].MemberCount -ne 3) {
+        throw 'Ring summary counted a nondevice member or lost eligible and orphan totals.'
+    }
+    'PASS: Ring summary counts devices per monitored group separately from all transitive objects and reports eligible, assigned and orphan totals.'
     'PASS: Ring discovery pins group IDs, includes monitored-only membership and accepts nullable role metadata on ordinary static security groups.'
     $group=$script:RingFixture.Groups[0]|Select-Object *
     foreach ($kind in @('Role','Dynamic','Synced','Mail','UnknownTypes','NotSecurity')) {

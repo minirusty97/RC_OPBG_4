@@ -89,7 +89,7 @@ function Get-DmEntraInventory {
 }
 
 function Add-DmInventory {
-    param([object[]]$Rows,$Config,$Access,[string]$EnvPath,$ProgressQueue)
+    param([object[]]$Rows,$Config,$Access,[string]$EnvPath,$ProgressQueue,[switch]$IncludeSupplier)
     $intune=@();$intuneState='Non autorizzato';$intuneError='Lettura Intune non disponibile nella verifica iniziale.'
     if (Test-DmPermission $Access 'intune-read') {
         try {
@@ -124,6 +124,7 @@ function Add-DmInventory {
             if ($null -eq $credentials) { throw 'Configurare i token GLPI nelle Impostazioni del wrapper.' }
             $arguments=@{BaseUri=[uri]$glpi.BaseUri;UserToken=$credentials.User;PageSize=[int](Get-DmValue $glpi 'PageSize' 100);TimeoutSeconds=[int](Get-DmValue $glpi 'TimeoutSeconds' 20);BulkRead=$true;AllProfileEntities=$true;LookupCache=@{};ProgressQueue=$ProgressQueue}
             if ([bool](Get-DmValue $glpi 'UseAppToken' $true)) { $arguments.AppToken=$credentials.App }
+            if ($IncludeSupplier) { $arguments.IncludeSupplier=$true }
             $allSerials=@($Rows | Where-Object { $_.IntuneSerial -and -not $_.SerialConflict } | ForEach-Object { $_.IntuneSerial } | Sort-Object -Unique)
             $serialRecords=@();$nameRecords=@();$bySerial=@{};$byName=@{}
             Send-DmProgress $ProgressQueue 'Ricerca GLPI per seriale Intune...'
@@ -168,6 +169,16 @@ function Add-DmInventory {
         $row | Add-Member -Force NoteProperty GlpiStatus (@($row.GlpiRecords | ForEach-Object { $_.State } | Sort-Object -Unique) -join ', ')
         $row | Add-Member -Force NoteProperty GlpiGroup (@($row.GlpiRecords | ForEach-Object { $_.GroupPath } | Sort-Object -Unique) -join ', ')
         $row | Add-Member -Force NoteProperty Censito $(if ($row.SerialConflict -or $row.GlpiRecords.Count -gt 1 -or $row.GlpiMatchBy -like '*non riscontrato*') { '?' } elseif (@($row.GlpiRecords | Where-Object { $_.GroupVerified -and $_.GroupName -ieq 'CENSITO' }).Count) { 'Si' } else { '' })
+        if ($IncludeSupplier) {
+            $departments=@(foreach ($record in $row.GlpiRecords) {
+                $supplier=[string](Get-DmValue $record 'SupplierName' '')
+                if ($supplier) { $supplier }
+                elseif (Get-DmValue $record 'SupplierError') { 'Non verificabile' }
+            })
+            $assets=@($row.GlpiRecords | ForEach-Object { ([string](Get-DmValue $_ 'InventoryNumber' '')).Trim() } | Where-Object { $_ } | Sort-Object -Unique)
+            $row | Add-Member -Force NoteProperty GlpiDepartment (($departments | Sort-Object -Unique) -join ', ')
+            $row | Add-Member -Force NoteProperty GlpiAssetId ($assets -join ', ')
+        }
     }
     [pscustomobject]@{IntuneState=$intuneState;IntuneError=$intuneError;GlpiState=$glpiState;GlpiError=$glpiError}
 }

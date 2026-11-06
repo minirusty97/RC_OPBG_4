@@ -105,7 +105,7 @@ function ConvertFrom-GlpiSecureString {
 function Invoke-GlpiRead {
     param([hashtable]$Session, [string]$Path, [hashtable]$Query = @{})
     # La lista di percorsi evita l'uso del connettore per modificare gli asset.
-    if ($Path -notmatch '^(initSession|killSession|listSearchOptions/Computer|search/Computer|getMultipleItems|Computer/[1-9][0-9]*|State/[1-9][0-9]*|Group/[1-9][0-9]*)$') {
+    if ($Path -notmatch '^(initSession|killSession|listSearchOptions/Computer|search/Computer|getMultipleItems|(Computer|State|Group|Supplier)/[1-9][0-9]*)$') {
         throw "Endpoint GLPI non previsto dal connettore di consultazione."
     }
     $uri = $Session.BaseUri + '/' + $Path
@@ -126,11 +126,36 @@ function Get-GlpiLookupScope {
     finally { $value=$null;$hash.Dispose() }
 }
 
+function Get-GlpiSupplier {
+    param($Computer,$Session,$Cache,[string]$Scope)
+    $infocom=Get-GlpiValue $Computer '_infocoms'
+    # GLPI returns an empty array when the asset has no management record.
+    if ($infocom -is [Array] -and $infocom.Length -eq 0) { return @{Name='';Error=''} }
+
+    $id=0
+    if (-not [int]::TryParse([string](Get-GlpiValue $infocom 'suppliers_id'),[ref]$id) -or $id -lt 0) {
+        return @{Name='';Error='Informazioni di gestione GLPI non leggibili dal profilo API.'}
+    }
+    if ($id -eq 0) { return @{Name='';Error=''} }
+
+    $key=$Scope+'|Supplier|'+$id
+    if (-not $Cache.Contains($key)) {
+        try {
+            $supplier=Invoke-GlpiRead -Session $Session -Path "Supplier/$id"
+            $name=([string](Get-GlpiValue $supplier 'name')).Trim()
+            if ((Get-GlpiValue $supplier 'id') -ne $id -or -not $name) { throw 'Risposta Fornitore GLPI non valida.' }
+            $Cache[$key]=@{Name=$name;Error=''}
+        }
+        catch { $Cache[$key]=@{Name='';Error='Fornitore GLPI non leggibile (ID '+$id+').'} }
+    }
+    return $Cache[$key]
+}
+
 function Get-GlpiComputerBatch {
-    param($Session,[int[]]$Ids)
+    param($Session,[int[]]$Ids,[hashtable]$DetailQuery)
     $records=@{};$wanted=@($Ids | Sort-Object -Unique)
     for ($start=0;$start -lt $wanted.Count;$start+=20) {
-        $batch=@($wanted[$start..([Math]::Min($start+19,$wanted.Count-1))]);$query=@{'get_hateoas'='0';'expand_dropdowns'='0'}
+        $batch=@($wanted[$start..([Math]::Min($start+19,$wanted.Count-1))]);$query=$DetailQuery.Clone()
         for ($i=0;$i -lt $batch.Count;$i++) { $query['items['+$i+'][itemtype]']='Computer';$query['items['+$i+'][items_id]']=$batch[$i] }
         $page=Invoke-GlpiRead -Session $Session -Path 'getMultipleItems' -Query $query
         $rows=@($page)
@@ -155,7 +180,8 @@ function Find-GlpiComputer {
         [Security.SecureString]$AppToken,
         [ValidateRange(1, 500)][int]$PageSize = 100,
         [ValidateRange(1, 120)][int]$TimeoutSeconds = 20,
-        [switch]$BulkRead, [switch]$AllProfileEntities, [System.Collections.IDictionary]$LookupCache, $ProgressQueue
+        [switch]$BulkRead, [switch]$AllProfileEntities, [switch]$IncludeSupplier,
+        [System.Collections.IDictionary]$LookupCache, $ProgressQueue
     )
 
     if (-not $BaseUri.IsAbsoluteUri -or $BaseUri.Scheme -notin @('http', 'https') -or
@@ -191,6 +217,14 @@ function Find-GlpiComputer {
     if ($null -eq $LookupCache) { $LookupCache=@{} }
     $scope='';if ($BulkRead) { $scope=Get-GlpiLookupScope $BaseUri $UserToken $AppToken }
     if ($AllProfileEntities) { $scope+='|all-entities' }
+    $detailQuery=@{}
+    if ($BulkRead -or $IncludeSupplier) { $detailQuery=@{get_hateoas='0';expand_dropdowns='0'} }
+    if ($IncludeSupplier) {
+        $detailQuery['with_infocoms']='1'
+        $scope+='|supplier'
+    }
+    $supplierCache=$LookupCache
+    if (-not $BulkRead) { $supplierCache=@{} }
 
     try {
         if ($null -ne $AppToken -and $AppToken.Length -gt 0) {
@@ -282,7 +316,7 @@ function Find-GlpiComputer {
                     $id=Resolve-GlpiComputerId -Row $record.Values -IdOption $idOption -IndexedId $record.IndexedId
                     if (-not $results.ContainsKey($id) -and -not $LookupCache.Contains($scope+'|Computer|'+$id)) { $id }
                 })
-                if ($needed.Count) { $batchComputers=Get-GlpiComputerBatch -Session $session -Ids $needed }
+                if ($needed.Count) { $batchComputers=Get-GlpiComputerBatch -Session $session -Ids $needed -DetailQuery $detailQuery }
             }
             foreach ($record in $records) {
                 $row = $record.Values
@@ -295,7 +329,7 @@ function Find-GlpiComputer {
                     if (($bySerial -and $serialSet.ContainsKey($serial)) -or ($byExactName -and $nameSet.ContainsKey($name.Trim())) -or (-not $bySerial -and -not $byExactName -and $name.IndexOf($fragment,[StringComparison]::OrdinalIgnoreCase) -ge 0)) { $results[$id]=$cached }
                     continue
                 }
-                if ($BulkRead) { $computer=$batchComputers[$id] } else { $computer = Invoke-GlpiRead -Session $session -Path "Computer/$id" }
+                if ($BulkRead) { $computer=$batchComputers[$id] } else { $computer = Invoke-GlpiRead -Session $session -Path "Computer/$id" -Query $detailQuery }
                 if ((Get-GlpiValue $computer 'id') -ne $id) { throw "Risposta Computer GLPI non valida." }
                 $name = [string](Get-GlpiValue $computer 'name')
                 if ([string](Get-GlpiValue $computer 'is_deleted') -in @('1','true')) { continue }
@@ -355,6 +389,11 @@ function Find-GlpiComputer {
                     LastModified = Get-GlpiValue $computer 'date_mod'
                     LastInventory = Get-GlpiValue $computer 'last_inventory_update'
                     Error = $null
+                }
+                if ($IncludeSupplier) {
+                    $supplier=Get-GlpiSupplier -Computer $computer -Session $session -Cache $supplierCache -Scope $scope
+                    $results[$id] | Add-Member NoteProperty SupplierName $supplier.Name
+                    $results[$id] | Add-Member NoteProperty SupplierError $supplier.Error
                 }
                 if ($BulkRead) { $LookupCache[$cacheKey]=$results[$id] }
             }

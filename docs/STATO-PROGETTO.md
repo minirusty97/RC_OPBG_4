@@ -1,7 +1,9 @@
 # Stato condiviso per riprendere il lavoro
 
 Repository: `minirusty97/RC_OPBG_4`. Consultare sempre il main e la release
-effettiva. La versione sorgente **1.3.0** verifica l'accesso salvato
+effettiva. La versione sorgente **1.3.1** aggiorna la finestra di Gestione
+Ring con riepilogo, colonne di inventario GLPI, filtri locali per colonna e
+pulsanti in basso. La **1.3.0** verifica l'accesso salvato
 all'apertura e cerca le schede Hybrid e Ring nelle entità autorizzate al
 profilo API GLPI. La 1.2.2 corregge le ricerche GLPI per seriale e nome
 raggruppate e il pulsante Apri scheda GLPI. La 1.2.1 corregge il blocco di cancellazione
@@ -98,3 +100,13 @@ Su GLPI 10.0.11 il cambio di contesto seleziona tutte le entità quando
 non verificabile. I test coprono una scheda fuori dall'entità predefinita
 e il ripristino della sessione con risposte sintetiche. La verifica con
 i criteri di accesso del tenant e il profilo GLPI in uso avviene sul posto.
+
+## Gestione Ring in 1.3.1
+
+La scansione espone i contatori del vecchio script e conta i dispositivi
+per Ring senza altre richieste a Entra. Il Fornitore e il numero inventario
+della scheda GLPI alimentano Reparto GLPI e Asset ID. La lettura delle
+informazioni amministrative è attivata solo per Ring. I test coprono i dati
+GLPI sintetici, inclusi un inventario vuoto e un fornitore non leggibile,
+e la finestra WinForms con i filtri locali. La disponibilità del Fornitore
+dipende dai diritti del profilo API GLPI effettivo.

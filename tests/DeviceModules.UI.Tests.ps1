@@ -41,15 +41,44 @@ foreach ($kind in @('Hybrid','Ring')) {
   $window=Show-DeviceModuleWindow -Kind $kind -ConfigPath $configPath -EnvPath synthetic -GraphAccess $access -SmokeTest
   $u=$script:DmUi;$script:ModuleScanCalls.Clear();$u.SuppressInitialScan=$false
   $window.Show();[Windows.Forms.Application]::DoEvents()
-  if ($script:ModuleScanCalls.Count -ne 1 -or $script:ModuleScanCalls[0].Operation -ne 'Snapshot' -or $null -ne $script:ModuleScanCalls[0].Payload -or -not $u.InitialScanStarted -or $u.Filter.SelectedItem -ne 'Tutti') { throw 'Opening a module did not start one full unfiltered scan with all-results view.' }
-  if ($window.Controls.Find('DeviceModuleFilterLabel',$true)[0].Text -ne 'Filtra elenco:' -or $u.Query.Enabled -or $u.Filter.Enabled) { throw 'An unscanned module exposes a search flow or enables filters before loading.' }
+  if ($script:ModuleScanCalls.Count -ne 1 -or $script:ModuleScanCalls[0].Operation -ne 'Snapshot' -or $null -ne $script:ModuleScanCalls[0].Payload -or -not $u.InitialScanStarted) { throw 'Opening a module did not start one full unfiltered scan.' }
+  if ($u.Query.Enabled -or $u.Filter.Enabled) { throw 'An unscanned module enabled filters before loading.' }
   $window.Hide();$window.Show();[Windows.Forms.Application]::DoEvents()
   if ($script:ModuleScanCalls.Count -ne 1) { throw 'Redisplaying the same module repeated its initial scan.' }
-  if ($u.Write.Enabled -or $u.Stop.Enabled -or -not $u.Refresh.Enabled -or -not $u.Grid.MultiSelect -or $u.Grid.AllowUserToResizeRows -or $null -eq $window.Icon) { throw 'New module bypassed read-only mode or lost common native controls.' }
+  if ($u.Write.Enabled -or -not $u.Refresh.Enabled -or -not $u.Grid.MultiSelect -or $u.Grid.AllowUserToResizeRows -or $null -eq $window.Icon) { throw 'New module bypassed read-only mode or lost common native controls.' }
+  if ($kind -eq 'Hybrid' -and ($u.Stop.Enabled -or $u.Filter.SelectedItem -ne 'Tutti' -or $window.Controls.Find('DeviceModuleFilterLabel',$true)[0].Text -ne 'Filtra elenco:')) { throw 'Hybrid lost its initial filters or stop button.' }
+  if ($kind -eq 'Ring') {
+   $layout=$window.Controls[0];$filterRow=$layout.GetRow($u.Query.Parent)
+   if ($window.Controls.Find('Stop',$true).Count -ne 0 -or $u.Refresh.Text -ne 'Aggiorna' -or $u.Export.Text -ne 'Esporta CSV' -or
+       $u.OpenGlpi.Text -ne 'Apri su GLPI' -or $u.Write.Text -ne 'Verifica ed Applica' -or $u.Write.BackColor.B -le $u.Write.BackColor.R -or
+       $layout.GetRow($u.Bulk.Parent) -ne $filterRow+1 -or $layout.GetRow($u.Write.Parent) -ne $filterRow+2 -or $layout.GetRow($u.Write.Parent) -ne $layout.RowCount-1 -or
+       ($u.Filter.Items -join '|') -ne 'Ring attuali|GLPI|Stato GLPI|Reparto GLPI' -or $u.FilterValue.SelectedItem -ne 'Tutti' -or $u.FilterValue.Enabled -or
+       (@($u.Grid.Columns | ForEach-Object HeaderText) -join '|') -ne 'Computer|Ring attuali|Ring destinazione|Seriale Intune|Stato GLPI|Reparto GLPI|Asset ID|Censito|GLPI') {
+       throw 'Ring grid, filter and action rows or button labels do not match the requested layout.'
+   }
+  }
   $row=[pscustomobject]@{Key='33333333-3333-4333-8333-333333333333';Name='PC-SYNTHETIC';ObjectId='33333333-3333-4333-8333-333333333333';DeviceId='44444444-4444-4444-8444-444444444444';ADGuid='44444444-4444-4444-8444-444444444444';ADDistinguishedName='CN=PC-SYNTHETIC,OU=Lab,DC=example,DC=invalid';OUName='Lab';HybridState='HYBRID OK';IdentityState='Corrisponde';IdentityRecords=@();Anomalies='';EntraDevices=@();EntraCount=1;RegisteredCount=1;Severity='Good';IntuneSerial='SYNTHETIC-SERIAL';SerialConflict=$false;IntuneRecords=@();GlpiRecords=@([pscustomobject]@{GlpiId=12;Name='GLPI-RENAMED';SerialNumber='SYNTHETIC-SERIAL';InventoryNumber='123';State='Assegnato';GroupPath='CENSITO';LastInventory='2026-10-30'});GlpiState='Presente';GlpiMatchBy='Seriale Intune';GlpiError='';GlpiIds='12';GlpiNames='GLPI-RENAMED';GlpiStatus='Assegnato';GlpiGroup='CENSITO';Censito='Si';Orphan=$true;State='Orfano';Rings='';TargetRing='';LastSignIn='2026-10-30'}
   $second=$row | Select-Object *;$second.Key='55555555-5555-4555-8555-555555555555';$second.ObjectId=$second.Key;$second.Name='OTHER-COMPUTER';$second.Orphan=$false;$second.State='Assegnato';$second.Rings='Ring1';$second.IntuneSerial='OTHER-SERIAL';$second.GlpiIds='13';$second.GlpiNames='OTHER-GLPI'
   $u.Snapshot=[pscustomobject]@{Rows=@($row,$second)}
-  if ($kind -eq 'Ring') { [void]$u.Ring.Items.Add('Ring1');[void]$u.Grid.Columns['TargetRing'].Items.Add('Ring1') }
+  if ($kind -eq 'Ring') {
+   $row | Add-Member NoteProperty CurrentGroupIds @()
+   $row | Add-Member NoteProperty GlpiDepartment 'Synthetic department'
+   $row | Add-Member NoteProperty GlpiAssetId '00017'
+   $row.GlpiRecords[0] | Add-Member NoteProperty SupplierName $row.GlpiDepartment
+   $second | Add-Member NoteProperty CurrentGroupIds @('g1','g2')
+   $second | Add-Member NoteProperty GlpiDepartment ''
+   $second | Add-Member NoteProperty GlpiAssetId ''
+   $second.State='Piu Ring';$second.Rings='Ring1, Ring2';$second.GlpiStatus='In magazzino';$second.GlpiState='Presente (solo nome)'
+   $u.Snapshot | Add-Member NoteProperty Statistics ([pscustomobject]@{DeviceTotal=5;EligibleTotal=2;AlreadyAssigned=1;OrphanRemaining=1})
+   $u.Snapshot | Add-Member NoteProperty Groups @([pscustomobject]@{Id='g1';Label='Ring1';DeviceCount=1;IsWritable=$true},[pscustomobject]@{Id='g2';Label='Ring2';DeviceCount=2;IsWritable=$false})
+   [void]$u.Ring.Items.Add('');[void]$u.Ring.Items.Add('Ring1');[void]$u.Grid.Columns['TargetRing'].Items.Add('Ring1')
+   Update-DmRingSummary
+   Update-DmRingFilterValues
+   if ($u.Summary.Text -notlike '*PC orfani*' -or ($u.RingSummaryCounts.Text.Split([string[]]@([Environment]::NewLine),[StringSplitOptions]::None) -join '|') -ne '5|2|1|1|0' -or $u.RingSummaryGroups.Items.Count -ne 2 -or
+       $u.RingSummaryGroups.Items[1].SubItems[1].Text -ne '2' -or $u.RingSummaryGroups.Items[0].SubItems[2].Text -ne 'Solo controllo') {
+       throw 'Ring summary lost inventory totals, per-group device counts or the effective read-only mode.'
+   }
+  }
   Update-DmGrid;$u.Grid.Rows[0].Selected=$true
   if ($u.Write.Enabled -or $u.Details.Text -notlike '*GLPI-RENAMED*' -or $u.Details.Text -notlike '*SYNTHETIC-SERIAL*' -or $u.Counter.Text -notlike '*Selezionati: 1') { throw 'Read-only selection enabled writes or lost GLPI detail/counters.' }
   $script:OpenedGlpiUrl=''
@@ -62,9 +91,19 @@ foreach ($kind in @('Hybrid','Ring')) {
   if ($kind -eq 'Ring' -and -not $u.Grid.Rows[0].Cells['TargetRing'].ReadOnly) { throw 'Read-only Ring mode exposed an editable target.' }
   if ($u.Grid.Rows.Count -ne 2 -or $u.Counter.Text -ne 'Visualizzati: 2/2 | Selezionati: 1') { throw 'Default view hides loaded device status or loses full-scan totals.' }
   if ($kind -eq 'Ring') {
-   $u.Filter.SelectedItem='Orfani'
+   if ($u.Grid.Rows[0].Cells['GlpiDepartment'].Value -ne 'Synthetic department' -or $u.Grid.Rows[0].Cells['GlpiAssetId'].Value -cne '00017' -or
+       $u.Grid.Rows[1].Cells['GlpiAssetId'].Value -or $u.Details.Text -notlike '*Synthetic department*') { throw 'Ring grid lost the supplier or inventory number.' }
+   $u.FilterValue.SelectedItem='Senza Ring'
    if ($u.Grid.Rows.Count -ne 1 -or $u.Counter.Text -ne 'Visualizzati: 1/2 | Selezionati: 0') { throw 'Orphan filtering lost loaded assigned devices or the total count.' }
-   $u.Filter.SelectedItem='Tutti'
+   foreach ($spec in @(@('Ring attuali','Include Ring2','OTHER-COMPUTER'),@('GLPI','Presente (solo nome)','OTHER-COMPUTER'),@('Stato GLPI','Assegnato','PC-SYNTHETIC'),@('Reparto GLPI','Synthetic department','PC-SYNTHETIC'),@('Reparto GLPI','(Vuoto)','OTHER-COMPUTER'))) {
+    $u.Filter.SelectedItem=$spec[0];$u.FilterValue.SelectedItem=$spec[1]
+    if ($u.Grid.Rows.Count -ne 1 -or $u.Grid.Rows[0].Tag.Name -ne $spec[2]) { throw ('Ring column filter produced the wrong row: '+$spec[0]+' / '+$spec[1]) }
+   }
+   $u.Query.Text='PC-SYNTHETIC'
+   if ($u.Grid.Rows.Count) { throw 'The Ring name and column filters were not combined.' }
+   $u.FilterValue.SelectedItem='Tutti'
+   $u.Query.Text='SYNTHETIC-SERIAL'
+   if ($u.Grid.Rows.Count) { throw 'The Ring name filter matched a serial.' }
   }
   $u.Query.Text='NO-MATCH'
   if ($u.Grid.Rows.Count -ne 0 -or $u.Snapshot.Rows.Count -ne 2 -or $u.Counter.Text -ne 'Visualizzati: 0/2 | Selezionati: 0') { throw 'Local filtering changed the full inventory or its total.' }
@@ -75,7 +114,14 @@ foreach ($kind in @('Hybrid','Ring')) {
   $u.Query.Clear()
   $access.ReadOnly=$false;Update-DmGrid;$u.Grid.Rows[0].Selected=$true;Update-DmButtons
   if (-not $u.Write.Enabled) { throw 'Verified write access did not enable selected-device actions.' }
-  if ($kind -eq 'Ring') { $u.Grid.SelectAll();$u.Ring.SelectedItem='Ring1';$u.Bulk.PerformClick();if ($row.TargetRing -ne 'Ring1' -or $second.TargetRing -ne 'Ring1' -or $u.Grid.Rows[1].Cells['TargetRing'].ReadOnly) { throw 'Bulk target failed for an orphan or an already assigned selected device.' } }
+  if ($kind -eq 'Ring') {
+   $u.RingChanges=1;Update-DmRingSummary
+   if ($u.RingSummaryGroups.Items[0].SubItems[2].Text -ne 'Controllo e modifica' -or $u.RingSummaryCounts.Text -notlike '*1') { throw 'Summary hid effective write mode or session changes.' }
+   $u.Grid.SelectAll();$u.Ring.SelectedItem='Ring1';$u.Bulk.PerformClick()
+   if ($row.TargetRing -ne 'Ring1' -or $second.TargetRing -ne 'Ring1' -or $u.Grid.Rows[1].Cells['TargetRing'].ReadOnly) { throw 'Bulk target failed for an orphan or an already assigned selected device.' }
+   $u.Write.PerformClick()
+   if ($script:ModuleScanCalls.Count -ne 3 -or $script:ModuleScanCalls[2].Operation -ne 'RingPlan' -or $script:ModuleScanCalls[2].Payload.Count -ne 2) { throw 'Verify and apply bypassed preview or lost staged targets.' }
+  }
   Write-ModuleUiImage $window $kind
  }
  finally { if ($null -ne $window) { $u=$script:DmUi;$u.Timer.Stop();$u.Timer.Dispose();$u.Worker.Close();$u.Worker.Dispose();$window.Icon.Dispose();$window.Dispose() } }
@@ -83,6 +129,7 @@ foreach ($kind in @('Hybrid','Ring')) {
 'PASS: both modules start exactly one full scan on first display, initially show all statuses, filter loaded rows without rescanning and refresh the complete inventory independently of active filters.'
 'PASS: both native module windows share fonts, icons, multi-selection, filters, counters, GLPI detail and independent read-only/write controls; Ring bulk targets include selected already assigned devices for explicit moves.'
 'PASS: both module windows open the selected GLPI asset in read-only mode and report browser errors in the status bar.'
+'PASS: the Ring dashboard shows ordered inventory columns, group counts and separate filter, bulk target and action rows. All column filters work locally and the primary button opens verification before writes.'
 $owner=New-Object Windows.Forms.Form;$owner.Font=New-Object Drawing.Font('Segoe UI',9);$owner.Icon=[Drawing.SystemIcons]::Application
 $uiState=@{Seen=$false;Error='';Mode='Picker'};$uiTimer=New-Object Windows.Forms.Timer;$uiTimer.Interval=50
 $uiTimer.Add_Tick({
