@@ -43,9 +43,9 @@ try {
     }
     function script:Read-ExplorerGlpiCredentials {param($Path,$UseAppToken);[pscustomobject]@{User=(ConvertTo-SecureString synthetic -AsPlainText -Force);App=(ConvertTo-SecureString synthetic -AsPlainText -Force)} }
     function script:Find-GlpiComputer {
-        param($BaseUri,$UserToken,$AppToken,$PageSize,$TimeoutSeconds,$SerialNumber,$ExactName,$BulkRead,$AllProfileEntities,$LookupCache,$ProgressQueue)
+        param($BaseUri,$UserToken,$AppToken,$PageSize,$TimeoutSeconds,$SerialNumber,$ExactName,$BulkRead,$AllProfileEntities,$LookupCache,$ProgressQueue,$IncludeSupplier)
         if (-not $AllProfileEntities) { throw 'Module inventory used only the default API entity.' }
-        [void]$script:DmFixture.Finds.Add(@{Serials=$SerialNumber;Names=$ExactName})
+        [void]$script:DmFixture.Finds.Add(@{Serials=$SerialNumber;Names=$ExactName;IncludeSupplier=[bool]$IncludeSupplier})
         if ($script:DmFixture.Mode -eq 'GlpiDenied') { throw 'Synthetic GLPI read failure.' }
         if ($SerialNumber -and $script:DmFixture.Mode -like 'SerialMiss*') { return @() }
         if ($ExactName -and $script:DmFixture.Mode -like 'SerialMiss*') {
@@ -53,7 +53,7 @@ try {
             $found=[pscustomobject]@{GlpiId=30;Name=' SAME-NAME ';SerialNumber=$serial;State='Assegnato';GroupPath='CENSITO';GroupName='CENSITO';GroupVerified=$true}
             if ($script:DmFixture.Mode -eq 'SerialMissDuplicate') { return @($found,($found|Select-Object *)) };return @($found)
         }
-        if ($SerialNumber) { return @([pscustomobject]@{GlpiId=10;Name='GLPI-OTHER-NAME';SerialNumber='REAL-SERIAL';State='Assegnato';GroupPath='CENSITO';GroupName='CENSITO';GroupVerified=$true}) }
+        if ($SerialNumber) { return @([pscustomobject]@{GlpiId=10;Name='GLPI-OTHER-NAME';SerialNumber='REAL-SERIAL';State='Assegnato';GroupPath='CENSITO';GroupName='CENSITO';GroupVerified=$true;SupplierName='Synthetic department';InventoryNumber='00017'}) }
         @([pscustomobject]@{GlpiId=20;Name='SAME-NAME';SerialNumber='WRONG-FOR-FIRST';State='Ritirato';GroupPath='';GroupName='';GroupVerified=$true})
     }
     $rows=@([pscustomobject]@{Name='SAME-NAME';DeviceIds=@('33333333-3333-4333-8333-333333333333')},[pscustomobject]@{Name='SAME-NAME';DeviceIds=@('55555555-5555-4555-8555-555555555555')})
@@ -62,6 +62,14 @@ try {
     $sources=Add-DmInventory -Rows $rows -Config $config -Access $access -EnvPath synthetic
     if ($rows[0].GlpiIds -ne '10' -or $rows[0].GlpiNames -ne 'GLPI-OTHER-NAME' -or $rows[0].IntuneSerial -ne 'REAL-SERIAL' -or $rows[0].Censito -ne 'Si' -or $rows[1].GlpiIds -ne '20' -or $rows[1].IntuneRecords.Count -ne 0 -or $script:DmFixture.Finds.Count -ne 2) { throw 'Serial-first inventory attached an unrelated namesake or lost exact-name fallback.' }
     'PASS: both modules correlate Intune by Entra Device ID, prefer the verified serial over GLPI namesakes, keep renamed GLPI assets and use exact-name batches only when no serial is available.'
+    if (@($script:DmFixture.Finds | Where-Object IncludeSupplier).Count) { throw 'Default inventory requested GLPI administrative data.' }
+    $script:DmFixture.Finds.Clear()
+    $sources=Add-DmInventory -Rows $rows -Config $config -Access $access -EnvPath synthetic -IncludeSupplier
+    if ($sources.GlpiState -ne 'OK' -or @($script:DmFixture.Finds | Where-Object IncludeSupplier).Count -ne 2 -or
+        $rows[0].GlpiDepartment -ne 'Synthetic department' -or $rows[0].GlpiAssetId -cne '00017' -or $rows[1].GlpiAssetId -or $rows[1].GlpiDepartment) {
+        throw 'Ring rows did not preserve the supplier and inventory number or filled an absent field.'
+    }
+    'PASS: Ring projects the GLPI supplier and inventory number from the matching card and leaves unassigned fields blank.'
     foreach ($mode in @('SerialMiss','SerialMissNoSerial','SerialMissDuplicate')) {
         $script:DmFixture.Mode=$mode;$script:DmFixture.Finds.Clear()
         $fallback=@([pscustomobject]@{Name='SAME-NAME';DeviceIds=@('33333333-3333-4333-8333-333333333333')})
