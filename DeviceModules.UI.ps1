@@ -115,14 +115,15 @@ function Get-DmVisibleRows {
         if ($u.FilterValue.SelectedIndex -ge 0) { $choice=$u.FilterChoices[$u.FilterValue.SelectedIndex] }
         $field=$u.RingFilterFields[$filter]
         return @($u.Snapshot.Rows | Where-Object {
-            if ($query -and $_.Name.IndexOf($query,[StringComparison]::OrdinalIgnoreCase) -lt 0) { return $false }
+            $row=$_
+            if ($query -and $row.Name.IndexOf($query,[StringComparison]::OrdinalIgnoreCase) -lt 0) { return $false }
             if ($null -eq $choice) { return $true }
             switch ($choice.Mode) {
-                'None' { return $_.Orphan }
-                'Assigned' { return -not $_.Orphan }
-                'Multiple' { return $_.CurrentGroupIds.Count -gt 1 }
-                'Group' { return $_.CurrentGroupIds -contains $choice.Value }
-                'Value' { return [string](Get-DmValue $_ $field '') -ieq $choice.Value }
+                'None' { return $row.Orphan }
+                'Assigned' { return -not $row.Orphan }
+                'Multiple' { return $row.CurrentGroupIds.Count -gt 1 }
+                'Group' { return $row.CurrentGroupIds -contains $choice.Value }
+                'Value' { return [string](Get-DmValue $row $field '') -ieq $choice.Value }
                 default { return $true }
             }
         })
