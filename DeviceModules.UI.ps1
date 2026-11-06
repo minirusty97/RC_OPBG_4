@@ -337,10 +337,18 @@ function Show-DeviceModuleWindow {
     $u=$script:DmUi
     $form=New-Object Windows.Forms.Form;$form.Name='DeviceModule-'+$Kind;$form.Text='Assistente IT - Verifica Hybrid Join';if ($Kind -eq 'Ring') { $form.Text='Assistente IT - Gestione Ring Intune' }
     $form.ClientSize=New-Object Drawing.Size(1320,850);$form.MinimumSize=New-Object Drawing.Size(1050,720);$form.StartPosition='CenterScreen';$form.Font=New-Object Drawing.Font('Segoe UI',9);$form.AutoScaleMode='Dpi'
+    if ($Kind -eq 'Ring') {
+        $form.MinimumSize=New-Object Drawing.Size(950,700)
+        $workArea=[Windows.Forms.Screen]::FromPoint([Windows.Forms.Cursor]::Position).WorkingArea
+        $form.Size=New-Object Drawing.Size([Math]::Min($form.Width,$workArea.Width),[Math]::Min($form.Height,$workArea.Height))
+    }
     $icon=New-Object Drawing.Icon((Join-Path $PSScriptRoot 'assets/AssistenteIT.ico'));$form.Icon=$icon;$u.Form=$form
     $layout=New-Object Windows.Forms.TableLayoutPanel;$layout.Dock='Fill';$layout.Padding=New-Object Windows.Forms.Padding(12);$layout.ColumnCount=1
     $heights=@(58,48,42,-1,38,65)
-    if ($Kind -eq 'Ring') { $heights=@(155,-1,26,40,35,38,43) }
+    if ($Kind -eq 'Ring') {
+        $heights=@(155,-1,26,40,35,38,43)
+        [void]$layout.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle('Percent',100)))
+    }
     $layout.RowCount=$heights.Count
     foreach ($height in $heights) { if ($height -lt 0) { [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent',100))) } else { [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',$height))) } }
     $summary=New-Object Windows.Forms.Label;$summary.Dock='Fill';$summary.Text='Scansione completa all''apertura, poi filtra l''elenco dei dispositivi.';$summary.Font=New-Object Drawing.Font('Segoe UI',10);$u.Summary=$summary

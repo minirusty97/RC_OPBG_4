@@ -121,6 +121,13 @@ foreach ($kind in @('Hybrid','Ring')) {
    if ($row.TargetRing -ne 'Ring1' -or $second.TargetRing -ne 'Ring1' -or $u.Grid.Rows[1].Cells['TargetRing'].ReadOnly) { throw 'Bulk target failed for an orphan or an already assigned selected device.' }
    $u.Write.PerformClick()
    if ($script:ModuleScanCalls.Count -ne 3 -or $script:ModuleScanCalls[2].Operation -ne 'RingPlan' -or $script:ModuleScanCalls[2].Payload.Count -ne 2) { throw 'Verify and apply bypassed preview or lost staged targets.' }
+   $window.Size=New-Object Drawing.Size(1000,720)
+   $window.PerformLayout();[Windows.Forms.Application]::DoEvents()
+   $last=$u.Grid.GetColumnDisplayRectangle($u.Grid.Columns['GlpiState'].Index,$false)
+   if (-not $u.Grid.Columns['GlpiState'].Displayed -or $last.Right -gt $u.Grid.ClientSize.Width -or
+       $u.Grid.Width -gt $window.ClientSize.Width -or $u.Write.Right -gt $u.Write.Parent.ClientSize.Width) {
+       throw 'Ring columns or actions were clipped at a narrower window size.'
+   }
   }
   Write-ModuleUiImage $window $kind
  }
