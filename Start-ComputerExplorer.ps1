@@ -21,6 +21,7 @@ Import-Module (Join-Path $PSScriptRoot 'BitLocker.Archive.psm1') -ErrorAction St
 . (Join-Path $PSScriptRoot 'ComputerExplorer.Removal.UI.ps1')
 $config = Read-ExplorerConfiguration $ConfigPath
 $ConfigPath = (Resolve-Path -LiteralPath $ConfigPath).ProviderPath
+$adSearchTest = [IO.File]::Exists((Join-Path $PSScriptRoot 'ad-search-test.flag'))
 
 function Get-UiSetting {
     param($Object, [string]$Name, $Default)
@@ -161,7 +162,7 @@ function Update-ExplorerCounters {
 }
 
 function Test-UiReadOnly {
-    return ($null -ne $GraphAccess -and $null -ne $GraphAccess.PSObject.Properties['ReadOnly'] -and [bool]$GraphAccess.ReadOnly)
+    return ($adSearchTest -or ($null -ne $GraphAccess -and $null -ne $GraphAccess.PSObject.Properties['ReadOnly'] -and [bool]$GraphAccess.ReadOnly))
 }
 
 function Test-UiGraphPermission {
@@ -229,6 +230,7 @@ function Add-RemovalReportRow {
 
 function Start-RemovalOperation {
     param([ValidateSet('PrepareRemoval','Remove','PrepareArchive','Archive','ReadArchive','ReadKeys')][string]$Operation, [string[]]$Names, [string[]]$Sources, [string]$PlanId, [switch]$IncludeAdChildren, [switch]$ConfirmGlpiMapping, [int]$ComputerId, [string[]]$ConfirmBitLockerLossFor=@(),[string[]]$ConfirmHybridMismatchFor=@(),[string[]]$ConfirmUnreadableAdChildrenFor=@())
+    if ($adSearchTest) { throw 'In questa prova è disponibile soltanto la ricerca dei computer.' }
     if ((Test-UiReadOnly) -and $Operation -in @('PrepareRemoval','Remove','PrepareArchive','Archive')) { throw 'Modulo in sola lettura: modifiche e archiviazioni non consentite.' }
     try {
         $script:Operation = $Operation; $script:Stopping = $false
@@ -488,7 +490,21 @@ function Show-ExplorerSnapshot {
         if ($source.FromCache) { $cache = 'Sì' }
         $count = '?'
         if ($source.State -eq 'OK' -or $source.Name -eq 'AD') { $count = [string]$source.Count }
-        [void]$sourceGrid.Rows.Add([object[]]@($source.Name, $source.State, $count, $date, $cache, $source.Error))
+        $information = $source.Error
+        $elapsed = Get-UiSetting $source 'CompletedAfterSeconds' $null
+        if ($adSearchTest -and $null -ne $elapsed) {
+            $information = ('Conclusa dopo {0:N1} s. {1}' -f $elapsed,$information).Trim()
+        }
+        [void]$sourceGrid.Rows.Add([object[]]@($source.Name, $source.State, $count, $date, $cache, $information))
+        if ($adSearchTest -and $source.Name -eq 'AD') {
+            foreach ($dc in $source.DcSources) {
+                $information = ('{0:N1} s | Tentativo {1} | {2}' -f $dc.Seconds,$dc.Attempts,$dc.Errore).Trim(' ','|')
+                if ($null -ne $dc.FirstFailure) {
+                    $information += ' | Primo tentativo ({0:N1} s): {1}' -f $dc.FirstFailure.Seconds,$dc.FirstFailure.Error
+                }
+                [void]$sourceGrid.Rows.Add([object[]]@($dc.DomainController,$dc.Stato,$dc.Trovati,'','',$information))
+            }
+        }
     }
     Update-ExplorerSourceStatus -Sources $Snapshot.Sources
     if ($renderRows) { Show-SelectedComputer }
@@ -501,6 +517,7 @@ $applicationIcon = New-Object Drawing.Icon((Join-Path $PSScriptRoot 'assets/Assi
 $form.Icon = $applicationIcon
 $form.Text = 'Computer Explorer - AD / Entra ID / Intune / GLPI'
 if (Test-UiReadOnly) { $form.Text+=' - Sola lettura' }
+if ($adSearchTest) { $form.Text+=' - Test ricerca AD' }
 $form.Size = New-Object Drawing.Size(1440, 850)
 $form.MinimumSize = New-Object Drawing.Size(1000, 640)
 $form.StartPosition = 'CenterScreen'; $form.Font = New-Object Drawing.Font('Segoe UI', 9)
@@ -519,7 +536,11 @@ $cancelButton = New-Object Windows.Forms.Button; $cancelButton.Text = 'Interromp
 $forceRefresh = New-Object Windows.Forms.CheckBox; $forceRefresh.Text = 'Rileggi cloud'; $forceRefresh.AutoSize = $true; $forceRefresh.Margin = New-Object Windows.Forms.Padding(15, 6, 4, 0)
 $tokensButton = New-Object Windows.Forms.Button; $tokensButton.Text = 'Token GLPI'; $tokensButton.Width = 100
 $findKeysButton=New-Object Windows.Forms.Button;$findKeysButton.Text='Cerca chiavi';$findKeysButton.Width=110;$findKeysButton.Enabled=$false
-$toolbar.Controls.AddRange(@($nameLabel, $nameBox, $searchButton, $cancelButton, $forceRefresh, $tokensButton,$findKeysButton))
+$toolbar.Controls.AddRange(@($nameLabel, $nameBox, $searchButton, $cancelButton, $forceRefresh, $tokensButton))
+$parallelAd = New-Object Windows.Forms.CheckBox; $parallelAd.Name='ParallelAdTest'; $parallelAd.Text='AD parallelo (2 DC)'; $parallelAd.AutoSize=$true
+$parallelAd.Checked=$adSearchTest; $parallelAd.Margin=New-Object Windows.Forms.Padding(15,6,4,0)
+if ($adSearchTest) { $toolbar.Controls.Add($parallelAd) }
+else { $toolbar.Controls.Add($findKeysButton) }
 $options = New-Object Windows.Forms.FlowLayoutPanel; $options.Dock = 'Fill'; $options.WrapContents = $false
 $sourceChecks = [ordered]@{}
 $glpiSettings = Get-UiSetting $config.Settings 'Glpi' $null
@@ -535,7 +556,7 @@ $options.Controls.Add($counterLabel)
 $deleteButton = New-Object Windows.Forms.Button; $deleteButton.Name='DeleteComputers';$deleteButton.Text = 'Elimina...'; $deleteButton.Width = 100; $deleteButton.Enabled = $false
 $archiveButton=New-Object Windows.Forms.Button; $archiveButton.Name='ArchiveBitLocker';$archiveButton.Text='Archivia BitLocker'; $archiveButton.Width=135; $archiveButton.Enabled=$false
 $readArchiveButton=New-Object Windows.Forms.Button; $readArchiveButton.Text='Leggi archivio'; $readArchiveButton.Width=115; $readArchiveButton.Enabled=$false
-$options.Controls.AddRange(@($deleteButton,$archiveButton,$readArchiveButton))
+if (-not $adSearchTest) { $options.Controls.AddRange(@($deleteButton,$archiveButton,$readArchiveButton)) }
 $splitter = New-Object Windows.Forms.SplitContainer
 $splitter.Dock = 'Fill'; $splitter.Orientation = 'Horizontal'
 $splitter.Size = New-Object Drawing.Size(1300, 650); $splitter.SplitterDistance = 390
@@ -666,6 +687,7 @@ function Set-SearchBusy {
     Update-ExplorerCounters
     $searchButton.Enabled = -not $Busy; $nameBox.Enabled = -not $Busy; $tokensButton.Enabled = -not $Busy
     $forceRefresh.Enabled = -not $Busy; $cancelButton.Enabled = $Busy
+    $parallelAd.Enabled = -not $Busy
     foreach ($name in $sourceChecks.Keys) { $allowed=$true;if ($name -in @('Entra','Intune')) { $allowed=Test-UiGraphPermission ($name.ToLowerInvariant()+'-read') };$sourceChecks[$name].Enabled = -not $Busy -and $allowed }
 }
 
@@ -701,14 +723,14 @@ $searchButton.Add_Click({
         $script:Queue = New-Object 'System.Collections.Concurrent.ConcurrentQueue[object]'
         $script:Pipeline = [PowerShell]::Create(); $script:Pipeline.Runspace = $script:Worker
         $workerScript = {
-            param($ModulePath, $Fragment, $ConfigFile, $Sources, $Credentials, $Refresh, $Queue)
+            param($ModulePath, $Fragment, $ConfigFile, $Sources, $Credentials, $Refresh, $Queue, $ParallelAdReads)
             $ErrorActionPreference = 'Stop'
             Import-Module $ModulePath -ErrorAction Stop
-            $arguments = @{ NameFragment = $Fragment; ConfigPath = $ConfigFile; EnabledSources = $Sources; ForceCloudRefresh = $Refresh; ProgressQueue = $Queue }
+            $arguments = @{ NameFragment = $Fragment; ConfigPath = $ConfigFile; EnabledSources = $Sources; ForceCloudRefresh = $Refresh; ProgressQueue = $Queue; ParallelAdReads = $ParallelAdReads }
             if ($null -ne $Credentials) { $arguments.GlpiUserToken = $Credentials.User; $arguments.GlpiAppToken = $Credentials.App }
             Invoke-ComputerExplorerParallelSearch @arguments
         }
-        [void]$script:Pipeline.AddScript($workerScript.ToString()).AddArgument((Join-Path $PSScriptRoot 'ComputerExplorer.Parallel.psm1')).AddArgument($nameBox.Text.Trim()).AddArgument($ConfigPath).AddArgument($enabled).AddArgument($script:GlpiCredentials).AddArgument($forceRefresh.Checked).AddArgument($script:Queue)
+        [void]$script:Pipeline.AddScript($workerScript.ToString()).AddArgument((Join-Path $PSScriptRoot 'ComputerExplorer.Parallel.psm1')).AddArgument($nameBox.Text.Trim()).AddArgument($ConfigPath).AddArgument($enabled).AddArgument($script:GlpiCredentials).AddArgument($forceRefresh.Checked).AddArgument($script:Queue).AddArgument($parallelAd.Checked)
         $script:Stopping = $false; $script:StartedAt = [datetime]::Now; $script:StageMessage = 'Avvio della ricerca...'
         Update-ExplorerSourceStatus -Sources @(foreach ($name in $sourceChecks.Keys) {
             $state='Esclusa'; if ($enabled -contains $name) { $state='In attesa' }

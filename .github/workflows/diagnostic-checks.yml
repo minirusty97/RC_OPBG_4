@@ -28,3 +28,24 @@ jobs:
             & $_.FullName
             if (-not $?) { throw ('Failed: ' + $_.Name) }
           }
+  portable-ad-search:
+    if: github.ref == 'refs/heads/diagnostic/ad-parallelo'
+    needs: windows-powershell
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Build and smoke-test the portable AD comparison
+        shell: powershell
+        run: ./build/Build-AssistenteIT.ps1 -AdSearchTestPortable -OutputDirectory ./output/test-ad
+      - name: Upload the portable comparison and checksum
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Assistente-IT-Test-AD
+          path: |
+            output/test-ad/Assistente-IT-*-Test-AD.zip
+            output/test-ad/Assistente-IT-*-Test-AD.zip.sha256
+          if-no-files-found: error
+          retention-days: 30

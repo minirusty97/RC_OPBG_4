@@ -10,6 +10,7 @@ $tokens = $null; $errors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile((Resolve-Path $UiPath).ProviderPath, [ref]$tokens, [ref]$errors)
 if ($errors.Count -gt 0) { throw 'UI script does not parse.' }
 $GraphAccess=$null
+$adSearchTest=$false
 foreach ($name in @('Update-ExplorerCounters', 'Set-SearchBusy', 'Test-UiReadOnly')) {
     $definition = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
     if ($null -eq $definition) { throw ('UI helper not found: ' + $name) }
@@ -75,6 +76,7 @@ $findKeysButton=[pscustomobject]@{Enabled=$false};$config=[pscustomobject]@{Mini
 $archiveButton=[pscustomobject]@{Enabled=$false}; $readArchiveButton=[pscustomobject]@{Enabled=$false}
 $nameBox = [pscustomobject]@{Enabled=$true;Text='PC-TEST'}; $tokensButton = [pscustomobject]@{Enabled=$true}
 $forceRefresh = [pscustomobject]@{Enabled=$true}; $cancelButton = [pscustomobject]@{Enabled=$false}
+$parallelAd = [pscustomobject]@{Enabled=$false}
 $sourceChecks = [ordered]@{AD=[pscustomobject]@{Enabled=$true}}
 $timer = [pscustomobject]@{Enabled=$true}
 $timer | Add-Member -MemberType ScriptMethod -Name Stop -Value {$this.Enabled=$false}

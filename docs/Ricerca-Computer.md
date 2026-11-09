@@ -40,3 +40,7 @@ e il riuso dei dettagli GLPI nella stessa ricerca. I tempi dei filtri
 LDAP dipendono dai dati e dal piano di ricerca del DC. Il confronto dei
 tempi su rete aziendale richiede la stessa query, le stesse fonti e la
 stessa condizione di cache.
+
+Il ramo `diagnostic/ad-parallelo` aggiunge una
+[prova portatile di confronto](Test-AD-Parallelo.md) con lettori
+AD isolati, ritentativo sequenziale e tempi per fonte.

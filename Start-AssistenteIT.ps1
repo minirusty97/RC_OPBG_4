@@ -11,7 +11,26 @@ Import-Module (Join-Path $PSScriptRoot 'AssistenteIT/AssistenteIT.Core.psm1') -E
 Import-Module (Join-Path $PSScriptRoot 'AssistenteIT/AssistenteIT.Update.psm1') -ErrorAction Stop
 Enable-AssistenteITDependencies $PSScriptRoot
 $manifest = Read-AssistenteITManifest $PSScriptRoot
-$activity = Open-AssistenteITActivity
+$adSearchTest = [IO.File]::Exists((Join-Path $PSScriptRoot 'ad-search-test.flag'))
+$activity = $null
+if ($adSearchTest) {
+    $manifest.Modules = @($manifest.Modules | Where-Object Id -eq 'computer-explorer')
+    if (-not $DataRoot) {
+        $installedPaths = Get-AssistenteITPaths
+        $DataRoot = $installedPaths.DataRoot + '-TestAD'
+        $testPaths = Get-AssistenteITPaths -DataRoot $DataRoot
+        [void][IO.Directory]::CreateDirectory($testPaths.ConfigDirectory)
+        foreach ($file in @('computer-explorer.config.local.json','graph-session.json','glpi-credentials.dpapi.json')) {
+            $sourceFile = Join-Path $installedPaths.ConfigDirectory $file
+            $targetFile = Join-Path $testPaths.ConfigDirectory $file
+            if ([IO.File]::Exists($sourceFile) -and -not [IO.File]::Exists($targetFile)) {
+                try { [IO.File]::Copy($sourceFile,$targetFile,$false) }
+                catch [IO.IOException] { if (-not [IO.File]::Exists($targetFile)) { throw } }
+            }
+        }
+    }
+}
+else { $activity = Open-AssistenteITActivity }
 $paths = Initialize-AssistenteIT -InstallRoot $PSScriptRoot -DataRoot $DataRoot
 Initialize-AssistenteITWindowIdentity -InstallRoot $PSScriptRoot
 $prerequisites = Get-AssistenteITPrerequisites
@@ -171,7 +190,7 @@ function Update-AssistenteITModuleAvailability {
         if ($null -ne $script:Access -and -not $verified.CanOpen) { $label.Text=$verified.Reason;$label.ForeColor=[Drawing.Color]::DarkOrange }
         elseif ($verified.CanOpen) {
             $label.Text='Sola lettura';$label.ForeColor=[Drawing.Color]::SteelBlue
-            if ($verified.AccessMode -eq 'ReadWrite') { $label.Text='Lettura e scrittura (ambiti concessi)';$label.ForeColor=[Drawing.Color]::DarkGreen }
+            if (-not $adSearchTest -and $verified.AccessMode -eq 'ReadWrite') { $label.Text='Lettura e scrittura (ambiti concessi)';$label.ForeColor=[Drawing.Color]::DarkGreen }
         }
     }
 }
@@ -250,7 +269,7 @@ function Install-AssistenteITDownloadedUpdate {
 
 function Start-AssistenteITUpdateOperation {
     param([ValidateSet('Check','Download','Install')][string]$Operation)
-    if ($null -ne $script:UpdatePipeline) { return }
+    if ($adSearchTest -or $null -ne $script:UpdatePipeline) { return }
     $script:UpdateOperation=$Operation
     $releaseButton.Enabled=$false; $installUpdateButton.Enabled=$false
     if ($Operation -eq 'Check') { $status.Text='Controllo aggiornamenti su GitHub...'; $script:DownloadedUpdate=$null; $script:UpdateInfo=$null; $installUpdateButton.Visible=$false }
@@ -295,6 +314,7 @@ $form = New-Object Windows.Forms.Form
 $applicationIcon = New-Object Drawing.Icon((Join-Path $PSScriptRoot 'assets/AssistenteIT.ico'))
 $form.Icon = $applicationIcon
 $form.Text = '{0} - {1}' -f $manifest.Product, $manifest.Version
+if ($adSearchTest) { $form.Text += ' - Test ricerca AD' }
 $form.Size = New-Object Drawing.Size(940, 925); $form.MinimumSize=New-Object Drawing.Size(800, 600)
 $form.StartPosition='CenterScreen'; $form.Font=New-Object Drawing.Font('Segoe UI', 10)
 $layout = New-Object Windows.Forms.TableLayoutPanel
@@ -373,7 +393,8 @@ $installUpdateButton.Add_Click({
         try { Start-AssistenteITUpdateOperation Download } catch { $status.Text=$_.Exception.Message; $releaseButton.Enabled=$true; $installUpdateButton.Enabled=$true }
     }
 })
-$toolbar.Controls.AddRange(@($accessButton,$settingsButton,$dataButton,$releaseButton,$installUpdateButton))
+$toolbar.Controls.AddRange(@($accessButton,$settingsButton,$dataButton))
+if (-not $adSearchTest) { $toolbar.Controls.AddRange(@($releaseButton,$installUpdateButton)) }
 $accessPanel=New-Object Windows.Forms.GroupBox
 $accessPanel.Name='GraphSessionPanel';$accessPanel.Text='Stato accesso';$accessPanel.Dock='Fill'
 $accessRows=New-Object Windows.Forms.TableLayoutPanel
@@ -474,13 +495,15 @@ $updateTimer.Add_Tick({
 $form.Add_Shown({
     if (-not $SmokeTestOutput) {
         Start-AssistenteITSavedAccessCheck
-        try { Start-AssistenteITUpdateOperation Check } catch { $status.Text=$_.Exception.Message; $releaseButton.Enabled=$true }
+        if (-not $adSearchTest) {
+            try { Start-AssistenteITUpdateOperation Check } catch { $status.Text=$_.Exception.Message; $releaseButton.Enabled=$true }
+        }
     }
 })
 try {
     if ($SmokeTestOutput) {
         $form.CreateControl(); $form.PerformLayout()
-        [pscustomobject]@{Product=$manifest.Product;Version=$manifest.Version;WindowTitle=$form.Text;ModuleCount=$modulePanel.Controls.Count;GraphAvailable=$prerequisites.GraphAvailable;LoginButton=$accessButton.Text;UpdateButton=$releaseButton.Text;ModulesEnabled=@($script:ModuleButtons.Values | Where-Object Enabled).Count;AppUserModelId=[AssistenteIT.WindowIdentity]::CurrentId();DataRoot=$paths.DataRoot;ConfigPath=$paths.ConfigPath;EnvPath=$paths.EnvPath} | ConvertTo-Json | Set-Content -LiteralPath $SmokeTestOutput -Encoding UTF8
+        [pscustomobject]@{Product=$manifest.Product;Version=$manifest.Version;WindowTitle=$form.Text;ModuleCount=$modulePanel.Controls.Count;GraphAvailable=$prerequisites.GraphAvailable;LoginButton=$accessButton.Text;UpdateButton=$(if ($null -ne $releaseButton.Parent) { $releaseButton.Text });ModulesEnabled=@($script:ModuleButtons.Values | Where-Object Enabled).Count;AppUserModelId=[AssistenteIT.WindowIdentity]::CurrentId();DataRoot=$paths.DataRoot;ConfigPath=$paths.ConfigPath;EnvPath=$paths.EnvPath} | ConvertTo-Json | Set-Content -LiteralPath $SmokeTestOutput -Encoding UTF8
     }
     else { [void]$form.ShowDialog() }
 }
@@ -494,5 +517,6 @@ finally {
         $script:AccessTask.Pipeline.Dispose()
     }
     $moduleTimer.Stop();$moduleTimer.Dispose()
-    $form.Dispose(); $applicationIcon.Dispose(); $activity.Dispose()
+    $form.Dispose(); $applicationIcon.Dispose()
+    if ($null -ne $activity) { $activity.Dispose() }
 }

@@ -8,7 +8,10 @@ try {
     [Windows.Forms.Application]::EnableVisualStyles()
     $root = Split-Path $PSScriptRoot -Parent
     Import-Module (Join-Path $PSScriptRoot 'AssistenteIT.Core.psm1') -ErrorAction Stop
-    $activity = Open-AssistenteITActivity
+    if ([IO.File]::Exists((Join-Path $root 'ad-search-test.flag'))) {
+        if ($ModuleId -ne 'computer-explorer') { throw 'Disponibile solo Computer Explorer nella prova AD.' }
+    }
+    else { $activity = Open-AssistenteITActivity }
     Enable-AssistenteITDependencies $root
     Initialize-AssistenteITWindowIdentity -InstallRoot $root
     $manifest = Read-AssistenteITManifest $root

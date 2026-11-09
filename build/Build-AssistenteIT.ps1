@@ -3,6 +3,7 @@
 param(
     [string]$OutputDirectory = (Join-Path (Split-Path $PSScriptRoot -Parent) 'output/assistente-it'),
     [string]$Version,
+    [switch]$AdSearchTestPortable,
     [string]$MakeNsisPath = (Join-Path ${env:ProgramFiles(x86)} 'NSIS/makensis.exe')
 )
 $ErrorActionPreference='Stop'
@@ -15,7 +16,7 @@ if (-not $Version) { $Version=$manifest.Version }
 if ($Version -notmatch '^\d+\.\d+\.\d+$' -or @($Version.Split('.') | Where-Object { [int]$_ -gt 65535 }).Count -gt 0) { throw 'Versione non valida. Usare major.minor.patch.' }
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 [void][IO.Directory]::CreateDirectory($OutputDirectory)
-if (-not (Test-Path -LiteralPath $MakeNsisPath -PathType Leaf)) { throw 'NSIS non trovato. Installare NSIS 3.13.0 oppure specificare -MakeNsisPath.' }
+if (-not $AdSearchTestPortable -and -not (Test-Path -LiteralPath $MakeNsisPath -PathType Leaf)) { throw 'NSIS non trovato. Installare NSIS 3.13.0 oppure specificare -MakeNsisPath.' }
 $cache = Join-Path $OutputDirectory 'dependency-cache'
 $graph = Join-Path (Join-Path $cache 'Microsoft.Graph.Authentication') $manifest.GraphVersion
 $graphManifest = Join-Path $graph 'Microsoft.Graph.Authentication.psd1'
@@ -39,7 +40,7 @@ try {
         'Start-AssistenteIT.ps1', 'assistente-it.json', 'AssistenteIT/AssistenteIT.Core.psm1', 'AssistenteIT/Invoke-Module.ps1',
         'AssistenteIT/Graph.Access.ps1', 'AssistenteIT/Graph.Session.ps1', 'AssistenteIT/GroupPicker.UI.ps1', 'AssistenteIT/Window.Identity.cs', 'AssistenteIT/LegacyMigration.ps1', 'AssistenteIT/Import-UserData.ps1',
         'AssistenteIT/AssistenteIT.Update.psm1', 'AssistenteIT/Install-Update.ps1',
-        'Graph.Authentication.ps1', 'Graph.LoginBridge.cs', 'Start-ComputerExplorer.ps1', 'ComputerExplorer.Core.psm1', 'ComputerExplorer.Identity.ps1', 'ComputerExplorer.Parallel.psm1', 'ComputerExplorer.Removal.psm1',
+        'Graph.Authentication.ps1', 'Graph.LoginBridge.cs', 'Start-ComputerExplorer.ps1', 'ComputerExplorer.Core.psm1', 'ComputerExplorer.Identity.ps1', 'ComputerExplorer.Parallel.psm1', 'ComputerExplorer.AdRead.ps1', 'ComputerExplorer.Removal.psm1',
         'Start-HybridJoin.ps1', 'Start-RingManager.ps1', 'DeviceModules.Core.psm1', 'DeviceModules.UI.ps1', 'HybridJoin.Core.psm1', 'RingManager.Core.psm1', 'ComputerExplorer.Removal.UI.ps1',
         'BitLocker.Archive.psm1', 'ComputerExplorer.Recovery.UI.ps1', 'AssistenteIT/Recovery.Print.cs', 'GLPI.Inventory.psm1', 'Glpi.Credentials.ps1', 'Test-AdLookup.ps1', 'computer-explorer.config.example.json', '.env.example',
         'docs/Autenticazione-Graph-Delegata.md', 'docs/Accesso-Iniziale.md', 'docs/Installazione-AssistenteIT.md', 'docs/Third-Party-Notices.txt', 'assets/AssistenteIT.ico'
@@ -66,6 +67,32 @@ try {
     & $compiler /nologo /target:winexe /platform:x64 /reference:System.Windows.Forms.dll (('/win32icon:' + (Join-Path $root 'assets/AssistenteIT.ico'))) (('/out:' + (Join-Path $stage 'AssistenteIT.exe'))) $launcherSource | ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -ne 0) { throw 'Compilazione del launcher non riuscita.' }
     Remove-Item -LiteralPath $launcherSource -Force
+    if ($AdSearchTestPortable) {
+        [IO.File]::WriteAllText((Join-Path $app 'ad-search-test.flag'), $commit)
+        $testLauncher = Join-Path $stage 'AssistenteIT-Test-AD.exe'
+        Move-Item -LiteralPath (Join-Path $stage 'AssistenteIT.exe') -Destination $testLauncher
+        Copy-Item -LiteralPath (Join-Path $root 'docs/Test-AD-Parallelo.md') -Destination (Join-Path $stage 'ISTRUZIONI.md')
+
+        $smokePath = Join-Path $OutputDirectory ('test-ad-smoke-' + [guid]::NewGuid().ToString('N') + '.json')
+        try {
+            $process = Start-Process -FilePath $testLauncher -ArgumentList ('--smoke-test "' + $smokePath + '"') -Wait -PassThru
+            if ($process.ExitCode -ne 0 -or -not [IO.File]::Exists($smokePath)) { throw 'Avvio della prova AD non riuscito.' }
+            $smoke = [IO.File]::ReadAllText($smokePath) | ConvertFrom-Json
+            if ($smoke.WindowTitle -notlike '*Test ricerca AD' -or $smoke.ModuleCount -ne 1 -or
+                $smoke.UpdateButton -or -not $smoke.GraphAvailable -or $smoke.DataRoot -notlike '*AssistenteIT-TestAD') {
+                throw 'La prova AD non è isolata correttamente.'
+            }
+        }
+        finally { if ([IO.File]::Exists($smokePath)) { [IO.File]::Delete($smokePath) } }
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $zip = Join-Path $OutputDirectory ('Assistente-IT-' + $Version + '-Test-AD.zip')
+        if ([IO.File]::Exists($zip)) { [IO.File]::Delete($zip) }
+        [IO.Compression.ZipFile]::CreateFromDirectory($stage,$zip,[IO.Compression.CompressionLevel]::Optimal,$false)
+        $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
+        $checksum = $zip + '.sha256'
+        [IO.File]::WriteAllText($checksum, ($hash + ' *' + [IO.Path]::GetFileName($zip) + "`r`n"))
+        return [pscustomobject]@{Version=$Version;ZipPath=$zip;ChecksumPath=$checksum;GraphVersion=$manifest.GraphVersion}
+    }
     $setup = Join-Path $OutputDirectory ('Assistente-IT-Setup-' + $Version + '.exe')
     & $MakeNsisPath /V3 /NOCD (('/DAPP_VERSION=' + $Version)) (('/DPACKAGE_ROOT=' + $stage)) (('/DOUTPUT_FILE=' + $setup)) (Join-Path $PSScriptRoot 'AssistenteIT.nsi') | ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $setup)) { throw 'Creazione dell''installer non riuscita.' }

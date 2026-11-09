@@ -44,9 +44,9 @@ confermate e modificabili. Le origini solo monitorate o ereditate bloccano
 lo spostamento. Errori dopo l aggiunta mantengono la destinazione e un esito
 parziale; nessun rollback o ritentativo automatico della scrittura.
 
-La lettura ordinaria di Computer Explorer usa un DC configurabile.
-Le impostazioni consentono di consultare tutti i DC per diagnostica.
-BitLocker e cancellazioni continuano a usare tutti i DC configurati.
+Dalla 1.3.2 la lettura ordinaria di Computer Explorer consulta tutti i DC
+configurati. Si può scegliere il DC principale dalle impostazioni.
+BitLocker e cancellazioni seguono il proprio flusso di verifica AD.
 GLPI preferisce il seriale Intune: solo dopo una ricerca seriale completata
 senza risultati usa nome esatto con avviso e identita hardware da verificare.
 La cache di inventario resta per scansione/credenziali e non sostituisce le
@@ -138,3 +138,14 @@ l'aggiornatore estratto dal nuovo setup. Usa come risposte locali i file
 reali della build, prova l'installazione e il riavvio e controlla
 configurazione e credenziali cifrate. La riproduzione isolata con
 l'aggiornatore precedente ha completato il ciclo 1.3.1 → 1.3.2.
+
+
+## Prova isolata di lettura AD parallela
+
+Il ramo `diagnostic/ad-parallelo` parte dalla 1.3.3. La build portatile
+consente di alternare la lettura sequenziale e quella con due processi
+isolati, con diagnosi per fonte e per DC. In caso di errore prosegue
+in sequenza e ritenta una volta i DC non verificati. Il pacchetto usa
+dati utente separati, offre solo Computer Explorer in consultazione e
+non accede al canale OTA. Consultare [il confronto](Test-AD-Parallelo.md)
+prima di valutare l'integrazione sul main.
