@@ -43,13 +43,19 @@ try {
         # Stub REST nello stesso scope del modulo: nessuna richiesta al GLPI reale.
         function script:Invoke-RestMethod {
             [CmdletBinding()]
-            param([string]$Method, [string]$Uri, [hashtable]$Headers, [string]$ContentType, [int]$TimeoutSec)
+            param([string]$Method, [string]$Uri, [hashtable]$Headers, [string]$ContentType, [int]$TimeoutSec, [int]$MaximumRedirection)
             if ($Method -ne 'GET') { throw 'Unexpected write operation.' }
             $parsed = [Uri]$Uri
             [void]$script:RequestPaths.Add($parsed.AbsolutePath)
             switch -Regex ($parsed.AbsolutePath) {
                 '/initSession$' { return [pscustomobject]@{session_token='synthetic-session'} }
                 '/killSession$' { return [pscustomobject]@{success=$true} }
+                '/getFullSession$' {
+                    if ($Headers['Session-Token'] -ne 'synthetic-session' -or $Headers.ContainsKey('Authorization') -or
+                        -not $PSBoundParameters.ContainsKey('MaximumRedirection') -or $MaximumRedirection -ne 0) { throw 'Session probe forwarded credentials or allowed redirects.' }
+                    if ($script:FixtureKind -eq 'SessionFailure') { throw 'Synthetic session query failure.' }
+                    return [pscustomobject]@{session=[pscustomobject]@{glpiname='inventario.test';privateField='fixture'}}
+                }
                 '/listSearchOptions/Computer$' {
                     return ('{"common":"Characteristics","1":{"table":"glpi_computers","field":"name"},"2":{"table":"glpi_computers","field":"id"}}' | ConvertFrom-Json)
                 }
@@ -126,6 +132,19 @@ try {
         if (-not $failed -or $out.Count -ne 0) { throw 'Incomplete-page results escaped.' }
         if (@($script:RequestPaths | Where-Object { $_ -like '*/killSession' }).Count -ne 1) { throw 'Session left open after failure.' }
         'PASS: partial page failure returns no incomplete inventory and closes the session.'
+
+        foreach ($mode in @('SessionOk','SessionFailure')) {
+            $script:FixtureKind=$mode
+            $script:RequestPaths.Clear()
+            $account=$null; $failed=$false
+            try { $account=Get-GlpiSessionAccount -BaseUri 'https://example.invalid/apirest.php' -UserToken $userToken -AppToken $appToken }
+            catch { $failed=$_.Exception.Message -eq 'Synthetic session query failure.'; if (-not $failed) { throw } }
+            if (($script:RequestPaths -join ',') -ne '/apirest.php/initSession,/apirest.php/getFullSession,/apirest.php/killSession' -or
+                ($mode -eq 'SessionOk' -and $account -cne 'inventario.test') -or ($mode -eq 'SessionFailure' -and -not $failed)) {
+                throw 'GLPI account probe returned the wrong identity or left a session open.'
+            }
+        }
+        'PASS: the GLPI account check uses read-only endpoints, returns only the username and closes the API session after success or failure.'
     }
 
 }

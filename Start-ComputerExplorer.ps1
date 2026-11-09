@@ -488,7 +488,22 @@ function Show-ExplorerSnapshot {
         if ($source.FromCache) { $cache = 'Sì' }
         $count = '?'
         if ($source.State -eq 'OK' -or $source.Name -eq 'AD') { $count = [string]$source.Count }
-        [void]$sourceGrid.Rows.Add([object[]]@($source.Name, $source.State, $count, $date, $cache, $source.Error))
+        $information = $source.Error
+        $elapsed = Get-UiSetting $source 'CompletedAfterSeconds' $null
+        if ($null -ne $elapsed) {
+            $information = ('Conclusa dopo {0:N1} s. {1}' -f $elapsed,$information).Trim()
+        }
+        [void]$sourceGrid.Rows.Add([object[]]@($source.Name, $source.State, $count, $date, $cache, $information))
+        if ($source.Name -eq 'AD') {
+            foreach ($dc in $source.DcSources) {
+                if ($null -eq $dc.PSObject.Properties['Seconds']) { continue }
+                $information = ('{0:N1} s | Tentativo {1} | {2}' -f $dc.Seconds,$dc.Attempts,$dc.Errore).Trim(' ','|')
+                if ($null -ne $dc.FirstFailure) {
+                    $information += ' | Primo tentativo ({0:N1} s): {1}' -f $dc.FirstFailure.Seconds,$dc.FirstFailure.Error
+                }
+                [void]$sourceGrid.Rows.Add([object[]]@($dc.DomainController,$dc.Stato,$dc.Trovati,'','',$information))
+            }
+        }
     }
     Update-ExplorerSourceStatus -Sources $Snapshot.Sources
     if ($renderRows) { Show-SelectedComputer }
@@ -535,7 +550,8 @@ $options.Controls.Add($counterLabel)
 $deleteButton = New-Object Windows.Forms.Button; $deleteButton.Name='DeleteComputers';$deleteButton.Text = 'Elimina...'; $deleteButton.Width = 100; $deleteButton.Enabled = $false
 $archiveButton=New-Object Windows.Forms.Button; $archiveButton.Name='ArchiveBitLocker';$archiveButton.Text='Archivia BitLocker'; $archiveButton.Width=135; $archiveButton.Enabled=$false
 $readArchiveButton=New-Object Windows.Forms.Button; $readArchiveButton.Text='Leggi archivio'; $readArchiveButton.Width=115; $readArchiveButton.Enabled=$false
-$options.Controls.AddRange(@($deleteButton,$archiveButton,$readArchiveButton))
+$searchLogButton=New-Object Windows.Forms.Button; $searchLogButton.Name='OpenSearchLog'; $searchLogButton.Text='Apri log'; $searchLogButton.Width=95; $searchLogButton.Enabled=$false
+$options.Controls.AddRange(@($deleteButton,$archiveButton,$readArchiveButton,$searchLogButton))
 $splitter = New-Object Windows.Forms.SplitContainer
 $splitter.Dock = 'Fill'; $splitter.Orientation = 'Horizontal'
 $splitter.Size = New-Object Drawing.Size(1300, 650); $splitter.SplitterDistance = 390
@@ -656,7 +672,7 @@ $script:Pipeline = $null; $script:Invocation = $null; $script:Queue = $null
 $script:GraphLoginWindow=$null; $script:ClosingGraphLogin=$false
 $script:Latest = $null; $script:GlpiCredentials = $null; $script:CloseRequested = $false
 $script:Operation = 'Search'; $script:Busy = $false; $script:RenderingGrid = $false; $script:RemovalNeedsRefresh = $false
-$script:RemovalCancellation = $null; $script:LastQuery = ''
+$script:RemovalCancellation = $null; $script:LastQuery = ''; $script:LastSearchLog = ''
 $script:Stopping = $false; $script:StageMessage = ''; $script:StartedAt = [datetime]::Now
 $timer = New-Object Windows.Forms.Timer; $timer.Interval = 200
 
@@ -666,6 +682,7 @@ function Set-SearchBusy {
     Update-ExplorerCounters
     $searchButton.Enabled = -not $Busy; $nameBox.Enabled = -not $Busy; $tokensButton.Enabled = -not $Busy
     $forceRefresh.Enabled = -not $Busy; $cancelButton.Enabled = $Busy
+    $searchLogButton.Enabled = -not $Busy -and [IO.File]::Exists($script:LastSearchLog)
     foreach ($name in $sourceChecks.Keys) { $allowed=$true;if ($name -in @('Entra','Intune')) { $allowed=Test-UiGraphPermission ($name.ToLowerInvariant()+'-read') };$sourceChecks[$name].Enabled = -not $Busy -and $allowed }
 }
 
@@ -682,6 +699,16 @@ function Stop-ExplorerSearch {
     }
 }
 
+$searchLogButton.Add_Click({
+    try {
+        if ([IO.File]::Exists($script:LastSearchLog)) {
+            $notepad=Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'notepad.exe'
+            Start-Process -FilePath $notepad -ArgumentList ('"' + $script:LastSearchLog + '"')
+        }
+    }
+    catch { [void][Windows.Forms.MessageBox]::Show($form, $_.Exception.Message, 'Log ricerca', 'OK', 'Error') }
+})
+
 $searchButton.Add_Click({
     try {
         # Rilegge il JSON locale anche dopo una modifica a finestra aperta.
@@ -696,19 +723,24 @@ $searchButton.Add_Click({
             if ($null -eq $script:GlpiCredentials) { $script:GlpiCredentials = Read-GlpiCredentials $useAppToken }
             if ($null -eq $script:GlpiCredentials) { return }
         }
+        $dataRoot=Split-Path $ConfigPath -Parent
+        if ((Split-Path $dataRoot -Leaf) -eq 'Config') { $dataRoot=Split-Path $dataRoot -Parent }
+        $logDirectory=Join-Path $dataRoot 'Logs/ComputerExplorer'
+        $logFile='Ricerca-{0:yyyyMMdd-HHmmss}-{1}.log' -f [datetime]::Now,([guid]::NewGuid().ToString('N'))
+        $script:LastSearchLog=Join-Path $logDirectory $logFile
         $script:Operation = 'Search'; $script:LastQuery = $nameBox.Text.Trim()
         $script:Latest = $null; $grid.Rows.Clear(); $sourceGrid.Rows.Clear(); $details.Clear(); Update-ExplorerCounters
         $script:Queue = New-Object 'System.Collections.Concurrent.ConcurrentQueue[object]'
         $script:Pipeline = [PowerShell]::Create(); $script:Pipeline.Runspace = $script:Worker
         $workerScript = {
-            param($ModulePath, $Fragment, $ConfigFile, $Sources, $Credentials, $Refresh, $Queue)
+            param($ModulePath, $Fragment, $ConfigFile, $Sources, $Credentials, $Refresh, $Queue, $SearchLogPath)
             $ErrorActionPreference = 'Stop'
             Import-Module $ModulePath -ErrorAction Stop
-            $arguments = @{ NameFragment = $Fragment; ConfigPath = $ConfigFile; EnabledSources = $Sources; ForceCloudRefresh = $Refresh; ProgressQueue = $Queue }
+            $arguments = @{ NameFragment = $Fragment; ConfigPath = $ConfigFile; EnabledSources = $Sources; ForceCloudRefresh = $Refresh; ProgressQueue = $Queue; ParallelAdReads = $true; SearchLogPath = $SearchLogPath }
             if ($null -ne $Credentials) { $arguments.GlpiUserToken = $Credentials.User; $arguments.GlpiAppToken = $Credentials.App }
             Invoke-ComputerExplorerParallelSearch @arguments
         }
-        [void]$script:Pipeline.AddScript($workerScript.ToString()).AddArgument((Join-Path $PSScriptRoot 'ComputerExplorer.Parallel.psm1')).AddArgument($nameBox.Text.Trim()).AddArgument($ConfigPath).AddArgument($enabled).AddArgument($script:GlpiCredentials).AddArgument($forceRefresh.Checked).AddArgument($script:Queue)
+        [void]$script:Pipeline.AddScript($workerScript.ToString()).AddArgument((Join-Path $PSScriptRoot 'ComputerExplorer.Parallel.psm1')).AddArgument($nameBox.Text.Trim()).AddArgument($ConfigPath).AddArgument($enabled).AddArgument($script:GlpiCredentials).AddArgument($forceRefresh.Checked).AddArgument($script:Queue).AddArgument($script:LastSearchLog)
         $script:Stopping = $false; $script:StartedAt = [datetime]::Now; $script:StageMessage = 'Avvio della ricerca...'
         Update-ExplorerSourceStatus -Sources @(foreach ($name in $sourceChecks.Keys) {
             $state='Esclusa'; if ($enabled -contains $name) { $state='In attesa' }

@@ -1,7 +1,7 @@
-# Ricerca Computer Explorer dalla 1.3.2
+# Ricerca Computer Explorer
 
-La ricerca AD ordinaria consulta tutti i DC configurati, in sequenza.
-Il DC principale parte per primo. In **Impostazioni → Ricerca computer**
+Dalla 1.4.0 la ricerca AD ordinaria consulta fino a cinque DC configurati
+in parallelo. Il DC principale viene accodato per primo. In **Impostazioni → Ricerca computer**
 si può indicare un DC già configurato con nome completo o nome breve
 univoco. Il campo vuoto dà priorità a dc1 o srvdc1, se presenti, e usa il
 primo dell'elenco negli altri casi. La copertura di tutti i DC si applica
@@ -10,6 +10,15 @@ anche alle configurazioni salvate con la precedente opzione per un solo DC.
 Ogni DC riceve un filtro LDAP per frammento su Name, DNSHostName e
 sAMAccountName. La griglia riporta la presenza e il numero dei DC
 verificati separatamente. Una replica irraggiungibile è non verificabile.
+
+Ogni lettura AD usa un processo isolato con un limite di 30 secondi,
+compreso l'avvio. I DC in errore vengono ritentati una volta in
+sequenza dopo le prime letture. **Apri log** apre l'ultimo file di
+ricerca, salvato in
+`%LOCALAPPDATA%\AssistenteIT\Logs\ComputerExplorer`.
+Ogni riga JSON contiene un evento con ora UTC, DC, PID, tentativo ed
+esito della fase. Il log include la durata delle altre fonti e omette
+frammento cercato, record, token e testo libero delle eccezioni.
 
 Il confronto Hybrid usa l'ObjectGUID restituito per il nome dal DC
 principale. L'ID Entra riportato da Intune viene confrontato quando

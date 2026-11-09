@@ -23,12 +23,21 @@ durante le richieste. L'autenticazione interattiva parte dal pulsante Accesso.
 I moduli condividono la sessione verificata tramite runspace STA nello stesso
 processo. Chiudere i moduli prima di cambiare accesso o impostazioni.
 
+Il pannello **Stato accesso** mostra separatamente account Microsoft,
+Entra ID, Intune e gruppi Entra. Il giallo indica una verifica in corso
+o da completare. Il verde indica una lettura verificata. Una sessione
+assente, scaduta o che richiede un intervento viene segnalata in rosso
+come **Accesso richiesto**. In quel caso i moduli restano disabilitati
+fino alla conferma con **Accesso**. Le letture negate da un servizio
+sono indicate sulla riga del servizio e l'accesso ai singoli moduli
+segue i requisiti del manifest.
+
 ## Permessi e modalità
 
 Il manifest dichiara gli ambiti e i requisiti di lettura e scrittura per
 ogni modulo. Un modulo può richiedere tutte le sue letture per aprirsi.
-Il wrapper mostra **Sola lettura** o **Lettura e scrittura (ambiti concessi)**
-sulla scheda del modulo.
+Il wrapper mostra **Sola lettura** o **Lettura e scrittura** a sinistra di **Apri modulo**. Il suggerimento
+sulla modalità di accesso spiega gli ambiti concessi e i prerequisiti.
 
 | Lettura | Richiesta di verifica |
 | --- | --- |
@@ -71,7 +80,20 @@ La cancellazione Entra resta supportata con `Directory.AccessAsUser.All` e i rel
 
 Finestre e collegamenti usano l'identita Windows **AssistenteIT.Desktop** e l'icona del programma. PowerShell resta il motore interno; il launcher non e stato trasformato in un nuovo host eseguibile. Lo stile Windows viene inizializzato prima delle finestre.
 
-**Cerca aggiornamenti** avvia il controllo. Quando una versione e disponibile compare **Installa aggiornamento**. L'installazione conserva configurazione e credenziali personali e richiede la chiusura dei moduli.
+Il gruppo **Componenti** mostra la disponibilità del modulo PowerShell
+Microsoft Graph e di RSAT AD. Per GLPI, il wrapper verifica la sessione
+API e mostra **Configurato** con l'utente effettivo. Impostazioni o token
+mancanti risultano **Non configurato**. Una verifica fallita risulta
+**Non disponibile**.
+
+La riga **Repository GitHub** distingue un repository pubblico
+disponibile, un repository inaccessibile pubblicamente (**Chiusa**) e
+una mancata connessione. La riga **Aggiornamento** indica separatamente
+la versione disponibile, lo stato aggiornato o un errore del feed.
+Il controllo parte all'apertura e si ripete con **Cerca aggiornamenti**.
+Per scaricare una nuova versione, selezionare **Installa aggiornamento**.
+L'installazione conserva configurazione e credenziali personali e
+richiede la chiusura dei moduli.
 
 Gli errori della ricerca chiavi distinguono ricerca Intune, Azure AD Device ID, elenco metadati, lettura password e risposta non valida. Quando disponibili mostrano stato HTTP, codice Graph e request-id; non riportano corpi di risposta, token o password. Un HTTP 400 non viene presentato come prova di un ruolo mancante.
 

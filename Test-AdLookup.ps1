@@ -4,7 +4,8 @@ param(
     [Parameter(Mandatory = $true)][ValidateNotNullOrEmpty()][string]$NameFragment,
     [string]$ConfigPath,
     [switch]$PassThru,
-    [string[]]$DomainController
+    [string[]]$DomainController,
+    [hashtable]$AdSearchLog
 )
 
 $ErrorActionPreference = 'Stop'
@@ -24,6 +25,10 @@ function Get-AdCanonicalParent {
     return $null
 }
 
+if ($null -ne $AdSearchLog) {
+    . (Join-Path $PSScriptRoot 'ComputerExplorer.AdLog.ps1')
+    Write-ExplorerSearchLog $AdSearchLog 'ad.lookup_config.start'
+}
 if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
     $ConfigPath = Join-Path $PSScriptRoot 'computer-explorer.config.local.json'
 }
@@ -62,12 +67,18 @@ if ($fragment.Length -lt $minimumCharacters) {
 # Il frammento resta letterale: gli asterischi della ricerca vengono aggiunti qui.
 $escapedFragment = $fragment.Replace('\', '\5c').Replace('*', '\2a').Replace('(', '\28').Replace(')', '\29').Replace([string][char]0, '\00')
 $ldapFilter = '(|(name=*{0}*)(dNSHostName=*{0}*)(sAMAccountName=*{0}*))' -f $escapedFragment
+if ($null -ne $AdSearchLog) {
+    Write-ExplorerSearchLog $AdSearchLog 'ad.lookup_config.end'
+    Write-ExplorerSearchLog $AdSearchLog 'ad.rsat_import.start'
+}
 Import-Module -Name ActiveDirectory -ErrorAction Stop
+if ($null -ne $AdSearchLog) { Write-ExplorerSearchLog $AdSearchLog 'ad.rsat_import.end' }
 
 $sources = New-Object 'System.Collections.Generic.List[object]'
 $computers = New-Object 'System.Collections.Generic.List[object]'
 foreach ($dc in $controllers) {
     Write-Verbose "Ricerca AD su $dc..."
+    $step='query'
     try {
         $query = @{
             Server = $dc
@@ -75,7 +86,10 @@ foreach ($dc in $controllers) {
             Properties = @('CanonicalName', 'DNSHostName', 'SamAccountName', 'DistinguishedName', 'ObjectGUID', 'Enabled', 'Modified')
             ErrorAction = 'Stop'
         }
+        if ($null -ne $AdSearchLog) { Write-ExplorerSearchLog $AdSearchLog 'ad.query.start' }
         $found = @(Get-ADComputer @query)
+        if ($null -ne $AdSearchLog) { Write-ExplorerSearchLog $AdSearchLog 'ad.query.end' @{Records=$found.Count} }
+        $step='validate'
         $dcComputers = New-Object 'System.Collections.Generic.List[object]'
         foreach ($computer in $found) {
             if ($null -eq $computer) { continue }
@@ -99,6 +113,7 @@ foreach ($dc in $controllers) {
                 LastModified = $computer.Modified
             })
         }
+        if ($null -ne $AdSearchLog) { Write-ExplorerSearchLog $AdSearchLog 'ad.validate.end' @{Records=$dcComputers.Count} }
         foreach ($computer in $dcComputers) { [void]$computers.Add($computer) }
         [void]$sources.Add([pscustomobject]@{
             DomainController = $dc
@@ -109,6 +124,7 @@ foreach ($dc in $controllers) {
         })
     }
     catch {
+        if ($null -ne $AdSearchLog) { Write-ExplorerSearchLog $AdSearchLog ('ad.'+$step+'.error') -Failure $_ }
         [void]$sources.Add([pscustomobject]@{
             DomainController = $dc
             Stato = 'Errore'

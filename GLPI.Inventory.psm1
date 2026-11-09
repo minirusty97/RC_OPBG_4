@@ -105,7 +105,7 @@ function ConvertFrom-GlpiSecureString {
 function Invoke-GlpiRead {
     param([hashtable]$Session, [string]$Path, [hashtable]$Query = @{})
     # La lista di percorsi evita l'uso del connettore per modificare gli asset.
-    if ($Path -notmatch '^(initSession|killSession|listSearchOptions/Computer|search/Computer|getMultipleItems|(Computer|State|Group|Supplier)/[1-9][0-9]*)$') {
+    if ($Path -notmatch '^(initSession|killSession|getFullSession|listSearchOptions/Computer|search/Computer|getMultipleItems|(Computer|State|Group|Supplier)/[1-9][0-9]*)$') {
         throw "Endpoint GLPI non previsto dal connettore di consultazione."
     }
     $uri = $Session.BaseUri + '/' + $Path
@@ -115,8 +115,71 @@ function Invoke-GlpiRead {
         }
         $uri += '?' + ($pairs -join '&')
     }
-    Invoke-RestMethod -Method GET -Uri $uri -Headers $Session.Headers `
-        -ContentType 'application/json' -TimeoutSec $Session.TimeoutSeconds -ErrorAction Stop
+    $request=@{Method='GET'; Uri=$uri; Headers=$Session.Headers; ContentType='application/json'; TimeoutSec=$Session.TimeoutSeconds; ErrorAction='Stop'}
+    if ($Session.ContainsKey('DirectOnly')) { $request.MaximumRedirection=0 }
+    Invoke-RestMethod @request
+}
+
+function New-GlpiReadSession {
+    param([uri]$BaseUri,[int]$TimeoutSeconds)
+    if (-not $BaseUri.IsAbsoluteUri -or $BaseUri.Scheme -notin @('http', 'https') -or
+        -not [string]::IsNullOrWhiteSpace($BaseUri.UserInfo) -or
+        -not [string]::IsNullOrWhiteSpace($BaseUri.Query) -or $BaseUri.Fragment) {
+        throw "Specificare l'URL completo di apirest.php, senza credenziali o query string."
+    }
+    if ($BaseUri.AbsolutePath.TrimEnd('/') -notmatch '/apirest\.php$') {
+        throw "L'URL GLPI deve terminare con /apirest.php."
+    }
+    @{
+        BaseUri=$BaseUri.AbsoluteUri.TrimEnd('/')
+        TimeoutSeconds=$TimeoutSeconds
+        Headers=@{Accept='application/json'}
+    }
+}
+
+function Open-GlpiReadSession {
+    param([hashtable]$Session,[Security.SecureString]$UserToken,[Security.SecureString]$AppToken)
+    if ($UserToken.Length -eq 0) { throw 'User token GLPI vuoto.' }
+    if ($null -ne $AppToken -and $AppToken.Length -gt 0) {
+        $Session.Headers['App-Token']=ConvertFrom-GlpiSecureString $AppToken
+    }
+    $Session.Headers['Authorization']='user_token ' + (ConvertFrom-GlpiSecureString $UserToken)
+    try { $login=Invoke-GlpiRead -Session $Session -Path 'initSession' }
+    finally { $Session.Headers.Remove('Authorization') }
+    $token=Get-GlpiValue $login 'session_token'
+    if ([string]::IsNullOrWhiteSpace($token)) { throw 'GLPI non ha restituito una sessione valida.' }
+    $Session.Headers['Session-Token']=$token
+}
+
+function Close-GlpiReadSession {
+    param([hashtable]$Session)
+    try {
+        if ($Session.Headers.ContainsKey('Session-Token')) {
+            Invoke-GlpiRead -Session $Session -Path 'killSession' | Out-Null
+        }
+    }
+    catch { Write-Warning 'Chiusura della sessione GLPI non confermata dal server.' }
+    finally { $Session.Headers.Clear() }
+}
+
+function Get-GlpiSessionAccount {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)][uri]$BaseUri,
+        [Parameter(Mandatory=$true)][Security.SecureString]$UserToken,
+        [Security.SecureString]$AppToken,
+        [ValidateRange(1,120)][int]$TimeoutSeconds=5
+    )
+    $session=New-GlpiReadSession -BaseUri $BaseUri -TimeoutSeconds $TimeoutSeconds
+    $session.DirectOnly=$true
+    try {
+        Open-GlpiReadSession -Session $session -UserToken $UserToken -AppToken $AppToken
+        $response=Invoke-GlpiRead -Session $session -Path 'getFullSession'
+        $account=([string](Get-GlpiValue (Get-GlpiValue $response 'session') 'glpiname')).Trim()
+        if (-not $account -or $account -match '[\x00-\x1f]') { throw 'Utente della sessione GLPI non verificabile.' }
+        return $account
+    }
+    finally { Close-GlpiReadSession -Session $session }
 }
 
 function Get-GlpiLookupScope {
@@ -184,14 +247,7 @@ function Find-GlpiComputer {
         [System.Collections.IDictionary]$LookupCache, $ProgressQueue
     )
 
-    if (-not $BaseUri.IsAbsoluteUri -or $BaseUri.Scheme -notin @('http', 'https') -or
-        -not [string]::IsNullOrWhiteSpace($BaseUri.UserInfo) -or
-        -not [string]::IsNullOrWhiteSpace($BaseUri.Query)) {
-        throw "Specificare l'URL completo di apirest.php, senza credenziali o query string."
-    }
-    if ($BaseUri.AbsolutePath.TrimEnd('/') -notmatch '/apirest\.php$') {
-        throw "L'URL GLPI deve terminare con /apirest.php."
-    }
+    $session = New-GlpiReadSession -BaseUri $BaseUri -TimeoutSeconds $TimeoutSeconds
     $bySerial=$PSCmdlet.ParameterSetName -eq 'Serial'
     $byExactName=$PSCmdlet.ParameterSetName -eq 'ExactName'
     $exactNames=@()
@@ -205,12 +261,6 @@ function Find-GlpiComputer {
     $serialSet=@{};foreach ($serial in $serials) { $serialSet[$serial]=$true }
     $nameSet=@{};foreach ($name in $exactNames) { $nameSet[$name]=$true }
 
-    $session = @{
-        BaseUri = $BaseUri.AbsoluteUri.TrimEnd('/')
-        TimeoutSeconds = $TimeoutSeconds
-        Headers = @{ Accept = 'application/json' }
-    }
-    $sessionOpened = $false
     $stateCache = @{}
     $groupCache = @{}
     $results = @{}
@@ -227,17 +277,7 @@ function Find-GlpiComputer {
     if (-not $BulkRead) { $supplierCache=@{} }
 
     try {
-        if ($null -ne $AppToken -and $AppToken.Length -gt 0) {
-            $session.Headers['App-Token'] = ConvertFrom-GlpiSecureString $AppToken
-        }
-        $session.Headers['Authorization'] = 'user_token ' + (ConvertFrom-GlpiSecureString $UserToken)
-        try { $login = Invoke-GlpiRead -Session $session -Path 'initSession' }
-        finally { $session.Headers.Remove('Authorization') }
-        $token = Get-GlpiValue $login 'session_token'
-        if ([string]::IsNullOrWhiteSpace($token)) { throw "GLPI non ha restituito una sessione valida." }
-        $session.Headers['Session-Token'] = $token
-        $token = $null
-        $sessionOpened = $true
+        Open-GlpiReadSession -Session $session -UserToken $UserToken -AppToken $AppToken
         if ($AllProfileEntities) {
             # GLPI 10.0.11 selects all profile entities only when entities_id is
             # omitted. An explicit "all" is cast to integer 0 by that version.
@@ -403,11 +443,7 @@ function Find-GlpiComputer {
         }
     }
     finally {
-        if ($sessionOpened) {
-            try { Invoke-GlpiRead -Session $session -Path 'killSession' | Out-Null }
-            catch { Write-Warning "Chiusura della sessione GLPI non confermata dal server." }
-        }
-        $session.Headers.Clear()
+        Close-GlpiReadSession -Session $session
     }
 
     # I risultati vengono emessi soltanto dopo aver completato tutte le pagine.
@@ -415,4 +451,4 @@ function Find-GlpiComputer {
     return @($results.Values | Sort-Object -Property @('Name', 'GlpiId'))
 }
 
-Export-ModuleMember -Function Find-GlpiComputer
+Export-ModuleMember -Function Find-GlpiComputer, Get-GlpiSessionAccount
