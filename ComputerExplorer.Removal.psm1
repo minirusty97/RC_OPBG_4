@@ -180,7 +180,7 @@ function Select-RemovalRegisteredTargets {
 
 function Get-RemovalTargetKey {
     param($Target)
-    return '{0}|{1}|{2}' -f $Target.Source, $Target.DomainController.ToUpperInvariant(), $Target.Id.ToLowerInvariant()
+    return '{0}|{1}|{2}' -f $Target.Source, $Target.DomainController.ToUpperInvariant(), (ConvertTo-RemovalId $Target.Id)
 }
 
 function Test-RemovalSameTarget {
@@ -263,7 +263,8 @@ function New-ExplorerRemovalPlan {
         $GlpiCredentials,
         [switch]$ArchiveOnly,
         [string[]]$RegisteredObjectIds=@(),
-        $ProgressQueue
+        $ProgressQueue,
+        [ValidateNotNull()][Collections.IDictionary]$SearchTargets
     )
     Assert-ExplorerRemovalWriteAccess
     $script:RemovalPlans.Clear()
@@ -276,6 +277,21 @@ function New-ExplorerRemovalPlan {
     $registeredIds=@($RegisteredObjectIds | ForEach-Object { ConvertTo-RemovalId $_ } | Sort-Object -Unique)
     if ($registeredIds.Count -gt 0 -and ($selectedSources.Count -ne 1 -or $selectedSources[0] -ne 'Entra' -or $ArchiveOnly)) { throw 'La selezione puntuale Registered ammette soltanto eliminazioni Entra.' }
     if ($namesToRead.Count -eq 0 -or $selectedSources.Count -eq 0) { throw 'Selezionare computer e origini da eliminare.' }
+    $useSearchTargets = $PSBoundParameters.ContainsKey('SearchTargets')
+    $sourcesByName = @{}
+    foreach ($name in $namesToRead) {
+        $rowSources = $selectedSources
+        if ($useSearchTargets) {
+            if (-not $SearchTargets.Contains($name)) { throw 'La selezione è cambiata. Ripetere la ricerca.' }
+            $present = @($SearchTargets[$name] | ForEach-Object Source)
+            $rowSources = @($selectedSources | Where-Object { $_ -in $present })
+        }
+        $sourcesByName[$name] = $rowSources
+    }
+    if ($useSearchTargets) {
+        $selectedSources = @($sourcesByName.Values | ForEach-Object { $_ } | Sort-Object -Unique)
+        if ($selectedSources.Count -eq 0) { throw 'Nessuna presenza confermata nelle origini selezionate.' }
+    }
     $config = Read-ExplorerConfiguration $ConfigPath
     $controllersProperty = $config.Settings.PSObject.Properties['DomainControllers']
     $controllers = @()
@@ -287,14 +303,25 @@ function New-ExplorerRemovalPlan {
     foreach ($name in $namesToRead) {
         Send-RemovalProgress $ProgressQueue ("Verifica oggetti: $name")
         $targets = @(); $errorText = $null; $backup=$null;$hybrid=$null
+        $rowSources = $sourcesByName[$name]
         try {
-            $targets = @(Get-RemovalTargets -Name $name -Sources $selectedSources -Controllers $controllers -ArchiveOnly:$ArchiveOnly)
-            $targets=@(Select-RemovalRegisteredTargets -Targets $targets -RegisteredObjectIds $registeredIds)
-            $hybrid=Get-RemovalHybridIdentity -Name $name -Targets $targets -Sources $selectedSources -Controllers $controllers
+            if ($rowSources.Count -eq 0) { throw 'Nessuna presenza confermata per questa riga nelle origini selezionate.' }
+            $found = @(Get-RemovalTargets -Name $name -Sources $rowSources -Controllers $controllers -ArchiveOnly:$ArchiveOnly)
+            if ($useSearchTargets) {
+                $visible = @{}
+                foreach ($target in $SearchTargets[$name]) {
+                    if ($target.Source -in $rowSources) { $visible[(Get-RemovalTargetKey $target)] = $true }
+                }
+                foreach ($target in $found) {
+                    if (-not $visible.ContainsKey((Get-RemovalTargetKey $target))) { throw 'Gli oggetti sono cambiati rispetto ai risultati mostrati. Ripetere la ricerca.' }
+                }
+            }
+            $targets = @(Select-RemovalRegisteredTargets -Targets $found -RegisteredObjectIds $registeredIds)
+            $hybrid=Get-RemovalHybridIdentity -Name $name -Targets $targets -Sources $rowSources -Controllers $controllers
             if ($targets.Count -gt 0) { $backup=Get-RemovalBitLockerPreview -Name $name -Targets $targets -Settings (Get-RemovalValue $config.Settings 'Glpi') -Credentials $GlpiCredentials -AllowUnmappedGlpi:(-not $ArchiveOnly) }
         }
         catch { $errorText = $_.Exception.Message }
-        [void]$entries.Add([pscustomobject]@{ Name = $name; Targets = $targets; Error = $errorText; Backup=$backup; HybridIdentity=$hybrid })
+        [void]$entries.Add([pscustomobject]@{ Name = $name; Sources = $rowSources; Targets = $targets; Error = $errorText; Backup=$backup; HybridIdentity=$hybrid })
     }
     if ((Get-RemovalContextKey $selectedSources) -ne $contextKey) { throw 'La sessione Graph è cambiata durante la verifica. Ripetere la preparazione.' }
     $planId = [guid]::NewGuid().ToString()
@@ -517,7 +544,7 @@ function Invoke-ExplorerRemovalPlan {
                 try {
                     if ((Get-RemovalContextKey $plan.Sources) -ne $plan.ContextKey) { throw 'Sessione Graph cambiata.' }
                     Send-RemovalProgress $ProgressQueue ($(if ($plan.ArchiveOnly) { "Rilettura prima di archiviare: " } else { "Rilettura prima di eliminare: " }) + $entry.Name)
-                    $current = @(Get-RemovalTargets -Name $entry.Name -Sources $plan.Sources -Controllers $plan.Controllers -ArchiveOnly:$plan.ArchiveOnly)
+                    $current = @(Get-RemovalTargets -Name $entry.Name -Sources $entry.Sources -Controllers $plan.Controllers -ArchiveOnly:$plan.ArchiveOnly)
                     $current=@(Select-RemovalRegisteredTargets -Targets $current -RegisteredObjectIds $plan.RegisteredObjectIds)
                     $expected = @{}
                     foreach ($target in $entry.Targets) { $expected[(Get-RemovalTargetKey $target)] = $target }
@@ -537,7 +564,7 @@ function Invoke-ExplorerRemovalPlan {
                         }
                     }
                     if (-not $plan.ArchiveOnly -and $null -ne $hybrid -and @($hybrid.Records | Where-Object TrustType -eq 'ServerAd').Count) {
-                        $freshHybrid=Get-RemovalHybridIdentity -Name $entry.Name -Targets $current -Sources $plan.Sources -Controllers $plan.Controllers
+                        $freshHybrid=Get-RemovalHybridIdentity -Name $entry.Name -Targets $current -Sources $entry.Sources -Controllers $plan.Controllers
                         if ($hybrid.Signature -ine $freshHybrid.Signature) { throw 'Identita hybrid AD/Entra cambiata dopo l''anteprima. Ripetere verifica e conferma.' }
                     }
                     if ($null -ne $entry.Backup) {

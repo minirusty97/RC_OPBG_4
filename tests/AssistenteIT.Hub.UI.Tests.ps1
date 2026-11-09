@@ -99,8 +99,19 @@ Export-ModuleMember -Function Get-MgContext,Disconnect-MgGraph,Connect-MgGraph,I
  if ($moduleLabel.Parent -ne $button.Parent -or $moduleLabel.Right -gt $button.Left -or $button.Parent.Height -gt 75 -or
      $accessPanel.Parent -ne $components.Parent -or $accessPanel.Right -gt $components.Left -or $script:StatusRows.Count -ne 9 -or
      $script:StatusRows.Microsoft.Dot.ForeColor -ne $hubColors.Error -or
-     $script:StatusRows['groups-read'].Dot.Top -ne $script:StatusRows.Repository.Dot.Top) { throw 'Hub status is ungrouped, lacks colored dots, or cards do not align access left of the button.' }
- 'PASS: the compact hub places module access beside its button and presents two aligned groups of colored status rows.'
+     $script:StatusRows['intune-read'].Dot.Top -ne $script:StatusRows.Repository.Dot.Top -or
+     $script:StatusRows.GLPI.Value.Parent -ne $accessPanel -or
+     $script:StatusRows.GLPI.Value.Bottom -gt $accessPanel.ClientSize.Height) { throw 'Hub status is ungrouped, clipped, lacks colored dots, or cards do not align access left of the button.' }
+ 'PASS: the compact hub places module access beside its button and groups GLPI with the access statuses.'
+ foreach ($control in @($accessPanel,$components,$button.Parent,$button,$accessButton)) {
+  if ($null -eq $control.Region -or $control.Region.IsVisible(0,0) -or
+      -not $control.Region.IsVisible(($control.Width - 1),[int]($control.Height / 2))) { throw ('Control lost its rounded bounds: ' + $control.Name) }
+ }
+ if ($button.BackColor -ne $hubColors.DisabledFill -or $button.ForeColor -ne $hubColors.DisabledInk -or
+     $accessButton.BackColor -ne $settingsButton.BackColor -or $accessButton.ForeColor -ne $settingsButton.ForeColor) {
+  throw 'Disabled buttons or Accesso use the wrong palette.'
+ }
+ 'PASS: native module cards, status panels and buttons have rounded corners and use a distinct disabled palette.'
  $hubProbeState=@{Seen=$false;Error='';Watch=[Diagnostics.Stopwatch]::StartNew()}
  $hubProbeTimer=New-Object Windows.Forms.Timer;$hubProbeTimer.Interval=50
  $hubProbeTimer.Add_Tick({
@@ -117,7 +128,8 @@ Export-ModuleMember -Function Get-MgContext,Disconnect-MgGraph,Connect-MgGraph,I
   catch { $hubProbeState.Error=$_.Exception.Message;$hubProbeTimer.Stop();@($window.Controls | Where-Object Text -eq 'Annulla')[0].PerformClick() }
  })
  $hubProbeTimer.Start();$accessButton.PerformClick()
- if (-not $hubProbeState.Seen -or $hubProbeState.Error -or -not $button.Enabled -or $script:ModuleAccessLabels['computer-explorer'].Text -ne 'Sola lettura') { throw ('Initial access did not enable the correct module mode: '+$hubProbeState.Error) }
+ if (-not $hubProbeState.Seen -or $hubProbeState.Error -or -not $button.Enabled -or $button.BackColor -ne $hubColors.Action -or
+     $button.ForeColor -ne $hubColors.Ink -or $script:ModuleAccessLabels['computer-explorer'].Text -ne 'Sola lettura') { throw ('Initial access did not enable the correct module mode or palette: '+$hubProbeState.Error) }
  'PASS: bottom Accesso verifies the common session once and enables the module in read-only mode without opening it automatically.'
  '{}' | Set-Content -LiteralPath $paths.GraphSessionPath -Encoding UTF8
  foreach ($case in @(@{Restore=$false;Reject=$false;Expected=$false},@{Restore=$true;Reject=$true;Expected=$false},@{Restore=$true;Reject=$false;Expected=$true})) {

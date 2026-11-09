@@ -150,7 +150,7 @@ $script:AccessTask=$null
 $script:AccessChecking=$false
 $script:GlpiTask=$null
 $script:GlpiRecheck=$false
-$accessItems=[ordered]@{Microsoft='Microsoft'; 'entra-read'='Entra ID'; 'intune-read'='Intune'; 'groups-read'='Gruppi Entra'}
+$accessItems=[ordered]@{Microsoft='Microsoft'; 'entra-read'='Entra ID'; 'intune-read'='Intune'; 'groups-read'='Gruppi Entra'; GLPI='GLPI'}
 $script:ModuleButtons=@{}
 $script:ModuleAccessLabels=@{}
 
@@ -440,12 +440,13 @@ foreach ($module in $manifest.Modules) {
     $card.Controls.Add($description,0,1)
     $card.Controls.Add($accessLabel,1,0); $card.SetRowSpan($accessLabel,2)
     $card.Controls.Add($open,2,0); $card.SetRowSpan($open,2)
+    Set-AssistenteITHubCorners $card 11
     $modulePanel.Controls.Add($card)
 }
 
 $toolbar=New-Object Windows.Forms.FlowLayoutPanel
 $toolbar.Dock='Fill'; $toolbar.WrapContents=$false
-$accessButton=New-AssistenteITHubButton 'Accesso' 100 -Primary
+$accessButton=New-AssistenteITHubButton 'Accesso' 100
 $accessButton.Name='SignIn'
 $settingsButton=New-AssistenteITHubButton 'Impostazioni' 110
 $dataButton=New-AssistenteITHubButton 'Cartella dati' 112
@@ -503,7 +504,7 @@ $statusPanel.Dock='Fill'; $statusPanel.ColumnCount=2; $statusPanel.RowCount=1
 [void]$statusPanel.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle('Percent',52)))
 $accessPanel=New-AssistenteITStatusSection GraphSessionPanel 'Stato accesso' $accessItems
 $components=New-AssistenteITStatusSection ComponentsPanel 'Componenti' ([ordered]@{
-    GraphSdk='SDK Graph'; ActiveDirectory='RSAT AD'; GLPI='GLPI'; Repository='Repository GitHub'; Update='Aggiornamento'
+    GraphSdk='SDK Graph'; ActiveDirectory='RSAT AD'; Repository='Repository GitHub'; Update='Aggiornamento'
 })
 $statusPanel.Controls.Add($accessPanel,0,0)
 $statusPanel.Controls.Add($components,1,0)

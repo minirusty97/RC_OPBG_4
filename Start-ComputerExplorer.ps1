@@ -140,8 +140,29 @@ function Set-CellPresence {
     $Cell.Style.SelectionForeColor = [Drawing.Color]::Black
 }
 
+function Get-UiSearchRemovalTargets {
+    param([object[]]$Rows, [object[]]$Sources)
+    $confirmed = @($Sources | Where-Object State -eq 'OK' | ForEach-Object Name)
+    $idFields = [ordered]@{ AD = 'ObjectGUID'; Entra = 'ObjectId'; Intune = 'ManagedDeviceId' }
+    $targetsByName = @{}
+    foreach ($row in $Rows) {
+        $targetsByName[$row.Name] = @(foreach ($source in $idFields.Keys) {
+            if ($source -notin $confirmed) { continue }
+            foreach ($record in (Get-UiSetting $row ($source + 'Records') @())) {
+                [pscustomobject]@{
+                    Source = $source
+                    Id = [string](Get-UiSetting $record $idFields[$source] '')
+                    DomainController = [string](Get-UiSetting $record 'DomainController' '')
+                }
+            }
+        })
+    }
+    return $targetsByName
+}
+
 function Update-ExplorerCounters {
-    $selected = @($grid.SelectedRows | Where-Object { $null -ne $_.Tag }).Count
+    $selectedRows = @($grid.SelectedRows | Where-Object { $null -ne $_.Tag } | ForEach-Object Tag)
+    $selected = $selectedRows.Count
     $counterLabel.Text = 'Risultati: {0} | Selezionati: {1}' -f $grid.Rows.Count, $selected
     $complete = $null -ne $script:Latest -and $script:Latest.Complete
     if ($complete) { $complete = @($script:Latest.Sources | Where-Object { $_.State -notin @('OK','Errore','Esclusa') }).Count -eq 0 }
@@ -153,9 +174,14 @@ function Update-ExplorerCounters {
         if ($null -ne $property) { return [bool]$property.Value }
         return ($null -ne $_.Tag.PSObject.Properties['SerialConflict'] -and $_.Tag.SerialConflict)
     }).Count
-    $deleteButton.Enabled = $blockingConflicts -eq 0 -and $selected -gt 0 -and $complete -and -not $script:Busy -and -not $script:RemovalNeedsRefresh
-    if (Test-UiReadOnly) { $deleteButton.Enabled=$false }
-    $archiveButton.Enabled=$deleteButton.Enabled
+    $archiveButton.Enabled = $blockingConflicts -eq 0 -and $selected -gt 0 -and $complete -and -not $script:Busy -and -not $script:RemovalNeedsRefresh -and -not (Test-UiReadOnly)
+    $deleteButton.Enabled = $false
+    if ($archiveButton.Enabled) {
+        $searchTargets = Get-UiSearchRemovalTargets -Rows $selectedRows -Sources $script:Latest.Sources
+        foreach ($targets in $searchTargets.Values) {
+            if ($targets.Count -gt 0) { $deleteButton.Enabled = $true; break }
+        }
+    }
     $readArchiveButton.Enabled=$selected -eq 1 -and $complete -and -not $script:Busy
     $findKeysButton.Enabled=-not $script:Busy -and ($selected -eq 1 -or $nameBox.Text.Trim().Length -ge $config.MinimumCharacters)
 }
@@ -172,7 +198,11 @@ function Test-UiGraphPermission {
 }
 
 function Show-RemovalSources {
-    param([string[]]$Names,[switch]$ArchiveOnly)
+    param([string[]]$Names,[switch]$ArchiveOnly,[Collections.IDictionary]$SearchTargets)
+    if (-not $ArchiveOnly -and $null -eq $SearchTargets) { throw 'Ripetere la ricerca prima di eliminare.' }
+    $presentSources = @(if (-not $ArchiveOnly) {
+        foreach ($targets in $SearchTargets.Values) { $targets | ForEach-Object Source }
+    })
     $dialog = New-Object Windows.Forms.Form
     $dialog.Icon = $form.Icon
     $dialog.Text = 'Elimina computer - origini'; if ($ArchiveOnly) { $dialog.Text='Archivia BitLocker - origini' }; $dialog.Size = New-Object Drawing.Size(640, 430)
@@ -185,19 +215,36 @@ function Show-RemovalSources {
     [void]$panel.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 45)))
     $intro = New-Object Windows.Forms.Label; $intro.Dock = 'Fill'
     $intro.Text = 'Computer selezionati: {0}. Scegliere le origini; segue una verifica degli oggetti prima della conferma.' -f $Names.Count
+    if (-not $ArchiveOnly) {
+        $intro.Text = 'Computer selezionati: {0}. Per ogni riga valgono solo le origini elencate.' -f $Names.Count
+        $intro.Text += [Environment]::NewLine + 'Le Note GLPI sono usate per il backup BitLocker.'
+    }
     $choices = New-Object Windows.Forms.FlowLayoutPanel; $choices.Dock = 'Fill'
     $checks = @()
     foreach ($name in @('AD', 'Entra', 'Intune')) {
         $check = New-Object Windows.Forms.CheckBox; $check.Name='RemovalSource'+$name;$check.Tag=$name;$check.Text = $name; $check.Checked = $true; $check.AutoSize = $true
         $permissionId='';if ($name -eq 'Entra') { $permissionId='entra-remove';if ($ArchiveOnly) { $permissionId='entra-read' } }
         if ($name -eq 'Intune') { $permissionId='intune-remove';if ($ArchiveOnly) { $permissionId='intune-read' } }
-        if ($permissionId -and -not (Test-UiGraphPermission $permissionId)) { $check.Checked=$false;$check.Enabled=$false;$check.Text=$name+' (permesso mancante)' }
+        if (-not $ArchiveOnly -and $name -notin $presentSources) {
+            $check.Checked = $false; $check.Enabled = $false; $check.Text = $name + ' (presenza non confermata)'
+        }
+        elseif ($permissionId -and -not (Test-UiGraphPermission $permissionId)) { $check.Checked=$false;$check.Enabled=$false;$check.Text=$name+' (permesso mancante)' }
         $checks += @($check); $choices.Controls.Add($check)
     }
-    $glpiLabel = New-Object Windows.Forms.Label; $glpiLabel.Text = 'GLPI: backup nelle Note'; $glpiLabel.AutoSize = $true
-    $glpiLabel.Margin = New-Object Windows.Forms.Padding(20, 4, 0, 0); $choices.Controls.Add($glpiLabel)
-    $list = New-Object Windows.Forms.ListBox; $list.Dock = 'Fill'
-    foreach ($name in $Names) { [void]$list.Items.Add($name) }
+    if ($ArchiveOnly) {
+        $glpiLabel = New-Object Windows.Forms.Label; $glpiLabel.Text = 'GLPI: backup nelle Note'; $glpiLabel.AutoSize = $true
+        $glpiLabel.Margin = New-Object Windows.Forms.Padding(20, 4, 0, 0); $choices.Controls.Add($glpiLabel)
+    }
+    $list = New-Object Windows.Forms.ListBox; $list.Name = 'RemovalSourceRows'; $list.Dock = 'Fill'
+    $enabledSources = @($checks | Where-Object Enabled | ForEach-Object Tag)
+    foreach ($name in $Names) {
+        $line = $name
+        if (-not $ArchiveOnly) {
+            $rowSources = @($SearchTargets[$name] | Where-Object { $_.Source -in $enabledSources } | ForEach-Object Source | Select-Object -Unique)
+            $line = $name + ' | ' + $(if ($rowSources.Count) { $rowSources -join ', ' } else { 'Nessuna origine selezionabile' })
+        }
+        [void]$list.Items.Add($line)
+    }
     $buttons = New-Object Windows.Forms.FlowLayoutPanel; $buttons.Dock = 'Fill'; $buttons.FlowDirection = 'RightToLeft'
     $cancel = New-Object Windows.Forms.Button; $cancel.Text = 'Annulla'; $cancel.Width = 95; $cancel.DialogResult = 'Cancel'
     $verify = New-Object Windows.Forms.Button; $verify.Text = 'Verifica oggetti'; $verify.Width = 140
@@ -228,7 +275,7 @@ function Add-RemovalReportRow {
 }
 
 function Start-RemovalOperation {
-    param([ValidateSet('PrepareRemoval','Remove','PrepareArchive','Archive','ReadArchive','ReadKeys')][string]$Operation, [string[]]$Names, [string[]]$Sources, [string]$PlanId, [switch]$IncludeAdChildren, [switch]$ConfirmGlpiMapping, [int]$ComputerId, [string[]]$ConfirmBitLockerLossFor=@(),[string[]]$ConfirmHybridMismatchFor=@(),[string[]]$ConfirmUnreadableAdChildrenFor=@())
+    param([ValidateSet('PrepareRemoval','Remove','PrepareArchive','Archive','ReadArchive','ReadKeys')][string]$Operation, [string[]]$Names, [string[]]$Sources, [string]$PlanId, [switch]$IncludeAdChildren, [switch]$ConfirmGlpiMapping, [int]$ComputerId, [string[]]$ConfirmBitLockerLossFor=@(),[string[]]$ConfirmHybridMismatchFor=@(),[string[]]$ConfirmUnreadableAdChildrenFor=@(), [Collections.IDictionary]$SearchTargets)
     if ((Test-UiReadOnly) -and $Operation -in @('PrepareRemoval','Remove','PrepareArchive','Archive')) { throw 'Modulo in sola lettura: modifiche e archiviazioni non consentite.' }
     try {
         $script:Operation = $Operation; $script:Stopping = $false
@@ -240,7 +287,7 @@ function Start-RemovalOperation {
             $removalGrid.Rows.Clear(); $tabs.SelectedTab = $removalTab
         }
         $workerCode = {
-            param($ModulePath, $OperationName, $Names, $Sources, $ConfigFile, $PlanId, $Queue, $Cancellation, $IncludeAdChildren, $Credentials, $ConfirmMapping, $ComputerId, $SessionReadOnly, $ConfirmLossNames, $ConfirmHybridNames, $ConfirmUnreadableNames)
+            param($ModulePath, $OperationName, $Names, $Sources, $ConfigFile, $PlanId, $Queue, $Cancellation, $IncludeAdChildren, $Credentials, $ConfirmMapping, $ComputerId, $SessionReadOnly, $ConfirmLossNames, $ConfirmHybridNames, $ConfirmUnreadableNames, $SearchTargets)
             $ErrorActionPreference = 'Stop'
             Import-Module $ModulePath -ErrorAction Stop
             Set-ExplorerRemovalReadOnly -ReadOnly:$SessionReadOnly
@@ -248,6 +295,10 @@ function Start-RemovalOperation {
                 $arguments=@{Names=$Names;Sources=$Sources;ConfigPath=$ConfigFile;ProgressQueue=$Queue}
                 if ($null -ne $Credentials) { $arguments.GlpiCredentials=$Credentials }
                 if ($OperationName -eq 'PrepareArchive') { $arguments.ArchiveOnly=$true }
+                else {
+                    if ($null -eq $SearchTargets) { throw 'Ripetere la ricerca prima di eliminare.' }
+                    $arguments.SearchTargets = $SearchTargets
+                }
                 New-ExplorerRemovalPlan @arguments
             }
             elseif ($OperationName -eq 'ReadKeys') {
@@ -270,7 +321,7 @@ function Start-RemovalOperation {
                 Invoke-ExplorerRemovalPlan @arguments
             }
         }
-        [void]$script:Pipeline.AddScript($workerCode.ToString()).AddArgument((Join-Path $PSScriptRoot 'ComputerExplorer.Removal.psm1')).AddArgument($Operation).AddArgument($Names).AddArgument($Sources).AddArgument($ConfigPath).AddArgument($PlanId).AddArgument($script:Queue).AddArgument($script:RemovalCancellation).AddArgument([bool]$IncludeAdChildren).AddArgument($script:GlpiCredentials).AddArgument([bool]$ConfirmGlpiMapping).AddArgument($ComputerId).AddArgument((Test-UiReadOnly)).AddArgument($ConfirmBitLockerLossFor).AddArgument($ConfirmHybridMismatchFor).AddArgument($ConfirmUnreadableAdChildrenFor)
+        [void]$script:Pipeline.AddScript($workerCode.ToString()).AddArgument((Join-Path $PSScriptRoot 'ComputerExplorer.Removal.psm1')).AddArgument($Operation).AddArgument($Names).AddArgument($Sources).AddArgument($ConfigPath).AddArgument($PlanId).AddArgument($script:Queue).AddArgument($script:RemovalCancellation).AddArgument([bool]$IncludeAdChildren).AddArgument($script:GlpiCredentials).AddArgument([bool]$ConfirmGlpiMapping).AddArgument($ComputerId).AddArgument((Test-UiReadOnly)).AddArgument($ConfirmBitLockerLossFor).AddArgument($ConfirmHybridMismatchFor).AddArgument($ConfirmUnreadableAdChildrenFor).AddArgument($SearchTargets)
         $script:StartedAt = [datetime]::Now; $script:StageMessage = 'Verifica degli oggetti selezionati...'
         if ($Operation -eq 'Remove') { $script:StageMessage = 'Backup BitLocker, verifica e successiva eliminazione...' }
         elseif ($Operation -eq 'Archive') { $script:StageMessage='Archiviazione BitLocker su GLPI...' }
@@ -783,13 +834,14 @@ $tokensButton.Add_Click({
 })
 $deleteButton.Add_Click({
     try {
-        $names = @($grid.SelectedRows | Where-Object { $null -ne $_.Tag } | ForEach-Object { $_.Tag.Name } | Sort-Object -Unique)
-        if ($names.Count -eq 0 -or $script:Busy -or $script:RemovalNeedsRefresh) { return }
         Update-ExplorerCounters
         if (-not $deleteButton.Enabled) { return }
-        $sources = Show-RemovalSources $names
+        $selectedRows = @($grid.SelectedRows | Where-Object { $null -ne $_.Tag } | ForEach-Object Tag)
+        $searchTargets = Get-UiSearchRemovalTargets -Rows $selectedRows -Sources $script:Latest.Sources
+        $names = @($searchTargets.Keys | Sort-Object)
+        $sources = Show-RemovalSources -Names $names -SearchTargets $searchTargets
         if ($null -eq $sources -or -not (Initialize-ArchiveUiCredentials)) { return }
-        Start-RemovalOperation -Operation 'PrepareRemoval' -Names $names -Sources $sources
+        Start-RemovalOperation -Operation 'PrepareRemoval' -Names $names -Sources $sources -SearchTargets $searchTargets
     }
     catch { [void][Windows.Forms.MessageBox]::Show($form, $_.Exception.Message, 'Elimina', 'OK', 'Error') }
 })

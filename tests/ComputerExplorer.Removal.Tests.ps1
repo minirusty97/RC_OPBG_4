@@ -178,6 +178,40 @@ try {
             'PASS: deletion plan is single-use.'
 
             Reset-Fixture
+            $searchTargets = @{
+                'PC-ONE' = @(1..5 | ForEach-Object { [pscustomobject]@{Source='AD';Id=(New-TestId 11);DomainController="dc$_.example.invalid"} })
+                'PC-TWO' = @([pscustomobject]@{Source='Entra';Id=(New-TestId 23);DomainController=''})
+                'PC-GLPI' = @()
+            }
+            $plan = New-ExplorerRemovalPlan -Names PC-ONE,PC-TWO,PC-GLPI -Sources AD,Entra,Intune -ConfigPath $configPath -SearchTargets $searchTargets
+            $adEntry = $plan.Entries | Where-Object Name -eq 'PC-ONE'
+            $entraEntry = $plan.Entries | Where-Object Name -eq 'PC-TWO'
+            $glpiEntry = $plan.Entries | Where-Object Name -eq 'PC-GLPI'
+            if (($plan.Sources -join ',') -ne 'AD,Entra' -or $adEntry.Error -or $entraEntry.Error -or -not $glpiEntry.Error -or
+                $adEntry.Targets.Count -ne 5 -or @($adEntry.Targets | Where-Object Source -ne 'AD').Count -or
+                $entraEntry.Targets.Count -ne 1 -or $entraEntry.Targets[0].Id -ne (New-TestId 23) -or $glpiEntry.Targets.Count) {
+                throw 'Preview included an origin missing from the selected row.'
+            }
+            $result = Invoke-ExplorerRemovalPlan -PlanId $plan.PlanId -Confirm:$false
+            if ($result.Deleted -ne 6 -or $result.Failed -ne 1 -or
+                ($script:Fixture.Writes.Source -join ',') -ne 'AD,AD,AD,AD,AD,Entra' -or
+                @($script:Fixture.Writes | Where-Object { ($_.Source -eq 'AD' -and $_.Name -ne 'PC-ONE') -or ($_.Source -eq 'Entra' -and $_.Name -ne 'PC-TWO') }).Count -or
+                @($script:Fixture.Reads | Where-Object { $_.Source -eq 'Graph' -and ($_.Uri -like '*PC-ONE*' -or $_.Uri -like '*managedDevices*') }).Count -or
+                @($script:Fixture.Reads | Where-Object { $_.Source -eq 'AD' -and $_.Filter -like '*PC-TWO*' }).Count) {
+                throw 'Revalidation read or deleted an undisplayed origin.'
+            }
+            'PASS: mixed deletion selections read and remove only the sources confirmed for each row.'
+
+            Reset-Fixture
+            $searchTargets = @{ 'PC-ONE' = @([pscustomobject]@{Source='Entra';Id=(New-TestId 21);DomainController=''}) }
+            $plan = New-ExplorerRemovalPlan -Names PC-ONE -Sources Entra -ConfigPath $configPath -SearchTargets $searchTargets
+            $result = Invoke-ExplorerRemovalPlan -PlanId $plan.PlanId -Confirm:$false
+            if ($plan.Entries[0].Error -notlike '*Ripetere la ricerca*' -or $plan.Entries[0].Targets.Count -or $result.Failed -ne 1 -or $script:Fixture.Writes.Count) {
+                throw 'An Entra Object ID absent from the search was admitted to the plan.'
+            }
+            'PASS: a new same-name ID between search and preview blocks the row and requests a fresh search.'
+
+            Reset-Fixture
             $script:Fixture.Mode='IntuneFailure'
             $plan=New-ExplorerRemovalPlan -Names PC-ONE,PC-TWO -Sources AD,Entra,Intune -ConfigPath $configPath
             $result=Invoke-ExplorerRemovalPlan -PlanId $plan.PlanId -Confirm:$false

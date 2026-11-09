@@ -33,7 +33,9 @@ try {
             ADLastModified = [datetime]'2026-10-15T10:05:00'; EntraLastActivity = [datetime]'2026-10-14T23:50:00'
             IntuneLastCheckIn = [datetime]'2026-10-15T09:30:00'; GlpiLastInventory = [datetime]'2026-10-15T08:00:00'
             StatoGLPI = 'Assegnato'; PercorsoAD = 'example.invalid/Lab'; Note = ''
-            ADRecords = @(); EntraRecords = @(); IntuneRecords = @(); GlpiRecords = @()
+            ADRecords = @(); EntraRecords = @()
+            IntuneRecords = @([pscustomobject]@{ManagedDeviceId="11111111-1111-4111-8111-11111111111$_"})
+            GlpiRecords = @()
         }
     })
     $snapshot = [pscustomobject]@{

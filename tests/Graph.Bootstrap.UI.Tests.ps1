@@ -83,14 +83,28 @@ try {
   if ($dialogs.Count -eq 0) { return }
   $pickTimer.Stop();$dialog=$dialogs[0]
   try {
+   $ad=$dialog.Controls.Find('RemovalSourceAD',$true)[0]
    $entra=$dialog.Controls.Find('RemovalSourceEntra',$true)[0];$intune=$dialog.Controls.Find('RemovalSourceIntune',$true)[0]
-   if ($entra.Enabled -or $entra.Checked -or -not $intune.Enabled -or -not $intune.Checked) { throw 'Deletion choices do not reflect the upfront permission report.' }
+   $rows=$dialog.Controls.Find('RemovalSourceRows',$true)[0]
+   if ($ad.Enabled -or $ad.Checked -or $ad.Text -notlike '*presenza non confermata*' -or
+       $entra.Enabled -or $entra.Checked -or $entra.Text -notlike '*permesso mancante*' -or -not $intune.Enabled -or -not $intune.Checked -or
+       $rows.Items[0] -ne 'PC-TEST | Intune' -or $rows.Items[1] -ne 'PC-TEST$ | Nessuna origine selezionabile') {
+       throw 'Deletion choices do not reflect each row and the upfront permission report.'
+   }
    $pickState.Seen=$true;$dialog.AcceptButton.PerformClick()
   }
   catch { $pickState.Error=$_.Exception.Message;$dialog.Close() }
  })
- try { $pickTimer.Start();$sources=Show-RemovalSources -Names PC-TEST;if (-not $pickState.Seen -or $pickState.Error -or ($sources -join ',') -ne 'AD,Intune') { throw ('Native permission filtering failed: '+$pickState.Error) } }
+ $searchTargets=@{
+   'PC-TEST'=@([pscustomobject]@{Source='Intune';Id='11111111-1111-4111-8111-111111111111';DomainController=''})
+   'PC-TEST$'=@([pscustomobject]@{Source='Entra';Id='22222222-2222-4222-8222-222222222222';DomainController=''})
+ }
+ try {
+   $pickTimer.Start()
+   $sources=Show-RemovalSources -Names 'PC-TEST','PC-TEST$' -SearchTargets $searchTargets
+   if (-not $pickState.Seen -or $pickState.Error -or ($sources -join ',') -ne 'Intune') { throw ('Native removal choice filtering failed: '+$pickState.Error) }
+ }
  finally { $pickTimer.Stop();$pickTimer.Dispose();$form.Dispose() }
- 'PASS: the existing Entra deletion feature is retained but its choice is disabled when the initial report lacks consent; AD and Intune remain available.'
+ 'PASS: native deletion choices are limited by the current search per row and the verified write permissions.'
 }
 finally { $bootstrapTestTimer.Stop();$bootstrapTestTimer.Dispose();$env:PSModulePath=$previousModulePath;Remove-Module Microsoft.Graph.Authentication -Force -ErrorAction SilentlyContinue;Remove-Item $fixture -Recurse -Force }

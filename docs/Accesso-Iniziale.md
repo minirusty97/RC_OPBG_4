@@ -1,8 +1,8 @@
 # Accesso comune e autorizzazioni dei moduli
 
-**Stato accesso** mostra l'account Microsoft e l'esito delle letture.
-**Accesso** è nella barra inferiore, accanto a Impostazioni, Cartella dati e
-Cerca aggiornamenti.
+**Stato accesso** mostra l'account Microsoft, l'esito delle letture e
+lo stato della sessione API GLPI. **Accesso** è nella barra inferiore,
+accanto a Impostazioni, Cartella dati e Cerca aggiornamenti.
 
 ## Flusso
 
@@ -24,7 +24,7 @@ I moduli condividono la sessione verificata tramite runspace STA nello stesso
 processo. Chiudere i moduli prima di cambiare accesso o impostazioni.
 
 Il pannello **Stato accesso** mostra separatamente account Microsoft,
-Entra ID, Intune e gruppi Entra. Il giallo indica una verifica in corso
+Entra ID, Intune, gruppi Entra e GLPI. Il giallo indica una verifica in corso
 o da completare. Il verde indica una lettura verificata. Una sessione
 assente, scaduta o che richiede un intervento viene segnalata in rosso
 come **Accesso richiesto**. In quel caso i moduli restano disabilitati
@@ -81,10 +81,10 @@ La cancellazione Entra resta supportata con `Directory.AccessAsUser.All` e i rel
 Finestre e collegamenti usano l'identita Windows **AssistenteIT.Desktop** e l'icona del programma. PowerShell resta il motore interno; il launcher non e stato trasformato in un nuovo host eseguibile. Lo stile Windows viene inizializzato prima delle finestre.
 
 Il gruppo **Componenti** mostra la disponibilità del modulo PowerShell
-Microsoft Graph e di RSAT AD. Per GLPI, il wrapper verifica la sessione
-API e mostra **Configurato** con l'utente effettivo. Impostazioni o token
-mancanti risultano **Non configurato**. Una verifica fallita risulta
-**Non disponibile**.
+Microsoft Graph e di RSAT AD. In **Stato accesso**, GLPI mostra
+**Configurato** con l'utente effettivo della sessione API. Impostazioni
+o token mancanti risultano **Non configurato**. Una verifica fallita
+risulta **Non disponibile**.
 
 La riga **Repository GitHub** distingue un repository pubblico
 disponibile, un repository inaccessibile pubblicamente (**Chiusa**) e

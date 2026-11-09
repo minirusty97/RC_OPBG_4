@@ -5,8 +5,12 @@ $hubColors=@{
     Surface=[Drawing.Color]::White
     Ink=[Drawing.ColorTranslator]::FromHtml('#142A43')
     Muted=[Drawing.ColorTranslator]::FromHtml('#50647B')
-    Border=[Drawing.ColorTranslator]::FromHtml('#CAD7E6')
+    Action=[Drawing.ColorTranslator]::FromHtml('#D6E6FA')
+    ActionHover=[Drawing.ColorTranslator]::FromHtml('#C4DBF6')
+    DisabledFill=[Drawing.ColorTranslator]::FromHtml('#EEF0F3')
+    DisabledInk=[Drawing.ColorTranslator]::FromHtml('#69788A')
     Accent=[Drawing.ColorTranslator]::FromHtml('#2059A2')
+    AccentHover=[Drawing.ColorTranslator]::FromHtml('#174A8A')
     Ready=[Drawing.ColorTranslator]::FromHtml('#16704F')
     Pending=[Drawing.ColorTranslator]::FromHtml('#905A0D')
     Error=[Drawing.ColorTranslator]::FromHtml('#AD3548')
@@ -30,6 +34,29 @@ function New-AssistenteITHubLabel {
     return $label
 }
 
+function Set-AssistenteITHubCorners {
+    param([Windows.Forms.Control]$Control,[int]$Radius)
+    $resize = {
+        param($sender,$eventArgs)
+        $diameter = [Math]::Min(2 * $Radius, [Math]::Min($sender.Width, $sender.Height))
+        if ($diameter -lt 2) { return }
+        $right = $sender.Width - $diameter
+        $bottom = $sender.Height - $diameter
+        $path = New-Object Drawing.Drawing2D.GraphicsPath
+        try {
+            $path.AddArc(0, 0, $diameter, $diameter, 180, 90)
+            $path.AddArc($right, 0, $diameter, $diameter, 270, 90)
+            $path.AddArc($right, $bottom, $diameter, $diameter, 0, 90)
+            $path.AddArc(0, $bottom, $diameter, $diameter, 90, 90)
+            $path.CloseFigure()
+            $sender.Region = New-Object Drawing.Region($path)
+        }
+        finally { $path.Dispose() }
+    }.GetNewClosure()
+    $Control.Add_SizeChanged($resize)
+    & $resize $Control ([EventArgs]::Empty)
+}
+
 function New-AssistenteITHubButton {
     param([string]$Text,[int]$Width,[switch]$Primary)
     $button=New-Object Windows.Forms.Button
@@ -37,14 +64,32 @@ function New-AssistenteITHubButton {
     $button.Size=New-Object Drawing.Size($Width,32)
     $button.Margin=New-Object Windows.Forms.Padding(0,4,8,0)
     $button.FlatStyle='Flat'
-    $button.BackColor=$hubColors.Surface
-    $button.ForeColor=$hubColors.Ink
-    $button.FlatAppearance.BorderColor=$hubColors.Border
+    $button.UseVisualStyleBackColor=$false
+    $button.FlatAppearance.BorderSize=0
+    $enabledFill=$hubColors.Action
+    $enabledInk=$hubColors.Ink
+    $button.FlatAppearance.MouseOverBackColor=$hubColors.ActionHover
     if ($Primary) {
-        $button.BackColor=$hubColors.Accent
-        $button.ForeColor=[Drawing.Color]::White
-        $button.FlatAppearance.BorderColor=$hubColors.Accent
+        $enabledFill=$hubColors.Accent
+        $enabledInk=[Drawing.Color]::White
+        $button.FlatAppearance.MouseOverBackColor=$hubColors.AccentHover
     }
+    $disabledFill=$hubColors.DisabledFill
+    $disabledInk=$hubColors.DisabledInk
+    $style = {
+        param($sender,$eventArgs)
+        if ($sender.Enabled) {
+            $sender.BackColor=$enabledFill
+            $sender.ForeColor=$enabledInk
+        }
+        else {
+            $sender.BackColor=$disabledFill
+            $sender.ForeColor=$disabledInk
+        }
+    }.GetNewClosure()
+    $button.Add_EnabledChanged($style)
+    & $style $button ([EventArgs]::Empty)
+    Set-AssistenteITHubCorners $button 8
     return $button
 }
 
@@ -82,6 +127,7 @@ function New-AssistenteITStatusSection {
         $row++
     }
     [void]$section.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent',100)))
+    Set-AssistenteITHubCorners $section 11
     return $section
 }
 

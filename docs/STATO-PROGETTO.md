@@ -1,8 +1,10 @@
 # Stato condiviso per riprendere il lavoro
 
 Repository: `minirusty97/RC_OPBG_4`. Consultare sempre il main e la release
-effettiva. La versione sorgente **1.4.0** integra la prova AD parallela,
-la diagnostica per ricerca e il pannello di stato del wrapper. La **1.3.3**
+effettiva. La versione sorgente **1.4.1** limita Elimina in Computer
+Explorer alle presenze verificate per riga e rifinisce il wrapper.
+La **1.4.0** integra la prova AD parallela, la diagnostica per ricerca
+e il pannello di stato del wrapper. La **1.3.3**
 attende la conferma di avvio dell'installazione OTA e registra l'esito. La **1.3.2** ripristina la ricerca su tutti i
 DC in Computer Explorer e confronta i GUID Hybrid già letti sul DC
 principale. La **1.3.1** aggiorna la finestra di Gestione
@@ -27,9 +29,9 @@ scansione completa automatica, vista Tutti e filtri locali; F5 rilegge tutto.
 Il wrapper ripristina in modo silenzioso l'account delegato confermato.
 Il pulsante Accesso in basso gestisce il login interattivo. Il pannello
 compatto indica in rosso una sessione che richiede Accesso. Entra, Intune
-e gruppi mostrano separatamente l'esito delle letture. Le righe dei
-componenti includono RSAT, SDK Graph, utente API GLPI, raggiungibilità
-del repository e stato dell'aggiornamento. Ogni modulo distingue
+e gruppi mostrano separatamente l'esito delle letture. Stato accesso
+include anche l'utente API GLPI. Componenti include RSAT, SDK Graph,
+raggiungibilità del repository e stato dell'aggiornamento. Ogni modulo distingue
 lettura e scrittura e usa la sessione verificata del wrapper.
 GLPI resta alla versione 10.0.11 senza plugin aggiuntivi. Le Note BitLocker
 sono in chiaro per recupero estremo, append senza sovrascrittura, con lettura
@@ -49,9 +51,9 @@ confermate e modificabili. Le origini solo monitorate o ereditate bloccano
 lo spostamento. Errori dopo l aggiunta mantengono la destinazione e un esito
 parziale; nessun rollback o ritentativo automatico della scrittura.
 
-La lettura ordinaria di Computer Explorer usa un DC configurabile.
-Le impostazioni consentono di consultare tutti i DC per diagnostica.
-BitLocker e cancellazioni continuano a usare tutti i DC configurati.
+La ricerca di Computer Explorer usa tutti i DC configurati e un DC
+principale per il confronto Hybrid. Per la cancellazione, il controllo
+AD rilegge tutti i DC e verifica i GUID mostrati sulle rispettive repliche.
 GLPI preferisce il seriale Intune: solo dopo una ricerca seriale completata
 senza risultati usa nome esatto con avviso e identita hardware da verificare.
 La cache di inventario resta per scansione/credenziali e non sostituisce le
@@ -143,3 +145,17 @@ l'aggiornatore estratto dal nuovo setup. Usa come risposte locali i file
 reali della build, prova l'installazione e il riavvio e controlla
 configurazione e credenziali cifrate. La riproduzione isolata con
 l'aggiornatore precedente ha completato il ciclo 1.3.1 → 1.3.2.
+
+## Eliminazione e aspetto del wrapper in 1.4.1
+
+Il piano di Computer Explorer usa gli ID delle origini confermate sulla
+riga selezionata. La verifica prima dell'anteprima e quella prima delle
+scritture applicano lo stesso perimetro per riga. Identità aggiunte
+durante la rilettura richiedono una nuova ricerca. Il flusso separato di
+archiviazione BitLocker conserva le origini selezionabili.
+
+I test con dati sintetici coprono le selezioni miste, gli ID comparsi dopo
+la ricerca e le origini non verificate. In locale, con rete disabilitata,
+sono passati 275 controlli. Restano da eseguire le verifiche Windows,
+compresi i test WinForms per GLPI in Stato accesso, gli angoli e i colori
+dei pulsanti, e i controlli di installer e OTA.
