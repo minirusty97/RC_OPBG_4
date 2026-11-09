@@ -105,7 +105,8 @@ $form.Add_Shown({$testOtaTimer.Start()})
     $process=$null;$window=$null
     try {
         $process=Start-Process -FilePath $launcher -PassThru
-        if (-not $process.WaitForExit(45000) -or $process.ExitCode -ne 0) { throw 'The original hub did not close after verifying the download.' }
+        if (-not $process.WaitForExit(45000)) { throw 'The hub did not close after verifying the download.' }
+        if ($process.ExitCode -ne 0) { throw ('The hub exited with code {0} before handing off the update.' -f $process.ExitCode) }
         $deadline=[datetime]::UtcNow.AddSeconds(65)
         while ([datetime]::UtcNow -lt $deadline) {
             if (Test-Path -LiteralPath $env:ASSISTENTEIT_TEST_OTA_ERROR) { throw 'The update worker reported an error.' }
@@ -203,13 +204,8 @@ try{
     }
     Invoke-TestSetup $SetupPath
     Assert-InstalledApplication $defaultInstall
-    $otaPayload=Join-Path $temporary 'candidate-updater'
-    $otaFiles=@('Start-AssistenteIT.ps1','AssistenteIT/AssistenteIT.Update.psm1','AssistenteIT/Install-Update.ps1')
-    foreach ($name in $otaFiles) {
-        $destination=Join-Path $otaPayload $name
-        [void][IO.Directory]::CreateDirectory((Split-Path $destination -Parent))
-        Copy-Item -LiteralPath (Join-Path $defaultInstall ('app/'+$name)) -Destination $destination
-    }
+    $otaPayload=Join-Path $temporary 'candidate-app'
+    Copy-Item -LiteralPath (Join-Path $defaultInstall 'app') -Destination $otaPayload -Recurse
     if((Test-Path -LiteralPath $legacyDefault) -or (Test-Path -LiteralPath $legacyData)){throw 'Clean setup created a legacy path.'}
     'PASS: clean setup uses only Assistente IT names, new default directories, manifest and shortcuts.'
     Invoke-TestUninstall $defaultInstall
@@ -226,8 +222,12 @@ try{
     $encrypted=Join-Path $personal.ConfigDirectory 'glpi-credentials.dpapi.json'
     $configHash=(Get-FileHash -LiteralPath $personal.ConfigPath).Hash; $secretHash=(Get-FileHash -LiteralPath $encrypted).Hash
     $candidate=Get-Content -LiteralPath (Join-Path $project 'assistente-it.json') -Raw | ConvertFrom-Json
-    # Exercise the packaged candidate updater over the previous installed version.
-    foreach ($name in $otaFiles) { Copy-Item -LiteralPath (Join-Path $otaPayload $name) -Destination (Join-Path $otaTarget ('app/'+$name)) -Force }
+    # Test the candidate updater with all packaged dependencies while the old
+    # manifest and installer registration still identify the version being upgraded.
+    $otaApp=Join-Path $otaTarget 'app'
+    foreach ($item in (Get-ChildItem -LiteralPath $otaPayload -Force | Where-Object Name -ne 'assistente-it.json')) {
+        Copy-Item -LiteralPath $item.FullName -Destination $otaApp -Recurse -Force
+    }
     Invoke-TestUpdateFromHub -Directory $otaTarget -Version $candidate.Version
     Assert-InstalledApplication $otaTarget
     if ((Get-FileHash $personal.ConfigPath).Hash -ne $configHash -or (Get-FileHash $encrypted).Hash -ne $secretHash) { throw 'Real OTA upgrade lost personal configuration or encrypted credentials.' }
