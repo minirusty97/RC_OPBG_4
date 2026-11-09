@@ -156,6 +156,7 @@ archiviazione BitLocker conserva le origini selezionabili.
 
 I test con dati sintetici coprono le selezioni miste, gli ID comparsi dopo
 la ricerca e le origini non verificate. In locale, con rete disabilitata,
-sono passati 275 controlli. Restano da eseguire le verifiche Windows,
-compresi i test WinForms per GLPI in Stato accesso, gli angoli e i colori
-dei pulsanti, e i controlli di installer e OTA.
+sono passati 275 controlli. La pipeline della PR #38 ha superato 338 controlli
+Windows, comprese le prove WinForms per GLPI in Stato accesso, gli angoli e i
+colori dei pulsanti. Ha verificato anche installazione pulita, migrazione e
+aggiornamento OTA con dati di prova.
