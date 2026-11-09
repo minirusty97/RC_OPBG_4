@@ -67,7 +67,12 @@ function Read-ExplorerHybridAd {
 function Get-ExplorerHybridIdentity {
     [CmdletBinding()]
     param([string]$Name,[object[]]$AdRecords=@(),[object[]]$EntraRecords=@(),[object[]]$AllAdRecords=@(),
-        [bool]$AdComplete=$false,[bool]$EntraComplete=$false,[bool]$LookupComplete=$false,[string]$LookupError='')
+        [bool]$AdComplete=$false,[bool]$EntraComplete=$false,[bool]$LookupComplete=$false,[string]$LookupError='', [string]$SearchController='')
+    $absentState='Assente in AD';$absentColor='Giallo';$absentDetail='Nessun oggetto AD trovato per nome o Device ID sui DC verificati.'
+    if ($SearchController) {
+        $absentState='Assente su DC principale';$absentColor='Grigio'
+        $absentDetail='Confronto saltato. Il nome non risulta su '+$SearchController+'.'
+    }
     $all=@(@($AdRecords)+@($AllAdRecords) | Sort-Object DomainController,ObjectGUID -Unique)
     $sameName=@($all | Where-Object { [string](Get-ExplorerValue $_ 'Name') -ieq $Name })
     $nameGuids=@($sameName | ForEach-Object { ConvertTo-ExplorerIdentityGuid (Get-ExplorerValue $_ 'ObjectGUID') } | Where-Object { $_ } | Sort-Object -Unique)
@@ -93,7 +98,7 @@ function Get-ExplorerHybridIdentity {
                     $message='GUID degli oggetti AD omonimi differente dal Device ID Entra: '+($other -join ', ')+'.'
                     if ($matches.Count) { $message+=' Oggetto AD atteso trovato con un altro nome.' }
                 }
-                elseif ($LookupComplete) { $state='Assente in AD';$color='Giallo';$message='Nessun oggetto AD trovato per nome o Device ID sui DC verificati.' }
+                elseif ($LookupComplete) { $state=$absentState;$color=$absentColor;$message=$absentDetail }
                 else { $message='Ricerca AD tramite GUID in attesa.' }
             }
             if ($LookupError) { $message=$LookupError }
@@ -108,7 +113,7 @@ function Get-ExplorerHybridIdentity {
     if (-not $EntraComplete) { $state='Non verificabile';$color='Giallo' }
     elseif ($needs) { $state='Non corrisponde';$color='Rosso' }
     elseif (@($details | Where-Object State -eq 'Non verificabile').Count) { $state='Non verificabile';$color='Giallo' }
-    elseif (@($hybrids | Where-Object State -eq 'Assente in AD').Count) { $state='Assente in AD';$color='Giallo' }
+    elseif (@($hybrids | Where-Object State -eq $absentState).Count) { $state=$absentState;$color=$absentColor }
     elseif ($hybrids.Count -gt 0) { $state='Corrisponde';$color='Verde' }
     elseif ($EntraRecords.Count -eq 0) { $state='Assente in Entra' }
     # Canonical non-secret snapshot: also catches a renamed or replaced AD

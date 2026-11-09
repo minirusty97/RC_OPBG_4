@@ -1,22 +1,25 @@
-# Ricerca Computer Explorer dalla 1.2.0
+# Ricerca Computer Explorer dalla 1.3.2
 
-La consultazione AD ordinaria usa un solo DC: srvDC1, se il suo nome breve
-compare nell elenco personale Domain Controller, altrimenti il primo DC
-configurato. Non viene inserito un server aziendale nel modello pubblico.
+La ricerca AD ordinaria consulta tutti i DC configurati, in sequenza.
+Il DC principale parte per primo. In **Impostazioni → Ricerca computer**
+si può indicare un DC già configurato con nome completo o nome breve
+univoco. Il campo vuoto dà priorità a dc1 o srvdc1, se presenti, e usa il
+primo dell'elenco negli altri casi. La copertura di tutti i DC si applica
+anche alle configurazioni salvate con la precedente opzione per un solo DC.
 
-In **Impostazioni → Ricerca computer** si puo scegliere un altro DC gia
-configurato, usando nome completo o nome breve univoco. Vuoto mantiene la
-scelta automatica. **Diagnostica: consulta tutti i DC configurati** ripristina
-la lettura su tutti i DC quando serve confrontare le repliche; richiede piu
-tempo. Un DC non raggiungibile resta un errore, non un assenza confermata e
-non avvia tentativi nascosti sugli altri server. La griglia e i dettagli
-riportano soltanto il numero di DC effettivamente consultati (normalmente 1/1).
+Ogni DC riceve un filtro LDAP per frammento su Name, DNSHostName e
+sAMAccountName. La griglia riporta la presenza e il numero dei DC
+verificati separatamente. Una replica irraggiungibile è non verificabile.
 
-La scelta vale anche per l arricchimento Hybrid tramite GUID in Computer
-Explorer. Il modulo Verifica Hybrid Join conserva il proprio server AD e
-le proprie OU. Il recupero BitLocker AD e la preparazione/cancellazione dei
-computer mantengono l elenco completo dei DC e i controlli precedenti: una
-lettura verde su 1/1 non certifica la replica su tutti i DC.
+Il confronto Hybrid usa l'ObjectGUID restituito per il nome dal DC
+principale. L'ID Entra riportato da Intune viene confrontato quando
+corrisponde a una registrazione Hybrid della riga. Un PC presente solo
+sulle altre repliche resta visibile e il confronto viene saltato. I dati
+già raccolti bastano per questa verifica nella griglia.
+
+La verifica prima dell'eliminazione segue il flusso dedicato e legge di
+nuovo gli oggetti sui DC configurati. Il modulo Verifica Hybrid Join usa
+il proprio server AD e le proprie OU.
 
 Per le ricerche GLPI, il connettore nativo getMultipleItems legge fino a 20
 schede per richiesta. I dettagli gia letti vengono riutilizzati nel successivo
@@ -31,8 +34,9 @@ l inventario per ogni PC. Gli aggiornamenti del solo avanzamento non
 ricalcolano le righe; l arrivo di nuovi dati le ricalcola. I risultati di
 servizi indipendenti continuano a comparire progressivamente.
 
-I test sintetici verificano una richiesta AD invece di tutte quelle dei DC
-configurati, 3 richieste dettagli per 45 schede GLPI e nessuna rilettura dei
-loro dettagli durante l arricchimento seriale. Non costituiscono una misura
-del tempo su rete e dati aziendali: confrontare la ricerca Port- dopo
-l aggiornamento usando le medesime fonti e condizioni di cache.
+I test sintetici verificano una lettura per DC configurato, l'ordine di
+avvio, i casi in cui il DC principale è irraggiungibile o non ha il PC,
+e il riuso dei dettagli GLPI nella stessa ricerca. I tempi dei filtri
+LDAP dipendono dai dati e dal piano di ricerca del DC. Il confronto dei
+tempi su rete aziendale richiede la stessa query, le stesse fonti e la
+stessa condizione di cache.

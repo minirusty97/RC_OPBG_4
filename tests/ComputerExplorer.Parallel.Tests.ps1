@@ -12,8 +12,8 @@ function New-TestState {
         Kinds=(New-Object 'System.Collections.Concurrent.ConcurrentDictionary[string,bool]')
         AdEvents=(New-Object 'System.Collections.Concurrent.ConcurrentQueue[string]'); AdRunspaces=(New-Object 'System.Collections.Concurrent.ConcurrentQueue[string]')
         AdGates=@{}; PendingDC=''; FailedSource=''; EmptySources=@(); ProgressSource='' 
-        Gates=@{}; AuthFailure=$false; FailedDC='';Hybrid=$false;HybridFailure=$false }
-    foreach($name in @('AD','Entra','Intune','GLPI','HybridAD')) {
+        Gates=@{}; AuthFailure=$false; FailedDC='';Hybrid=$false;PrimaryResult='' }
+    foreach($name in @('AD','Entra','Intune','GLPI')) {
         $state.Gates[$name]=New-Object Threading.ManualResetEventSlim((-not $Blocked))
     }
     return [hashtable]::Synchronized(@{State=$state})
@@ -27,17 +27,7 @@ $worker={
         if($state.AuthFailure){throw 'Synthetic Graph auth failure.'}
         return [pscustomobject]@{State='OK';Error=$null}
     }
-    if ($Job.Kind -eq 'HybridAD') {
-        $state.AdRunspaces.Enqueue([string][Runspace]::DefaultRunspace.InstanceId);$state.Reads.Enqueue('HybridAD')
-        try {
-            while (-not $state.Gates.HybridAD.IsSet) { Start-Sleep -Milliseconds 20 }
-            $records=@($Job.Controllers | ForEach-Object { [pscustomobject]@{Name='PC-RENAMED';ObjectGUID='33333333-3333-4333-8333-333333333333';DomainController=$_;DistinguishedName='CN=PC-RENAMED,DC=invalid'} })
-            $result=[pscustomobject]@{Name='HybridAD';State='OK';Records=$records;DcSources=@();CheckedAtUtc=[datetimeoffset]::UtcNow;FromCache=$false;Error=$null}
-            if ($state.HybridFailure) { $result.State='Errore';$result.Records=@();$result.Error='Synthetic GUID lookup failure.' }
-            return $result
-        }
-        finally { $state.Exited.Enqueue('HybridAD') }
-    }
+    if ($Job.Kind -eq 'HybridAD') { $state.Reads.Enqueue('HybridAD');throw 'Consultation scheduled a second AD lookup.' }
     if($state.Kinds.TryAdd($Job.Kind,$true)){[void]$state.Started.Signal()}
     if($Job.Kind -eq 'AD'){
         $state.AdEvents.Enqueue('start:'+$Job.DomainController)
@@ -73,7 +63,11 @@ $worker={
         }
         else {$result.Records=@([pscustomobject]@{Name=$name;GlpiId=1;State='Assegnato';SerialNumber='SYNTHETIC';LastInventory='2026-10-15 09:00:00'})}
         if($Job.Kind -eq 'AD' -and $Job.DomainController -eq $state.PendingDC){$result.State='In attesa'}
-        if ($state.Hybrid -and $Job.Kind -eq 'AD') { $result.Records=@() }
+        if ($state.Hybrid -and $Job.Kind -eq 'AD') {
+            $primary=$Job.DomainController -eq 'dc1.example.invalid'
+            if ($primary -and $state.PrimaryResult -eq 'Absent') { $result.Records=@() }
+            elseif ($primary -eq ($state.PrimaryResult -eq 'Match')) { $result.Records[0].ObjectGUID='33333333-3333-4333-8333-333333333333' }
+        }
         if ($state.EmptySources -contains $Job.Kind) { $result.Records=@() }
         return $result
     }
@@ -153,7 +147,8 @@ try {
         'PASS: a slow source does not delay results from completed sources.'
         $cache.State.Gates.GLPI.Set()
         $complete=Complete-TestSearch $task
-        if($complete.Rows.Count -ne 1 -or $complete.Rows[0].ADColor -ne 'Verde' -or $complete.Rows[0].GLPI -ne '1' -or $cache.State.Exited.Count -ne 9){throw 'Parallel union lost records or readers.'}
+        if($complete.Rows.Count -ne 1 -or $complete.Rows[0].ADColor -ne 'Verde' -or $complete.Rows[0].GLPI -ne '1' -or
+           $complete.Rows[0].IntuneGuidChecks.Count -or $cache.State.Exited.Count -ne 9){throw 'Parallel union lost records or compared the GUID of a registered device.'}
         $events=@($cache.State.AdEvents.ToArray())
         if($events.Count -ne 10 -or @($cache.State.AdRunspaces.ToArray()|Select-Object -Unique).Count -ne 1){throw 'AD reads did not reuse one dedicated runspace.'}
         for($i=0;$i -lt 5;$i++){
@@ -290,26 +285,30 @@ try {
     }
     @{DomainControllers=@(1..5|ForEach-Object{"dc$_.example.invalid"});Search=@{MinimumCharacters=2;CloudCacheMinutes=5;AllDomainControllers=$true};Glpi=@{Enabled=$false}}|ConvertTo-Json -Depth 4|Set-Content $configPath -Encoding UTF8
 
-    foreach ($lookupFailure in @($false,$true)) {
-        $cache=New-TestState;$task=$null;$cache.State.Hybrid=$true;$cache.State.HybridFailure=$lookupFailure
+    $identityCases=@(
+        @{Primary='Match';FailedDC='';State='Corrisponde';Presence='5/5';IntuneChecks=1}
+        @{Primary='Match';FailedDC='dc5.example.invalid';State='Corrisponde';Presence='4/5';IntuneChecks=1}
+        @{Primary='Mismatch';FailedDC='';State='Non corrisponde';Presence='5/5';IntuneChecks=1}
+        @{Primary='Absent';FailedDC='';State='Assente su DC principale';Presence='4/5';IntuneChecks=0}
+        @{Primary='Absent';FailedDC='dc1.example.invalid';State='Non verificabile';Presence='4/5';IntuneChecks=0}
+    )
+    foreach ($case in $identityCases) {
+        $cache=New-TestState;$task=$null;$cache.State.Hybrid=$true
+        $cache.State.PrimaryResult=$case.Primary;$cache.State.FailedDC=$case.FailedDC
         try {
-            $cache.State.Gates.HybridAD.Reset();$queue=New-Object 'Collections.Concurrent.ConcurrentQueue[object]';$task=Start-TestSearch $cache $queue
-            $deadline=[datetime]::UtcNow.AddSeconds(10)
-            while ([datetime]::UtcNow -lt $deadline -and -not $cache.State.Reads.ToArray().Contains('HybridAD')) { Start-Sleep -Milliseconds 20 }
-            if (-not $cache.State.Reads.ToArray().Contains('HybridAD') -or $task.Operation.IsCompleted) { throw 'Hybrid GUID enrichment was not awaited.' }
-            $pending=$false;$snapshot=$null;$deadline=[datetime]::UtcNow.AddSeconds(10)
-            while (-not $pending -and [datetime]::UtcNow -lt $deadline) {
-                while ($queue.TryDequeue([ref]$snapshot)) { if ($snapshot.Complete) { throw 'Search completed before GUID enrichment.' };if (@($snapshot.Sources | Where-Object { $_.Name -eq 'AD' -and $_.Progress -eq 'Verifica GUID hybrid' }).Count) { $pending=$true } }
-                if (-not $pending) { Start-Sleep -Milliseconds 20 }
+            $task=Start-TestSearch $cache (New-Object 'Collections.Concurrent.ConcurrentQueue[object]')
+            $result=Complete-TestSearch $task
+            if ($result.Rows.Count -ne 1 -or $cache.State.AdEvents.Count -ne 10 -or $cache.State.Reads.ToArray() -contains 'HybridAD') { throw 'Search lost a DC or issued an additional GUID query.' }
+            $row=$result.Rows[0]
+            if ($row.HybridCheck -ne $case.State -or $row.AD -ne $case.Presence -or $row.IntuneGuidChecks.Count -ne $case.IntuneChecks -or
+                @($row.HybridIdentity.Records | ForEach-Object { $_.AdMatches } | Where-Object DomainController -ne 'dc1.example.invalid').Count) {
+                throw ('Hybrid comparison used a replica or lost the primary outcome: '+$case.Primary+' / '+$case.FailedDC)
             }
-            if (-not $pending) { throw 'GUID enrichment did not publish pending progress.' }
-            $cache.State.Gates.HybridAD.Set();$result=Complete-TestSearch $task
-            $expected='Corrisponde';if ($lookupFailure) { $expected='Non verificabile' }
-            if ($result.Rows.Count -ne 1 -or $result.Rows[0].HybridCheck -ne $expected -or @($cache.State.AdRunspaces.ToArray() | Select-Object -Unique).Count -ne 1 -or $cache.State.Exited.Count -ne 10) { throw 'GUID enrichment lost the renamed match, DC sequencing or explicit failure state.' }
+            if ($case.IntuneChecks -and ($row.IntuneGuidChecks[0].DeviceId -ne '33333333-3333-4333-8333-333333333333' -or $row.IntuneGuidChecks[0].State -ne $case.State)) { throw 'Intune comparison used its managed device ID or lost the Hybrid outcome.' }
         }
         finally { Close-TestSearch $task;Close-TestState $cache }
     }
-    'PASS: GUID enrichment stays on the single AD runspace, publishes pending progress, awaits completion, recognizes renamed objects and never reports a failed lookup as a match.'
+    'PASS: search compares linked Hybrid GUIDs with the primary DC only, distinguishes absence from failure and reads all DCs without a second GUID lookup.'
     $module=Import-Module $ModulePath -Force -PassThru
     $result=Invoke-ComputerExplorerParallelSearch -NameFragment 'PC-' -ConfigPath $configPath -EnabledSources GLPI
     if(-not $result.Complete -or @($result.Sources|Where-Object{$_.Name -eq 'GLPI'})[0].State -ne 'Esclusa'){throw 'Default worker could not read the disabled GLPI configuration.'}

@@ -26,6 +26,8 @@ try {
     $rows = @(1..2 | ForEach-Object {
         [pscustomobject]@{
             Censito='✓'; CensitoInfo='Gruppo: CENSITO'; IntuneSerial='ABC'; GlpiSerial='ABC'; SerialCheck='Coerente'; SerialColor='Verde'; SerialConflict=$false; HybridCheck='Corrisponde'; HybridColor='Verde'
+            HybridIdentity=[pscustomobject]@{State='Corrisponde';Records=@()}; PrimaryDomainController='dc1.example.invalid'
+            IntuneGuidChecks=@([pscustomobject]@{DeviceId='11111111-1111-4111-8111-111111111111';State='Corrisponde'})
             Name = ('PC-UI-' + $_); AD = '5/5'; ADColor = 'Verde'; Verificati = '5/5'
             Entra = '12'; EntraColor = 'Giallo'; Intune = '1'; IntuneColor = 'Verde'; GLPI = '1'; GLPIColor = 'Verde'
             ADLastModified = [datetime]'2026-10-15T10:05:00'; EntraLastActivity = [datetime]'2026-10-14T23:50:00'
@@ -44,6 +46,7 @@ try {
     if ($counterLabel.Text -ne 'Risultati: 2 | Selezionati: 0' -or $deleteButton.Enabled) { throw 'Initial result/selection counters or delete state incorrect.' }
     $grid.SelectAll()
     if ($counterLabel.Text -ne 'Risultati: 2 | Selezionati: 2' -or -not $deleteButton.Enabled) { throw 'Multi-selection counter or delete state incorrect.' }
+    if ($details.Text -notlike '*DC principale: dc1.example.invalid*' -or $details.Text -notlike '*Intune | Device ID Entra:*Confronto con GUID AD: Corrisponde*') { throw 'Explorer detail hid the primary controller or the linked Intune identity.' }
     Show-ExplorerSnapshot $snapshot
     if ($grid.SelectedRows.Count -ne 2) { throw 'Selection not retained after snapshot update.' }
     'PASS: native WinForms counters, multiple selection and removal button state.'

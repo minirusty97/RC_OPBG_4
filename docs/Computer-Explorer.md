@@ -210,16 +210,23 @@ Se per il seriale Intune (o per il nome, quando manca il seriale) risultano zero
 
 La conferma senza GLPI non sceglie una scheda a caso e non scrive Note GLPI. Gli altri PC del lotto conservano il backup verificato. Errori di recupero, identita cambiate, chiavi cambiate e oggetti AD protetti non vengono ignorati. Il backend richiede i nomi esatti dei PC confermati e ripete i controlli prima delle cancellazioni. **Archivia BitLocker** continua a richiedere una scheda GLPI univoca; una conferma di perdita non viene trattata come archiviazione riuscita. Le Note GLPI preesistenti restano inalterate.
 
-## Identita hybrid AD / Entra (1.0.22)
+## Identità Hybrid AD / Entra
 
-La colonna **Identita AD/Entra** confronta `deviceId` Entra con `ObjectGUID` AD soltanto per le registrazioni `trustType=ServerAd`. `Workplace` (registered) e `AzureAd` (joined cloud) sono non applicabili. Ogni registrazione ha il proprio esito: un registered omonimo non nasconde un hybrid discordante. L'Object ID Entra e l'ID gestionale Intune non vengono confrontati con il GUID AD.
+La colonna **Identità AD/Entra** usa l'ObjectGUID AD del DC principale e il
+Device ID Entra per le registrazioni Hybrid (ServerAd). Il dettaglio
+riporta anche il confronto per le registrazioni Intune collegate alla
+stessa identità Hybrid. Il valore confrontato è l'ID dispositivo Entra
+riportato da Intune. Workplace e AzureAd restano non applicabili.
 
-- **Corrisponde**: stesso GUID. Le repliche lette su piu DC rappresentano la stessa identita.
-- **Non corrisponde**: oggetti AD omonimi con GUID diverso; il dettaglio conserva gli identificativi e segnala anche un eventuale oggetto atteso trovato con un altro nome.
-- **Assente in AD**: ricerca completa per nome/GUID senza corrispondenze.
-- **Non verificabile**: fonte esclusa, tipo di join o identificativi non validi, DC irraggiungibile o lettura incompleta.
+- **Corrisponde** indica che il GUID del DC principale coincide.
+- **Non corrisponde** indica una discordanza con gli oggetti omonimi sul DC principale.
+- **Assente su DC principale** indica che il confronto è saltato. Il PC
+  può risultare presente sulle altre repliche.
+- **Non verificabile** indica una lettura incompleta, una fonte esclusa
+  oppure un'identità non valida.
 
-Per gli hybrid senza una corrispondenza gia letta viene eseguita una ricerca LDAP mirata tramite GUID, suddivisa in lotti e sempre sul lettore AD sequenziale. La ricerca attende anche questo passaggio prima di concludersi. Il dettaglio mostra il nome AD effettivo quando il computer e stato rinominato. La correlazione non aggiunge automaticamente l'oggetto rinominato alla selezione di eliminazione.
+Il controllo usa i risultati della ricerca per nome. Il backend riserva
+la rilettura tramite GUID alla verifica operativa per l'eliminazione.
 
 Prima delle cancellazioni il backend rilegge il tipo di join e i metadati AD. Una discordanza provata richiede la conferma separata **HybridIdentityConsent**, limitata ai PC elencati, distinta dai consensi per figli AD, associazione GLPI e perdita chiavi. Una modifica dopo l'anteprima invalida la conferma. L'archiviazione senza cancellazione non richiede questa conferma.
 
