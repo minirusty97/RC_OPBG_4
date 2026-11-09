@@ -203,6 +203,13 @@ try{
     }
     Invoke-TestSetup $SetupPath
     Assert-InstalledApplication $defaultInstall
+    $otaPayload=Join-Path $temporary 'candidate-updater'
+    $otaFiles=@('Start-AssistenteIT.ps1','AssistenteIT/AssistenteIT.Update.psm1','AssistenteIT/Install-Update.ps1')
+    foreach ($name in $otaFiles) {
+        $destination=Join-Path $otaPayload $name
+        [void][IO.Directory]::CreateDirectory((Split-Path $destination -Parent))
+        Copy-Item -LiteralPath (Join-Path $defaultInstall ('app/'+$name)) -Destination $destination
+    }
     if((Test-Path -LiteralPath $legacyDefault) -or (Test-Path -LiteralPath $legacyData)){throw 'Clean setup created a legacy path.'}
     'PASS: clean setup uses only Assistente IT names, new default directories, manifest and shortcuts.'
     Invoke-TestUninstall $defaultInstall
@@ -219,10 +226,16 @@ try{
     $encrypted=Join-Path $personal.ConfigDirectory 'glpi-credentials.dpapi.json'
     $configHash=(Get-FileHash -LiteralPath $personal.ConfigPath).Hash; $secretHash=(Get-FileHash -LiteralPath $encrypted).Hash
     $candidate=Get-Content -LiteralPath (Join-Path $project 'assistente-it.json') -Raw | ConvertFrom-Json
+    # Exercise the packaged candidate updater over the previous installed version.
+    foreach ($name in $otaFiles) { Copy-Item -LiteralPath (Join-Path $otaPayload $name) -Destination (Join-Path $otaTarget ('app/'+$name)) -Force }
     Invoke-TestUpdateFromHub -Directory $otaTarget -Version $candidate.Version
     Assert-InstalledApplication $otaTarget
     if ((Get-FileHash $personal.ConfigPath).Hash -ne $configHash -or (Get-FileHash $encrypted).Hash -ne $secretHash) { throw 'Real OTA upgrade lost personal configuration or encrypted credentials.' }
-    'PASS: the published hub finds and verifies the staged update, closes, installs at its registered custom path, reopens the new hub and preserves personal data.'
+    $updates=Join-Path $personal.DataRoot 'Updates'
+    $logs=@(Get-ChildItem -LiteralPath $updates -Recurse -File -Filter 'update-install.log')
+    if ($logs.Count -ne 1 -or [IO.File]::ReadAllText($logs[0].FullName) -notlike '*Launcher riavviato.*' -or
+        @(Get-ChildItem -LiteralPath $updates -Recurse -File -Filter 'Install-Update.ps1').Count) { throw 'OTA did not log its outcome or copied executable scripts into the download directory.' }
+    'PASS: the packaged updater finds and verifies the staged update, confirms worker startup, closes, installs at its custom path, reopens and preserves personal data.'
     Invoke-TestUninstall $otaTarget
 
 }

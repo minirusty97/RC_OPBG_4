@@ -215,8 +215,8 @@ function Start-AssistenteITUpdateHandoff {
     $marker=Join-Path (Split-Path $InstallRoot -Parent) 'assistente-it-install.marker'
     if (-not [IO.File]::Exists($marker) -or [IO.File]::ReadAllText($marker).Trim() -ne 'AssistenteIT-56bc1182-02a3-4b1a-9d4a-99d44231c26b') { throw 'Installare prima Assistente IT con il setup; gli aggiornamenti automatici richiedono la versione installata.' }
     $directory=Split-Path ([IO.Path]::GetFullPath($PlanPath)) -Parent
-    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Install-Update.ps1') -Destination (Join-Path $directory 'Install-Update.ps1')
-    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'AssistenteIT.Update.psm1') -Destination (Join-Path $directory 'AssistenteIT.Update.psm1')
+    $helper=Join-Path $PSScriptRoot 'Install-Update.ps1'
+    if (-not [IO.File]::Exists($helper)) { throw 'Script di aggiornamento mancante. Riparare Assistente IT con il setup.' }
     $launcherId=0
     try {
         $parent=Get-CimInstance Win32_Process -Filter ('ProcessId='+$PID) -ErrorAction Stop
@@ -225,11 +225,33 @@ function Start-AssistenteITUpdateHandoff {
         finally { $process.Dispose() }
     }
     catch { }
+    $eventName='Local\AssistenteIT.UpdateReady.'+[guid]::NewGuid().ToString('N')
     $info=New-Object Diagnostics.ProcessStartInfo
     $info.FileName=Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'WindowsPowerShell/v1.0/powershell.exe'
-    $info.Arguments='-NoLogo -NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}" -PlanPath "{1}" -InstallRoot "{2}" -ParentProcessId {3} -LauncherProcessId {4}' -f (Join-Path $directory 'Install-Update.ps1'),$PlanPath,$InstallRoot,$PID,$launcherId
+    $info.Arguments='-NoLogo -NoProfile -NonInteractive -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}" -PlanPath "{1}" -InstallRoot "{2}" -ParentProcessId {3} -LauncherProcessId {4} -ReadyEvent "{5}"' -f $helper,$PlanPath,$InstallRoot,$PID,$launcherId,$eventName
     $info.WorkingDirectory=$directory; $info.UseShellExecute=$false; $info.CreateNoWindow=$true
-    $process=[Diagnostics.Process]::Start($info); $process.Dispose()
+    $ready=New-Object Threading.EventWaitHandle($false,[Threading.EventResetMode]::ManualReset,$eventName)
+    $process=$null
+    try {
+        $process=[Diagnostics.Process]::Start($info)
+        $watch=[Diagnostics.Stopwatch]::StartNew()
+        while (-not $ready.WaitOne(100)) {
+            if ($process.HasExited) { throw ('Il processo di aggiornamento si è chiuso durante l''avvio con codice '+$process.ExitCode+'.') }
+            if ($watch.Elapsed.TotalSeconds -ge 15) { throw 'Il processo di aggiornamento non ha confermato l''avvio.' }
+        }
+        if ($process.HasExited) { throw ('Il processo di aggiornamento si è chiuso con codice '+$process.ExitCode+'.') }
+    }
+    catch {
+        $message=$_.Exception.Message
+        if ($null -ne $process) { try { if (-not $process.HasExited) { $process.Kill() } } catch { } }
+        $log=Join-Path $directory 'update-install.log'
+        if ([IO.File]::Exists($log)) { $message+=[Environment]::NewLine+'Registro: '+$log }
+        throw $message
+    }
+    finally {
+        if ($null -ne $process) { $process.Dispose() }
+        $ready.Dispose()
+    }
 }
 
 Export-ModuleMember -Function Get-AssistenteITUpdate, Save-AssistenteITUpdate, Open-AssistenteITVerifiedSetup, Invoke-AssistenteITUpdateInstall, Start-AssistenteITUpdateHandoff

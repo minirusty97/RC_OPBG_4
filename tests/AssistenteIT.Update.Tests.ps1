@@ -105,3 +105,28 @@ try {
     } $directory
 }
 finally { Remove-Module -ModuleInfo $module -Force; Remove-Item -LiteralPath $directory -Recurse -Force }
+
+if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+    $temporary=Join-Path ([IO.Path]::GetTempPath()) ('ota startup failure '+[guid]::NewGuid().ToString('N'))
+    $app=Join-Path $temporary 'app'
+    $scripts=Join-Path $app 'AssistenteIT'
+    $download=Join-Path $temporary 'Downloads'
+    $faultModule=$null
+    try {
+        [void][IO.Directory]::CreateDirectory($scripts)
+        [void][IO.Directory]::CreateDirectory($download)
+        [IO.File]::WriteAllText((Join-Path $temporary 'assistente-it-install.marker'),'AssistenteIT-56bc1182-02a3-4b1a-9d4a-99d44231c26b')
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot '../AssistenteIT/AssistenteIT.Update.psm1') -Destination $scripts
+        [IO.File]::WriteAllText((Join-Path $scripts 'Install-Update.ps1'),'exit 42')
+        $faultModule=Import-Module (Join-Path $scripts 'AssistenteIT.Update.psm1') -Force -PassThru
+        $failure=''
+        try { Start-AssistenteITUpdateHandoff -PlanPath (Join-Path $download 'update-plan.json') -InstallRoot $app }
+        catch { $failure=$_.Exception.Message }
+        if ($failure -notlike '*codice 42*' -or @(Get-ChildItem -LiteralPath $download).Count) { throw 'Updater startup failure was hidden or executable scripts were copied into the cache.' }
+        'PASS: the actual Windows handoff reports a child exiting before it can acknowledge startup.'
+    }
+    finally {
+        if ($null -ne $faultModule) { Remove-Module -ModuleInfo $faultModule -Force }
+        if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Recurse -Force }
+    }
+}
