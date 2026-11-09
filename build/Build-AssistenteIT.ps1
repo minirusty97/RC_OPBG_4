@@ -78,10 +78,18 @@ try {
             $process = Start-Process -FilePath $testLauncher -ArgumentList ('--smoke-test "' + $smokePath + '"') -Wait -PassThru
             if ($process.ExitCode -ne 0 -or -not [IO.File]::Exists($smokePath)) { throw 'Avvio della prova AD non riuscito.' }
             $smoke = [IO.File]::ReadAllText($smokePath) | ConvertFrom-Json
-            if ($smoke.WindowTitle -notlike '*Test ricerca AD' -or $smoke.ModuleCount -ne 1 -or
-                $smoke.UpdateButton -or -not $smoke.GraphAvailable -or $smoke.DataRoot -notlike '*AssistenteIT-TestAD') {
-                throw 'La prova AD non è isolata correttamente.'
+            $checks = [ordered]@{
+                WindowTitle = ($smoke.WindowTitle -like '*Test ricerca AD')
+                ModuleCount = ($smoke.ModuleCount -eq 1)
+                OtaDisabled = [string]::IsNullOrEmpty([string]$smoke.UpdateButton)
+                GraphAvailable = [bool]$smoke.GraphAvailable
+                SeparateDataRoot = ($smoke.DataRoot -like '*AssistenteIT-TestAD')
             }
+            $failures = @($checks.Keys | Where-Object { -not $checks[$_] })
+            if ($failures.Count) {
+                throw ('Controlli di avvio falliti ({0}). Risposta: {1}' -f ($failures -join ', '), ($smoke | ConvertTo-Json -Compress))
+            }
+            Write-Host 'PASS: il launcher portatile avvia la prova AD con Graph, un solo modulo, dati separati e OTA disabilitato.'
         }
         finally { if ([IO.File]::Exists($smokePath)) { [IO.File]::Delete($smokePath) } }
         Add-Type -AssemblyName System.IO.Compression.FileSystem

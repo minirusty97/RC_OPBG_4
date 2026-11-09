@@ -13,8 +13,9 @@ Enable-AssistenteITDependencies $PSScriptRoot
 $manifest = Read-AssistenteITManifest $PSScriptRoot
 $adSearchTest = [IO.File]::Exists((Join-Path $PSScriptRoot 'ad-search-test.flag'))
 $activity = $null
+$visibleModules = @($manifest.Modules)
 if ($adSearchTest) {
-    $manifest.Modules = @($manifest.Modules | Where-Object Id -eq 'computer-explorer')
+    $visibleModules = @($manifest.Modules | Where-Object Id -eq 'computer-explorer')
     if (-not $DataRoot) {
         $installedPaths = Get-AssistenteITPaths
         $DataRoot = $installedPaths.DataRoot + '-TestAD'
@@ -99,7 +100,7 @@ function Show-AssistenteITSettings {
     $ringSettings=(Read-DmSettings $paths.ConfigPath RingManager -SettingsOnly).Options
     $hybridPage=New-Object Windows.Forms.TabPage;$hybridPage.Text='Hybrid Join'
     $ringPage=New-Object Windows.Forms.TabPage;$ringPage.Text='Ring Intune'
-    $settingsTabs.TabPages.AddRange(@($hybridPage,$ringPage))
+    if (-not $adSearchTest) { $settingsTabs.TabPages.AddRange(@($hybridPage,$ringPage)) }
     $searchSettings=Get-DmValue $settings 'Search'
     $searchPage=New-Object Windows.Forms.TabPage;$searchPage.Text='Ricerca computer'
     [void]$settingsTabs.TabPages.Add($searchPage)
@@ -181,7 +182,7 @@ function Get-AssistenteITOpenModules {
 }
 
 function Update-AssistenteITModuleAvailability {
-    foreach ($entry in $manifest.Modules) {
+    foreach ($entry in $visibleModules) {
         $verified=Get-AssistenteITModuleAccess -Module $entry -Access $script:Access
         $script:ModuleButtons[$entry.Id].Enabled=$verified.CanOpen
         $label=$script:ModuleAccessLabels[$entry.Id]
@@ -236,7 +237,7 @@ function Start-AssistenteITSavedAccessCheck {
             Import-Module (Join-Path $Root 'AssistenteIT/AssistenteIT.Core.psm1') -ErrorAction Stop
             Initialize-AssistenteITModuleAccess -Module $Definition -ConfigPath $Config -SessionPath $SessionPath -WindowHandle $WindowHandle
         }
-        $definition=Get-AssistenteITAccessDefinition -Modules $manifest.Modules
+        $definition=Get-AssistenteITAccessDefinition -Modules $visibleModules
         [void]$pipeline.AddScript($worker.ToString()).AddArgument($PSScriptRoot).AddArgument($definition).AddArgument($paths.ConfigPath).AddArgument($paths.GraphSessionPath).AddArgument($form.Handle)
         $invocation=$pipeline.BeginInvoke()
         $script:AccessTask=@{Pipeline=$pipeline;Invocation=$invocation;Stop=$null;Deadline=[datetime]::UtcNow.AddSeconds(45)}
@@ -330,7 +331,7 @@ $heading.Text = $manifest.Product + "`r`nScegli un modulo abilitato. Lo stato de
 $heading.Font = New-Object Drawing.Font('Segoe UI', 12)
 $modulePanel = New-Object Windows.Forms.FlowLayoutPanel; $modulePanel.Dock='Fill'; $modulePanel.AutoScroll=$true; $modulePanel.FlowDirection='TopDown'; $modulePanel.WrapContents=$false
 $modulePanel.Add_SizeChanged({ foreach ($card in $modulePanel.Controls) { $card.Width=[Math]::Max(500,$modulePanel.ClientSize.Width-26);foreach ($control in $card.Controls) { if ($control -is [Windows.Forms.Button]) { $control.Left=$card.Width-167 } else { $control.Width=$card.Width-205 } } } })
-foreach ($module in $manifest.Modules) {
+foreach ($module in $visibleModules) {
     $card = New-Object Windows.Forms.GroupBox; $card.Text=$module.Name; $card.Size=New-Object Drawing.Size(785, 136)
     $description = New-Object Windows.Forms.Label; $description.Text=$module.Description; $description.SetBounds(18, 29, 555, 44)
     $accessLabel=New-Object Windows.Forms.Label;$accessLabel.Name='ModuleAccess-'+$module.Id;$accessLabel.SetBounds(18,82,555,34)
@@ -359,7 +360,7 @@ $accessButton.Add_Click({
     Set-AssistenteITAccessStatus $null 'Accesso Microsoft in corso...'
     try {
         . (Join-Path $PSScriptRoot 'AssistenteIT/Graph.Access.ps1')
-        $definition=Get-AssistenteITAccessDefinition -Modules $manifest.Modules
+        $definition=Get-AssistenteITAccessDefinition -Modules $visibleModules
         $verified=Show-AssistenteITModuleAccess -InstallRoot $PSScriptRoot -Module $definition -ConfigPath $paths.ConfigPath -VerifyOnly -Owner $form
         Set-AssistenteITAccessStatus $verified 'Accesso da completare. Seleziona Accesso.'
         if ($null -ne $verified) {
