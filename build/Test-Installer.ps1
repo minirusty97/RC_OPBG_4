@@ -57,6 +57,82 @@ function Invoke-TestWindow {
     finally{$process.Dispose()}
     return Get-Content -LiteralPath $probe -Raw | ConvertFrom-Json
 }
+function Invoke-TestUpdateFromHub {
+    param([string]$Directory,[string]$Version)
+    $app=Join-Path $Directory 'app'
+    $launcher=Join-Path $Directory 'AssistenteIT.exe'
+    $module=Join-Path $app 'AssistenteIT/AssistenteIT.Update.psm1'
+    $hub=Join-Path $app 'Start-AssistenteIT.ps1'
+    $helper=Join-Path $app 'AssistenteIT/Install-Update.ps1'
+    $utf8=New-Object Text.UTF8Encoding($true)
+    $env:ASSISTENTEIT_TEST_OTA_ASSETS=Split-Path (Resolve-Path -LiteralPath $SetupPath).ProviderPath -Parent
+    $env:ASSISTENTEIT_TEST_OTA_STATUS=Join-Path $temporary 'ota-status.txt'
+    $env:ASSISTENTEIT_TEST_OTA_ERROR=Join-Path $temporary 'ota-error.txt'
+    # Keep the real feed parser, verification, hub timer, worker and installer.
+    # Serve only the bytes from this build and simulate approval in the test window.
+    [IO.File]::AppendAllText($module, @'
+
+function Invoke-UpdateDownload {
+    param([uri]$Uri,[string]$Path,[long]$MaxBytes,$Queue)
+    Assert-UpdateUri $Uri
+    [IO.File]::Copy((Join-Path $env:ASSISTENTEIT_TEST_OTA_ASSETS ([IO.Path]::GetFileName($Uri.AbsolutePath))),$Path)
+}
+'@)
+    $probe=@'
+$script:TestOtaApproved=$false
+$testOtaTimer=New-Object Windows.Forms.Timer
+$testOtaTimer.Interval=200
+$testOtaTimer.Add_Tick({
+    [IO.File]::WriteAllText($env:ASSISTENTEIT_TEST_OTA_STATUS,$status.Text)
+    if (-not $script:TestOtaApproved -and $null -ne $script:UpdateInfo -and $script:UpdateInfo.Available -and $null -eq $script:UpdateInvocation) {
+        $script:TestOtaApproved=$true
+        Start-AssistenteITUpdateOperation Download
+    }
+})
+$form.Add_Shown({$testOtaTimer.Start()})
+
+'@
+    $text=[IO.File]::ReadAllText($hub)
+    $marker=[regex]::Match($text,'(?m)^try \{\r?\n    if \(\$SmokeTestOutput\) \{')
+    if (-not $marker.Success) { throw 'Installed hub lacks the OTA test entry point.' }
+    [IO.File]::WriteAllText($hub,$text.Insert($marker.Index,$probe+[Environment]::NewLine),$utf8)
+    $text=[IO.File]::ReadAllText($helper)
+    $catchStart=[regex]::Match($text,'(?m)^catch \{\r?\n')
+    if (-not $catchStart.Success) { throw 'Installed updater lacks an error handler.' }
+    $report='    [IO.File]::WriteAllText($env:ASSISTENTEIT_TEST_OTA_ERROR,$_.Exception.Message)' + [Environment]::NewLine
+    [IO.File]::WriteAllText($helper,$text.Insert($catchStart.Index+$catchStart.Length,$report),$utf8)
+
+    $process=$null;$window=$null
+    try {
+        $process=Start-Process -FilePath $launcher -PassThru
+        if (-not $process.WaitForExit(45000) -or $process.ExitCode -ne 0) { throw 'The original hub did not close after verifying the download.' }
+        $deadline=[datetime]::UtcNow.AddSeconds(65)
+        while ([datetime]::UtcNow -lt $deadline) {
+            if (Test-Path -LiteralPath $env:ASSISTENTEIT_TEST_OTA_ERROR) { throw 'The update worker reported an error.' }
+            $window=Get-Process -Name powershell -ErrorAction SilentlyContinue | Where-Object MainWindowTitle -eq ('Assistente IT - '+$Version) | Select-Object -First 1
+            if ($null -ne $window -and (Get-ItemProperty $uninstallKey).DisplayVersion -eq $Version) { break }
+            Start-Sleep -Milliseconds 250
+        }
+        if ($null -eq $window -or (Get-ItemProperty $uninstallKey).DisplayVersion -ne $Version) { throw 'The installed update did not reopen the new hub.' }
+        if (-not $window.CloseMainWindow() -or -not $window.WaitForExit(20000)) { throw 'Could not close the relaunched test hub.' }
+    }
+    catch {
+        foreach ($path in @($env:ASSISTENTEIT_TEST_OTA_STATUS,$env:ASSISTENTEIT_TEST_OTA_ERROR)) {
+            if (Test-Path -LiteralPath $path) { Write-Host ('OTA '+[IO.Path]::GetFileName($path)+' '+[IO.File]::ReadAllText($path)) }
+        }
+        throw
+    }
+    finally {
+        if ($null -ne $process) { $process.Dispose() }
+        if ($null -ne $window) { $window.Dispose() }
+        # Clean up only processes from this isolated installation if the probe failed.
+        $fixtureProcesses=@(Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='AssistenteIT.exe'" | Where-Object {
+            $_.ExecutablePath -ieq $launcher -or ([string]$_.CommandLine).IndexOf($Directory,[StringComparison]::OrdinalIgnoreCase) -ge 0
+        })
+        foreach ($fixtureProcess in $fixtureProcesses) { Stop-Process -Id $fixtureProcess.ProcessId -Force -ErrorAction SilentlyContinue }
+        Remove-Item Env:ASSISTENTEIT_TEST_OTA_ASSETS,Env:ASSISTENTEIT_TEST_OTA_STATUS,Env:ASSISTENTEIT_TEST_OTA_ERROR -ErrorAction SilentlyContinue
+    }
+}
 function Assert-InstalledApplication {
     param([string]$Directory)
     $installed=Get-Content -LiteralPath (Join-Path $Directory 'app/assistente-it.json') -Raw | ConvertFrom-Json
@@ -138,20 +214,15 @@ try{
     Assert-InstalledApplication $otaTarget
     $project=Split-Path $PSScriptRoot -Parent
     Import-Module (Join-Path $project 'AssistenteIT/AssistenteIT.Core.psm1') -Force
-    Import-Module (Join-Path $project 'AssistenteIT/AssistenteIT.Update.psm1') -Force
     $personal=Get-AssistenteITPaths
     Save-AssistenteITSettings -Paths $personal -DomainControllers @('dc.example.invalid') -GlpiBaseUri 'https://glpi.example.invalid/apirest.php' -GlpiEnabled $true -UserToken 'ota-synthetic-user' -AppToken 'ota-synthetic-app'
     $encrypted=Join-Path $personal.ConfigDirectory 'glpi-credentials.dpapi.json'
     $configHash=(Get-FileHash -LiteralPath $personal.ConfigPath).Hash; $secretHash=(Get-FileHash -LiteralPath $encrypted).Hash
     $candidate=Get-Content -LiteralPath (Join-Path $project 'assistente-it.json') -Raw | ConvertFrom-Json
-    $staged=Join-Path $temporary ('Assistente-IT-Setup-'+$candidate.Version+'.exe')
-    Copy-Item -LiteralPath $SetupPath -Destination $staged
-    $receipt=Join-Path $temporary 'ota-plan.json'
-    [ordered]@{SchemaVersion=1;Version=$candidate.Version;SetupName=[IO.Path]::GetFileName($staged);Size=(Get-Item $staged).Length;SHA256=(Get-FileHash $staged -Algorithm SHA256).Hash} | ConvertTo-Json | Set-Content -LiteralPath $receipt -Encoding UTF8
-    $result=Invoke-AssistenteITUpdateInstall -PlanPath $receipt -InstallRoot (Join-Path $otaTarget 'app')
+    Invoke-TestUpdateFromHub -Directory $otaTarget -Version $candidate.Version
     Assert-InstalledApplication $otaTarget
-    if ($result.Version -ne $candidate.Version -or (Get-FileHash $personal.ConfigPath).Hash -ne $configHash -or (Get-FileHash $encrypted).Hash -ne $secretHash) { throw 'Real OTA upgrade lost personal configuration or encrypted credentials.' }
-    'PASS: OTA installer upgrades published 1.0.7 at its registered custom path and preserves configuration plus DPAPI bytes.'
+    if ((Get-FileHash $personal.ConfigPath).Hash -ne $configHash -or (Get-FileHash $encrypted).Hash -ne $secretHash) { throw 'Real OTA upgrade lost personal configuration or encrypted credentials.' }
+    'PASS: the published hub finds and verifies the staged update, closes, installs at its registered custom path, reopens the new hub and preserves personal data.'
     Invoke-TestUninstall $otaTarget
 
 }
