@@ -53,10 +53,11 @@ Export-ModuleMember -Function Get-MgContext,Disconnect-MgGraph,Connect-MgGraph,I
  $settingsTimer.Add_Tick({
   $windows=@([Windows.Forms.Application]::OpenForms | Where-Object Text -like 'Impostazioni - *');if (-not $windows.Count) { return };$settingsTimer.Stop();$window=$windows[0]
   try {
-   $dc=$window.Controls.Find('ExplorerSearchDc',$true)[0];$all=$window.Controls.Find('ExplorerAllSearchDcs',$true)[0]
+   $dc=$window.Controls.Find('ExplorerSearchDc',$true)[0]
    $tabs=@($window.Controls | Where-Object { $_ -is [Windows.Forms.TabControl] })[0]
    $tabs.SelectedTab=$dc.Parent
-   if ($all.Checked -or $tabs.SelectedTab.Text -ne 'Ricerca computer') { throw 'Consultation defaults or settings tab missing.' }
+   if ($window.Controls.Find('ExplorerAllSearchDcs',$true).Count -or $tabs.SelectedTab.Text -ne 'Ricerca computer' -or
+       @($dc.Parent.Controls | Where-Object Text -like 'DC principale*').Count -ne 1) { throw 'Primary DC settings are missing or still offer the retired single-DC mode.' }
    $dc.Text='dc1.example.invalid';$settingsProbe.Seen=$true
    $bitmap=New-Object Drawing.Bitmap($window.Width,$window.Height)
    try { $window.DrawToBitmap($bitmap,(New-Object Drawing.Rectangle(0,0,$bitmap.Width,$bitmap.Height)));$memory=New-Object IO.MemoryStream;try { $bitmap.Save($memory,[Drawing.Imaging.ImageFormat]::Png);Write-Host ('SEARCH_SETTINGS_UI_PNG:'+ [Convert]::ToBase64String($memory.ToArray())) } finally {$memory.Dispose()} } finally {$bitmap.Dispose()}
@@ -66,8 +67,8 @@ Export-ModuleMember -Function Get-MgContext,Disconnect-MgGraph,Connect-MgGraph,I
  })
  try { $settingsTimer.Start();$settingsButton.PerformClick() } finally {$settingsTimer.Stop();$settingsTimer.Dispose()}
  $saved=Get-Content $paths.ConfigPath -Raw|ConvertFrom-Json
- if (-not $settingsProbe.Seen -or $settingsProbe.Error -or $saved.Search.DomainController -ne 'dc1.example.invalid' -or $saved.Search.AllDomainControllers) { throw ('Search settings UI failed: '+$settingsProbe.Error) }
- 'PASS: native search settings expose one configured consultation DC, preserve the full controller list and save without opening Graph login.'
+ if (-not $settingsProbe.Seen -or $settingsProbe.Error -or $saved.Search.DomainController -ne 'dc1.example.invalid' -or -not $saved.Search.AllDomainControllers) { throw ('Search settings UI failed: '+$settingsProbe.Error) }
+ 'PASS: native search settings select the primary DC for an all-controller search and save without opening Graph login.'
 
  Start-AssistenteITSavedAccessCheck
  if ($sessionStatus.Text -notlike '*collegare*' -or [HubUiFixture]::Connections -ne 0 -or [HubUiFixture]::Restores -ne 0) { throw 'Startup without a saved session attempted to authenticate.' }

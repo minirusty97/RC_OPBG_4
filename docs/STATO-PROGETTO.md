@@ -1,7 +1,9 @@
 # Stato condiviso per riprendere il lavoro
 
 Repository: `minirusty97/RC_OPBG_4`. Consultare sempre il main e la release
-effettiva. La versione sorgente **1.3.1** aggiorna la finestra di Gestione
+effettiva. La versione sorgente **1.3.2** ripristina la ricerca su tutti i
+DC in Computer Explorer e confronta i GUID Hybrid già letti sul DC
+principale. La **1.3.1** aggiorna la finestra di Gestione
 Ring con riepilogo, colonne di inventario GLPI, filtri locali per colonna e
 pulsanti in basso. La **1.3.0** verifica l'accesso salvato
 all'apertura e cerca le schede Hybrid e Ring nelle entità autorizzate al
@@ -110,3 +112,14 @@ informazioni amministrative è attivata solo per Ring. I test coprono i dati
 GLPI sintetici, inclusi un inventario vuoto e un fornitore non leggibile,
 e la finestra WinForms con i filtri locali. La disponibilità del Fornitore
 dipende dai diritti del profilo API GLPI effettivo.
+
+## Ricerca AD in 1.3.2
+
+Il DC principale è il primo della coda, scelto con l'impostazione esistente
+oppure riconosciuto come dc1 o srvdc1. La ricerca interroga anche le altre
+repliche con il filtro LDAP Name, DNSHostName e sAMAccountName. Il
+confronto Hybrid e Intune usa soltanto il risultato sul DC principale
+già letto. I test sintetici coprono la presenza sulle sole repliche
+secondarie, la discordanza, il DC principale in errore e la copertura
+con la configurazione precedente. Per confrontare i tempi dei filtri
+serve una misura sul DC con gli stessi dati.

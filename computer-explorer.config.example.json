@@ -18,7 +18,7 @@
     "CloudReadTimeoutSeconds": 90,
     "RefreshBeforeDelete": true,
     "DomainController": "",
-    "AllDomainControllers": false
+    "AllDomainControllers": true
   },
   "Glpi": {
     "Enabled": false,

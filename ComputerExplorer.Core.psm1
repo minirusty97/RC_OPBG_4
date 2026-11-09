@@ -42,18 +42,18 @@ function Get-ExplorerSearchControllers {
     $controllers=@($configured | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ } | Select-Object -Unique)
     if (-not $controllers.Count) { return @() }
     $search=Get-ExplorerValue $Settings 'Search'
-    $all=Get-ExplorerValue $search 'AllDomainControllers' $false
-    if ($all -isnot [bool]) { throw 'Search.AllDomainControllers deve essere un valore booleano.' }
-    if ($all) { return $controllers }
     $preferred=([string](Get-ExplorerValue $search 'DomainController' '')).Trim()
     if ($preferred) {
         $matches=@($controllers | Where-Object { $_ -ieq $preferred -or $_.Split('.')[0] -ieq $preferred })
-        if ($matches.Count -ne 1) { throw 'Il DC di consultazione deve identificare un solo DC configurato.' }
-        return $matches[0]
+        if ($matches.Count -ne 1) { throw 'Il DC principale deve identificare un solo DC configurato.' }
+        $preferred=$matches[0]
     }
-    $primary=@($controllers | Where-Object { $_.Split('.')[0] -ieq 'srvdc1' })
-    if ($primary.Count -eq 1) { return $primary[0] }
-    return $controllers[0]
+    else {
+        $preferred=$controllers | Where-Object { $_.Split('.')[0] -in @('srvdc1','dc1') } | Select-Object -First 1
+        if (-not $preferred) { $preferred=$controllers[0] }
+    }
+    # The first controller is the identity reference. Every configured DC is read.
+    return @($preferred) + @($controllers | Where-Object { $_ -ine $preferred })
 }
 
 function Get-ExplorerGraphCollection {
@@ -268,14 +268,11 @@ function Merge-ExplorerResults {
         if (-not $groups.ContainsKey($nameKey)) { $groups[$nameKey]=@{Name=$name;AD=@();Entra=@();Intune=@();GLPI=@()} }
         $groups[$nameKey].GLPI+=@($record)
     }
-    $hybridAdRecords=Get-ExplorerValue $Sources.AD 'HybridRecords' @()
-    $allAd=@(@($Sources.AD.Records)+@($hybridAdRecords))
-    $adByName=@{};$adByGuid=@{}
-    foreach ($record in $allAd) {
-        $key=([string](Get-ExplorerValue $record 'Name')).Trim();$id=[string](Get-ExplorerValue $record 'ObjectGUID')
-        if ($key) { if (-not $adByName.ContainsKey($key)) { $adByName[$key]=New-Object 'Collections.Generic.List[object]' };[void]$adByName[$key].Add($record) }
-        if ($id) { if (-not $adByGuid.ContainsKey($id)) { $adByGuid[$id]=New-Object 'Collections.Generic.List[object]' };[void]$adByGuid[$id].Add($record) }
-    }
+    $primaryDc=''
+    if ($DomainControllers.Count) { $primaryDc=$DomainControllers[0] }
+    $primaryVerified=$primaryDc -and @($Sources.AD.DcSources | Where-Object {
+        $_.Verificato -and (Get-ExplorerValue $_ 'DomainController') -ieq $primaryDc
+    }).Count -gt 0
     $verified = @($Sources.AD.DcSources | Where-Object { $_.Verificato }).Count
     foreach ($group in @($groups.Values | Sort-Object { $_.Name })) {
         $present = @($group.AD | ForEach-Object { $_.DomainController } | Sort-Object -Unique).Count
@@ -337,16 +334,25 @@ function Merge-ExplorerResults {
                 break
             }
         }
-        $hybridState=[string](Get-ExplorerValue $Sources.AD 'HybridLookupState' '')
-        $relevantAd=New-Object 'Collections.Generic.List[object]'
-        if ($adByName.ContainsKey($group.Name)) { $relevantAd.AddRange([object[]]$adByName[$group.Name].ToArray()) }
-        foreach ($device in $entra) { if ($adByGuid.ContainsKey([string]$device.DeviceId)) { $relevantAd.AddRange([object[]]$adByGuid[[string]$device.DeviceId].ToArray()) } }
-        $hybrid=Get-ExplorerHybridIdentity -Name $group.Name -AdRecords $group.AD -EntraRecords $entra -AllAdRecords $relevantAd.ToArray() -AdComplete:($Sources.AD.State -eq 'OK' -and $verified -eq $DomainControllers.Count -and $DomainControllers.Count -gt 0) -EntraComplete:($Sources.Entra.State -eq 'OK') -LookupComplete:($hybridState -eq 'OK') -LookupError:([string](Get-ExplorerValue $Sources.AD 'HybridLookupError' ''))
+        $primaryAd=@($group.AD | Where-Object DomainController -ieq $primaryDc)
+        $identityArgs=@{Name=$group.Name;AdRecords=$primaryAd;EntraRecords=$entra;AdComplete=$primaryVerified
+            EntraComplete=($Sources.Entra.State -eq 'OK');LookupComplete=$primaryVerified;SearchController=$primaryDc}
+        $hybrid=Get-ExplorerHybridIdentity @identityArgs
+        # Only a linked ServerAd registration establishes that an Intune ID is Hybrid.
+        $intuneGuidChecks=@(if ($primaryVerified -and $primaryAd.Count -and $Sources.Entra.State -eq 'OK' -and $Sources.Intune.State -eq 'OK') {
+            foreach ($device in $intune) {
+                $id=ConvertTo-ExplorerIdentityGuid $device.AzureADDeviceId
+                if (-not $id) { continue }
+                $check=$hybrid.Records | Where-Object { $_.TrustType -eq 'ServerAd' -and $_.DeviceId -eq $id } | Select-Object -First 1
+                if ($null -ne $check) { [pscustomobject]@{DeviceId=$id;State=$check.State} }
+            }
+        })
         if ($hybrid.RequiresConfirmation) { [void]$notes.Add('Identita hybrid AD/Entra discordante: verificare i GUID prima di eliminare.') }
         [pscustomobject]@{
             Name = $group.Name; AD = $adText; ADColor = $adColor; Verificati = ('{0}/{1}' -f $verified, $DomainControllers.Count)
             Entra = $entraPresence.Text; EntraColor = $entraPresence.Color; Intune = $intunePresence.Text; IntuneColor = $intunePresence.Color
             HybridCheck=$hybrid.State;HybridColor=$hybrid.Color;HybridIdentity=$hybrid
+            PrimaryDomainController=$primaryDc;IntuneGuidChecks=$intuneGuidChecks
             Censito=$censito; CensitoColor=$censitoColor; CensitoInfo=$censitoInfo
             IntuneSerial=($intuneSerials -join ' | '); GlpiSerial=($glpiSerials -join ' | ')
             SerialCheck=$serialCheck; SerialColor=$serialColor; SerialConflict=$serialConflict; DeletionIdentityConflict=($intuneSerials.Count -gt 1)
@@ -390,8 +396,8 @@ function Read-ExplorerSource {
         if ($null -eq $Configuration) { $Configuration = Read-ExplorerConfiguration $ConfigPath }
         if ($Source -eq 'AD') {
             $query = @{ NameFragment = $NameFragment; ConfigPath = $ConfigPath; PassThru = $true; ErrorAction = 'Stop' }
-            if ([string]::IsNullOrWhiteSpace($DomainController)) { $readControllers=@(Get-ExplorerSearchControllers $Configuration.Settings);if ($readControllers.Count -eq 1) { $DomainController=$readControllers[0] } }
-            if (-not [string]::IsNullOrWhiteSpace($DomainController)) { $query.DomainController = $DomainController }
+            if ([string]::IsNullOrWhiteSpace($DomainController)) { $query.DomainController=@(Get-ExplorerSearchControllers $Configuration.Settings) }
+            else { $query.DomainController=$DomainController }
             $ad = & (Join-Path $PSScriptRoot 'Test-AdLookup.ps1') @query
             $result.Records = @($ad.Computers); $result.DcSources = @($ad.Sources); $result.CheckedAtUtc = $ad.CheckedAtUtc
             $errors = @($ad.Sources | Where-Object { -not $_.Verificato } | ForEach-Object { "$($_.DomainController): $($_.Errore)" })
@@ -458,7 +464,7 @@ function Invoke-ComputerExplorerSearch {
     }
     Send-ExplorerUpdate $sources $controllers 'Ricerca AD sui DC configurati...' $ProgressQueue
     if ($EnabledSources -contains 'AD') {
-        $sources.AD = Read-ExplorerSource -Source AD -NameFragment $fragment -ConfigPath $ConfigPath -Configuration $config -DomainController $(if ($controllers.Count -eq 1) { $controllers[0] } else { '' })
+        $sources.AD = Read-ExplorerSource -Source AD -NameFragment $fragment -ConfigPath $ConfigPath -Configuration $config
     }
     $cloudSources = @($EnabledSources | Where-Object { $_ -in @('Entra', 'Intune') })
     Send-ExplorerUpdate $sources $controllers 'Graph: verifica sessione e accesso.' $ProgressQueue
@@ -479,17 +485,6 @@ function Invoke-ComputerExplorerSearch {
     if ($sources.Intune.State -eq 'OK' -and $sources.GLPI.State -eq 'OK' -and @(Get-ExplorerSerials $sources.Intune.Records).Count) {
         $extra=Read-ExplorerSource -Source GLPI -NameFragment $fragment -ConfigPath $ConfigPath -Configuration $config -IntuneDevices $sources.Intune.Records -GlpiUserToken $GlpiUserToken -GlpiAppToken $GlpiAppToken -GlpiLookupCache $glpiLookupCache
         $extra.Records=@(@($sources.GLPI.Records)+@($extra.Records) | Sort-Object GlpiId -Unique);$sources.GLPI=$extra
-    }
-    if ($sources.AD.State -eq 'OK' -and $sources.Entra.State -eq 'OK') {
-        $lookupIds=@(Get-ExplorerHybridLookupIds -EntraRecords $sources.Entra.Records -AdRecords $sources.AD.Records -Controllers $controllers | Sort-Object -Unique)
-        if ($lookupIds.Count) {
-            Send-ExplorerUpdate $sources $controllers 'Verifica hybrid AD tramite GUID...' $ProgressQueue
-            $lookup=Read-ExplorerHybridAd -DeviceIds $lookupIds -Controllers $controllers
-            $sources.AD | Add-Member -NotePropertyName HybridRecords -NotePropertyValue @($lookup.Records) -Force
-            $sources.AD | Add-Member -NotePropertyName HybridLookupState -NotePropertyValue $lookup.State -Force
-            $sources.AD | Add-Member -NotePropertyName HybridLookupError -NotePropertyValue ([string]$lookup.Error) -Force
-            if ($lookup.State -eq 'Errore') { $sources.AD.State='Errore';$sources.AD.Error=[string]$lookup.Error }
-        }
     }
     Send-ExplorerUpdate $sources $controllers 'Ricerca completata.' $ProgressQueue -Complete
 }

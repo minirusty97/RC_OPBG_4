@@ -81,11 +81,15 @@ try {
     $fixture.Requests.Clear()
     $single = & $ToolPath -NameFragment 'PC-' -ConfigPath $configPath -PassThru -DomainController 'dc3.example.invalid'
     if ($fixture.Requests.Count -ne 1 -or $fixture.Requests[0].Server -ne 'dc3.example.invalid' -or $single.Sources.Count -ne 1) { throw 'Single-DC reader queried more than its configured server.' }
+    $fixture.Requests.Clear()
+    $ordered = & $ToolPath -NameFragment 'PC-' -ConfigPath $configPath -PassThru -DomainController @('dc3.example.invalid','dc1.example.invalid')
+    if (($fixture.Requests.Server -join '|') -ne 'dc3.example.invalid|dc1.example.invalid' -or $ordered.Sources.Count -ne 2) { throw 'AD reader lost the requested primary-first order.' }
+    $fixture.Requests.Clear()
     $rejected = $false
     try { & $ToolPath -NameFragment 'PC-' -ConfigPath $configPath -PassThru -DomainController 'unconfigured.example.invalid' | Out-Null }
     catch { $rejected = $true }
-    if (-not $rejected -or $fixture.Requests.Count -ne 1) { throw 'Unconfigured DC was queried.' }
-    'PASS: parallel AD reader targets one configured DC and rejects unknown servers.'
+    if (-not $rejected -or $fixture.Requests.Count -ne 0) { throw 'Unconfigured DC was queried.' }
+    'PASS: AD reader honors configured controller order and rejects unknown servers before a request.'
     $fixture.Requests.Clear()
     $rejected = $false
     try { & $ToolPath -NameFragment 'P' -ConfigPath $configPath -PassThru | Out-Null }

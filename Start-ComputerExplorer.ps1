@@ -353,10 +353,15 @@ function Show-SelectedComputer {
     $identity=Get-UiSetting $computer 'HybridIdentity' $null
     if ($null -ne $identity) {
         [void]$lines.Add('');[void]$lines.Add('IDENTITA AD / ENTRA: '+$identity.State)
+        $primary=Get-UiSetting $computer 'PrimaryDomainController' ''
+        if ($primary) { [void]$lines.Add('DC principale: '+$primary) }
         foreach ($check in $identity.Records) {
             [void]$lines.Add($check.TrustType+' | Object ID Entra: '+$check.EntraObjectId+' | Device ID Entra: '+$check.DeviceId)
             [void]$lines.Add('  '+$check.State+' | '+$check.Detail)
             foreach ($match in $check.AdMatches) { [void]$lines.Add('  AD: '+$match.Name+' | GUID: '+$match.ObjectGUID+' | DC: '+$match.DomainController+' | DN: '+$match.DistinguishedName) }
+        }
+        foreach ($check in (Get-UiSetting $computer 'IntuneGuidChecks' @())) {
+            [void]$lines.Add('  Intune | Device ID Entra: '+$check.DeviceId+' | Confronto con GUID AD: '+$check.State)
         }
     }
     [void]$lines.Add(''); [void]$lines.Add('ACTIVE DIRECTORY')
