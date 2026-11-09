@@ -31,7 +31,18 @@ La prima apertura copia i modelli solo se i file personali non esistono. In Impo
 
 Per aggiornare, chiudere la suite e i moduli aperti, scaricare il nuovo setup dalla release ed eseguirlo. Configurazione e token vengono conservati. Il setup rifiuta di aggiornare mentre un processo della suite è aperto e impedisce di installare una versione precedente. La disinstallazione rimuove il programma e mantiene i dati personali; questi possono essere rimossi separatamente dalla propria cartella dati.
 
-Dalla 1.0.8, **Aggiornamenti** controlla il feed pubblico e **Aggiorna** scarica e installa su richiesta. Il controllo parte anche all’apertura della finestra, in background. La repository deve essere pubblica; i client non memorizzano token GitHub. La prima versione dotata di OTA va installata manualmente. I moduli aperti devono essere chiusi prima dell’installazione e non vengono terminati automaticamente.
+**Cerca aggiornamenti** controlla il feed pubblico. **Installa aggiornamento**
+chiede conferma, scarica il setup e verifica il checksum. Il controllo parte
+anche all'apertura. I moduli aperti devono essere chiusi prima di installare.
+
+Dalla 1.3.3 il processo di aggiornamento parte dalla cartella di installazione
+e conferma l'avvio prima che la finestra si chiuda. In caso di errore l'app
+mostra un messaggio. Il registro `update-install.log` è nella sottocartella
+del download sotto `%LOCALAPPDATA%\AssistenteIT\Updates`. Il programma si
+riapre dopo la verifica della versione installata.
+
+Per installare la correzione quando il vecchio aggiornamento si ferma dopo
+il download, chiudere Assistente IT e avviare il setup della nuova release.
 
 Dalla versione **1.0.2** anche cartelle, chiave di disinstallazione, script di avvio e nomi interni usano **Assistente IT**. Il setup riconosce le installazioni 1.0.0 e 1.0.1, sposta i dati personali nel nuovo percorso e rimuove la precedente registrazione e i file del programma. Una precedente installazione in una cartella personalizzata viene trasferita al nuovo percorso predefinito; per mantenerla, selezionare esplicitamente quella stessa cartella nel setup.
 

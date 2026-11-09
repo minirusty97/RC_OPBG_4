@@ -1,7 +1,8 @@
 # Stato condiviso per riprendere il lavoro
 
 Repository: `minirusty97/RC_OPBG_4`. Consultare sempre il main e la release
-effettiva. La versione sorgente **1.3.2** ripristina la ricerca su tutti i
+effettiva. La versione sorgente **1.3.3** attende la conferma di avvio
+dell'installazione OTA e registra l'esito. La **1.3.2** ripristina la ricerca su tutti i
 DC in Computer Explorer e confronta i GUID Hybrid già letti sul DC
 principale. La **1.3.1** aggiorna la finestra di Gestione
 Ring con riepilogo, colonne di inventario GLPI, filtri locali per colonna e
@@ -123,3 +124,17 @@ già letto. I test sintetici coprono la presenza sulle sole repliche
 secondarie, la discordanza, il DC principale in errore e la copertura
 con la configurazione precedente. Per confrontare i tempi dei filtri
 serve una misura sul DC con gli stessi dati.
+
+## Aggiornamento OTA in 1.3.3
+
+Il processo di aggiornamento esegue lo script dalla cartella installata
+e lavora nella directory del download. Il wrapper resta aperto fino alla
+conferma di avvio. Gli errori d'avvio sono visibili e il processo registra
+l'esito in `update-install.log`. Restano previsti il controllo del checksum,
+l'attesa della chiusura dei processi e la riapertura dopo l'installazione.
+
+Il test Windows parte dalla finestra di un'installazione 1.3.1 con
+l'aggiornatore estratto dal nuovo setup. Usa come risposte locali i file
+reali della build, prova l'installazione e il riavvio e controlla
+configurazione e credenziali cifrate. La riproduzione isolata con
+l'aggiornatore precedente ha completato il ciclo 1.3.1 → 1.3.2.

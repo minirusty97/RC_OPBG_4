@@ -237,36 +237,58 @@ function Install-AssistenteITDownloadedUpdate {
     if ($null -eq $script:DownloadedUpdate) { return }
     if ((Get-AssistenteITOpenModules) -gt 0) {
         $status.Text='Aggiornamento scaricato. Chiudi i moduli aperti e premi Installa.'
-        $installUpdateButton.Text='Installa'; return
+        $installUpdateButton.Text='Installa'
+        [void][Windows.Forms.MessageBox]::Show($form,$status.Text,'Aggiornamento Assistente IT','OK','Information')
+        return
     }
-    try {
-        Start-AssistenteITUpdateHandoff -PlanPath $script:DownloadedUpdate.PlanPath -InstallRoot $PSScriptRoot
-        $form.Close()
+    try { Start-AssistenteITUpdateOperation Install }
+    catch {
+        $status.Text=$_.Exception.Message
+        [void][Windows.Forms.MessageBox]::Show($form,$status.Text,'Aggiornamento Assistente IT','OK','Error')
     }
-    catch { $status.Text=$_.Exception.Message; $installUpdateButton.Enabled=$true }
 }
 
 function Start-AssistenteITUpdateOperation {
-    param([ValidateSet('Check','Download')][string]$Operation)
+    param([ValidateSet('Check','Download','Install')][string]$Operation)
     if ($null -ne $script:UpdatePipeline) { return }
     $script:UpdateOperation=$Operation
     $releaseButton.Enabled=$false; $installUpdateButton.Enabled=$false
     if ($Operation -eq 'Check') { $status.Text='Controllo aggiornamenti su GitHub...'; $script:DownloadedUpdate=$null; $script:UpdateInfo=$null; $installUpdateButton.Visible=$false }
-    else { $status.Text='Download aggiornamento '+$script:UpdateInfo.Version+'...' }
-    if ($null -eq $script:UpdateWorker) {
-        $script:UpdateWorker=[RunspaceFactory]::CreateRunspace(); $script:UpdateWorker.ApartmentState='STA'
-        $script:UpdateWorker.ThreadOptions='ReuseThread'; $script:UpdateWorker.Open()
+    elseif ($Operation -eq 'Download') { $status.Text='Download aggiornamento '+$script:UpdateInfo.Version+'...' }
+    else { $status.Text='Avvio dell''installazione...'; $form.Enabled=$false }
+    try {
+        if ($null -eq $script:UpdateWorker) {
+            $worker=[RunspaceFactory]::CreateRunspace()
+            try {
+                $worker.ApartmentState='STA'; $worker.ThreadOptions='ReuseThread'; $worker.Open()
+                $script:UpdateWorker=$worker
+            }
+            catch { $worker.Dispose(); throw }
+        }
+        $script:UpdatePipeline=[PowerShell]::Create(); $script:UpdatePipeline.Runspace=$script:UpdateWorker
+        $code={
+            param($Module,$Operation,$Version,$Update,$Directory,$Queue,$Downloaded,$InstallRoot)
+            $ErrorActionPreference='Stop'
+            Import-Module $Module -ErrorAction Stop
+            switch ($Operation) {
+                'Check' { Get-AssistenteITUpdate -CurrentVersion $Version }
+                'Download' { Save-AssistenteITUpdate -Update $Update -CacheDirectory $Directory -ProgressQueue $Queue }
+                'Install' {
+                    Start-AssistenteITUpdateHandoff -PlanPath $Downloaded.PlanPath -InstallRoot $InstallRoot
+                    $true
+                }
+            }
+        }
+        [void]$script:UpdatePipeline.AddScript($code.ToString()).AddArgument((Join-Path $PSScriptRoot 'AssistenteIT/AssistenteIT.Update.psm1')).AddArgument($Operation).AddArgument($manifest.Version).AddArgument($script:UpdateInfo).AddArgument((Join-Path $paths.DataRoot 'Updates')).AddArgument($script:UpdateQueue).AddArgument($script:DownloadedUpdate).AddArgument($PSScriptRoot)
+        $script:UpdateInvocation=$script:UpdatePipeline.BeginInvoke(); $updateTimer.Start()
     }
-    $script:UpdatePipeline=[PowerShell]::Create(); $script:UpdatePipeline.Runspace=$script:UpdateWorker
-    $code={
-        param($Module,$Operation,$Version,$Update,$Directory,$Queue)
-        $ErrorActionPreference='Stop'
-        Import-Module $Module -ErrorAction Stop
-        if ($Operation -eq 'Check') { Get-AssistenteITUpdate -CurrentVersion $Version }
-        else { Save-AssistenteITUpdate -Update $Update -CacheDirectory $Directory -ProgressQueue $Queue }
+    catch {
+        if ($null -ne $script:UpdatePipeline) { $script:UpdatePipeline.Dispose() }
+        $script:UpdatePipeline=$null; $script:UpdateInvocation=$null
+        $form.Enabled=$true; $releaseButton.Enabled=$true
+        $installUpdateButton.Enabled=$null -ne $script:UpdateInfo -and $script:UpdateInfo.Available
+        throw
     }
-    [void]$script:UpdatePipeline.AddScript($code.ToString()).AddArgument((Join-Path $PSScriptRoot 'AssistenteIT/AssistenteIT.Update.psm1')).AddArgument($Operation).AddArgument($manifest.Version).AddArgument($script:UpdateInfo).AddArgument((Join-Path $paths.DataRoot 'Updates')).AddArgument($script:UpdateQueue)
-    $script:UpdateInvocation=$script:UpdatePipeline.BeginInvoke(); $updateTimer.Start()
 }
 
 $form = New-Object Windows.Forms.Form
@@ -410,7 +432,11 @@ $accessTimer.Add_Tick({
 })
 $moduleTimer=New-Object Windows.Forms.Timer;$moduleTimer.Interval=300
 $moduleTimer.Add_Tick({ $idle=(Get-AssistenteITOpenModules) -eq 0 -and $null -eq $script:AccessTask;$accessButton.Enabled=$idle;$settingsButton.Enabled=$idle });$moduleTimer.Start()
-$form.Add_FormClosing({param($sender,$eventArgs) if ((Get-AssistenteITOpenModules) -gt 0) { $eventArgs.Cancel=$true;$status.Text='Chiudi i moduli aperti prima di uscire da Assistente IT.' } })
+$form.Add_FormClosing({
+    param($sender,$eventArgs)
+    if ($script:UpdateOperation -eq 'Install' -and $null -ne $script:UpdateInvocation) { $eventArgs.Cancel=$true;return }
+    if ((Get-AssistenteITOpenModules) -gt 0) { $eventArgs.Cancel=$true;$status.Text='Chiudi i moduli aperti prima di uscire da Assistente IT.' }
+})
 $updateTimer=New-Object Windows.Forms.Timer; $updateTimer.Interval=250
 $updateTimer.Add_Tick({
     $progress=$null
@@ -418,7 +444,7 @@ $updateTimer.Add_Tick({
         $status.Text='Download aggiornamento: {0:N1} MB' -f ($progress.Bytes/1MB)
     }
     if ($null -eq $script:UpdateInvocation -or -not $script:UpdateInvocation.IsCompleted) { return }
-    $operation=$script:UpdateOperation; $success=$false
+    $operation=$script:UpdateOperation; $success=$false; $installError=''
     try {
         $output=@($script:UpdatePipeline.EndInvoke($script:UpdateInvocation))
         if ($script:UpdatePipeline.Streams.Error.Count -gt 0) { throw $script:UpdatePipeline.Streams.Error[0] }
@@ -429,15 +455,21 @@ $updateTimer.Add_Tick({
             if ($script:UpdateInfo.Available) { $status.Text='Disponibile Assistente IT '+$script:UpdateInfo.Version+'. Premi Installa aggiornamento per installare.' }
             else { $status.Text='Assistente IT è aggiornato (versione '+$manifest.Version+').' }
         }
-        else { $script:DownloadedUpdate=$output[0]; $installUpdateButton.Text='Installa'; $status.Text='Download verificato. Preparazione installazione...' }
+        elseif ($operation -eq 'Download') { $script:DownloadedUpdate=$output[0]; $installUpdateButton.Text='Installa'; $status.Text='Download verificato. Preparazione installazione...' }
         $success=$true
     }
-    catch { $status.Text='Aggiornamento: '+$_.Exception.Message }
+    catch {
+        $status.Text='Aggiornamento: '+$_.Exception.Message
+        if ($operation -eq 'Install') { $installError=$_.Exception.Message }
+    }
     finally {
         $updateTimer.Stop(); $script:UpdatePipeline.Dispose(); $script:UpdatePipeline=$null; $script:UpdateInvocation=$null
+        if ($operation -eq 'Install') { $form.Enabled=$true }
         $releaseButton.Enabled=$true; $installUpdateButton.Enabled=$null -ne $script:UpdateInfo -and $script:UpdateInfo.Available
     }
-    if ($success -and $operation -eq 'Download') { Install-AssistenteITDownloadedUpdate }
+    if ($installError) { [void][Windows.Forms.MessageBox]::Show($form,$installError,'Aggiornamento Assistente IT','OK','Error') }
+    elseif ($success -and $operation -eq 'Download') { Install-AssistenteITDownloadedUpdate }
+    elseif ($success -and $operation -eq 'Install') { $form.Close() }
 })
 $form.Add_Shown({
     if (-not $SmokeTestOutput) {
