@@ -143,9 +143,10 @@ l'aggiornatore precedente ha completato il ciclo 1.3.1 → 1.3.2.
 ## Prova isolata di lettura AD parallela
 
 Il ramo `diagnostic/ad-parallelo` parte dalla 1.3.3. La build portatile
-consente di alternare la lettura sequenziale e quella con due processi
-isolati, con diagnosi per fonte e per DC. In caso di errore prosegue
-in sequenza e ritenta una volta i DC non verificati. Il pacchetto usa
+avvia in parallelo fino a cinque DC in processi isolati e mantiene la
+lettura sequenziale per confronto. Salva un log per ricerca con fasi,
+tempi, esito e ritentativi per DC. Dopo il primo passaggio, ritenta una
+volta in sequenza i DC non verificati. Il pacchetto usa
 dati utente separati, offre solo Computer Explorer in consultazione e
 non accede al canale OTA. Consultare [il confronto](Test-AD-Parallelo.md)
 prima di valutare l'integrazione sul main.

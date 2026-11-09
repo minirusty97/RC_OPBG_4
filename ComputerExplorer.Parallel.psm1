@@ -1,6 +1,7 @@
 ﻿#requires -version 5.1
 Set-StrictMode -Version 2.0
 Import-Module (Join-Path $PSScriptRoot 'ComputerExplorer.Core.psm1') -ErrorAction Stop
+. (Join-Path $PSScriptRoot 'ComputerExplorer.AdLog.ps1')
 $script:LastParallelRows=$null;$script:ParallelRowsRevision=0
 
 function New-ParallelSource {
@@ -14,7 +15,7 @@ function Get-ExplorerReadWorkerScript {
         $ErrorActionPreference = 'Stop'
         if ($Job.Kind -eq 'AD' -and $Job.Isolated) {
             . (Join-Path (Split-Path $CorePath -Parent) 'ComputerExplorer.AdRead.ps1')
-            return Read-ExplorerAdProcess -CorePath $CorePath -ConfigPath $ConfigPath -Fragment $Fragment -DomainController $Job.DomainController -TimeoutSeconds $Job.TimeoutSeconds
+            return Read-ExplorerAdProcess -CorePath $CorePath -ConfigPath $ConfigPath -Fragment $Fragment -DomainController $Job.DomainController -TimeoutSeconds $Job.TimeoutSeconds -AdSearchLog $Job.AdSearchLog
         }
         Import-Module $CorePath -ErrorAction Stop
         if ($Job.Kind -eq 'GraphAuth') {
@@ -24,7 +25,10 @@ function Get-ExplorerReadWorkerScript {
         $arguments = @{ Source=$Job.Kind; NameFragment=$Fragment; ConfigPath=$ConfigPath; Configuration=$Configuration; CloudCache=$Cache
             GlpiUserToken=$UserToken; GlpiAppToken=$AppToken; ForceCloudRefresh=$Refresh;GlpiLookupCache=$GlpiLookupCache }
         if ($null -ne $Job.PSObject.Properties['SerialDevices']) { $arguments.IntuneDevices=$Job.SerialDevices }
-        if ($Job.Kind -eq 'AD') { $arguments.DomainController=$Job.DomainController }
+        if ($Job.Kind -eq 'AD') {
+            $arguments.DomainController=$Job.DomainController
+            if ($null -ne $Job.AdSearchLog) { $arguments.AdSearchLog=$Job.AdSearchLog }
+        }
         if ($Job.Kind -in @('Entra','Intune','GLPI')) { $arguments.ProgressQueue=$Job.ReadProgress }
         Read-ExplorerSource @arguments
     }
@@ -86,14 +90,30 @@ function Invoke-ComputerExplorerParallelSearch {
         [ValidateSet('AD','Entra','Intune','GLPI')][string[]]$EnabledSources=@('AD','Entra','Intune','GLPI'),
         [Security.SecureString]$GlpiUserToken, [Security.SecureString]$GlpiAppToken,
         [switch]$ForceCloudRefresh, $ProgressQueue,
-        [switch]$ParallelAdReads, [ValidateRange(1,120)][int]$AdReadTimeoutSeconds=30
+        [switch]$ParallelAdReads, [ValidateRange(1,120)][int]$AdReadTimeoutSeconds=30,
+        [string]$SearchLogPath
     )
-    $config=Read-ExplorerConfiguration $ConfigPath
-    if ($ParallelAdReads) { $ConfigPath=(Resolve-Path -LiteralPath $ConfigPath -ErrorAction Stop).ProviderPath }
-    $fragment=$NameFragment.Trim()
-    if ($fragment.Length -lt $config.MinimumCharacters) { throw "Inserire almeno $($config.MinimumCharacters) caratteri." }
+    $watch=[Diagnostics.Stopwatch]::StartNew()
+    $log=$null
+    if ($SearchLogPath) {
+        $SearchLogPath=[IO.Path]::GetFullPath($SearchLogPath)
+        [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($SearchLogPath))
+        [IO.File]::Open($SearchLogPath,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write).Dispose()
+        $log=@{Path=$SearchLogPath}
+    }
     $enabled=@($EnabledSources | Sort-Object -Unique)
-    $controllers=@(Get-ExplorerSearchControllers $config.Settings)
+    Write-ExplorerSearchLog $log 'search.start' @{Sources=$enabled; ParallelAd=[bool]$ParallelAdReads; ForceCloudRefresh=[bool]$ForceCloudRefresh}
+    try {
+        $config=Read-ExplorerConfiguration $ConfigPath
+        if ($ParallelAdReads) { $ConfigPath=(Resolve-Path -LiteralPath $ConfigPath -ErrorAction Stop).ProviderPath }
+        $fragment=$NameFragment.Trim()
+        if ($fragment.Length -lt $config.MinimumCharacters) { throw "Inserire almeno $($config.MinimumCharacters) caratteri." }
+        $controllers=@(Get-ExplorerSearchControllers $config.Settings)
+    }
+    catch {
+        Write-ExplorerSearchLog $log 'search.config.error' @{ElapsedMs=$watch.ElapsedMilliseconds} -Failure $_
+        throw
+    }
     $glpiLookupCache=[hashtable]::Synchronized(@{})
     $sources=[ordered]@{}
     foreach ($name in @('AD','Entra','Intune','GLPI')) {
@@ -115,7 +135,8 @@ function Invoke-ComputerExplorerParallelSearch {
     $adResults=@{}
     $adFirstFailures=@{}
     $adConcurrency=1
-    if ($ParallelAdReads) { $adConcurrency=2 }
+    if ($ParallelAdReads) { $adConcurrency=[Math]::Max(1,[Math]::Min(5,$controllers.Count)) }
+    Write-ExplorerSearchLog $log 'search.configured' @{Controllers=$controllers; AdConcurrency=$adConcurrency; AdTimeoutSeconds=$AdReadTimeoutSeconds}
     if ($sources.AD.State -eq 'In attesa') {
         foreach ($dc in $controllers) { $adPending.Enqueue($dc) }
         $sources.AD.Progress='0/{0} DC' -f $controllers.Count
@@ -130,13 +151,16 @@ function Invoke-ComputerExplorerParallelSearch {
     $body=Get-ExplorerReadWorkerScript
     $serialGlpiQueued=$false
     $script:LastParallelRows=$null;$script:ParallelRowsRevision=0
-    $watch=[Diagnostics.Stopwatch]::StartNew()
+    $terminalEvent='search.interrupted'
     try {
         $pool.Open(); $adPool.Open()
         $arguments=@{Pool=$pool;Body=$body;ConfigPath=$ConfigPath;Fragment=$fragment;Configuration=$config;Cache=$cache
             UserToken=$GlpiUserToken;AppToken=$GlpiAppToken;Refresh=[bool]$ForceCloudRefresh;GlpiLookupCache=$glpiLookupCache}
         $adArguments=@{}; foreach ($key in $arguments.Keys) { $adArguments[$key]=$arguments[$key] }; $adArguments.Pool=$adPool
-        foreach ($job in $jobs) { [void]$tasks.Add((Start-ExplorerReadTask -Job $job @arguments)) }
+        foreach ($job in $jobs) {
+            Write-ExplorerSearchLog $log 'source.start' @{Source=$job.Kind}
+            [void]$tasks.Add((Start-ExplorerReadTask -Job $job @arguments))
+        }
         Send-ParallelSnapshot $sources $controllers 'Ricerca avviata.' $ProgressQueue
         while ($tasks.Count -gt 0 -or $adPending.Count -gt 0 -or $adRetry.Count -gt 0) {
             $updated=$false;$dataUpdated=$false
@@ -145,9 +169,12 @@ function Invoke-ComputerExplorerParallelSearch {
                 if ($adPending.Count -gt 0) { $dc=$adPending.Dequeue() }
                 elseif ($adRetry.Count -gt 0 -and $adActive.Count -eq 0) { $dc=$adRetry.Dequeue();$attempt=2 }
                 else { break }
+                $adLog=$null
+                if ($null -ne $log) { $adLog=@{Path=$log.Path; Dc=$dc; Attempt=$attempt} }
                 $adJob=[pscustomobject]@{
-                    Kind='AD'; DomainController=$dc; Isolated=[bool]$ParallelAdReads; Attempt=$attempt; TimeoutSeconds=$AdReadTimeoutSeconds
+                    Kind='AD'; DomainController=$dc; Isolated=[bool]$ParallelAdReads; Attempt=$attempt; TimeoutSeconds=$AdReadTimeoutSeconds; AdSearchLog=$adLog
                 }
+                Write-ExplorerSearchLog $adLog 'ad.dispatch' @{ActiveReaders=($adActive.Count+1); ElapsedMs=$watch.ElapsedMilliseconds}
                 [void]$tasks.Add((Start-ExplorerReadTask -Job $adJob @adArguments))
                 $adActive[$dc]=$true
                 $updated=$true
@@ -180,7 +207,12 @@ function Invoke-ComputerExplorerParallelSearch {
                     }
                     $result=$output[0]
                 }
-                catch { $result=New-ParallelSource $job.Kind 'Errore' $_.Exception.Message }
+                catch {
+                    $failureLog=$log
+                    if ($job.Kind -eq 'AD') { $failureLog=$job.AdSearchLog }
+                    Write-ExplorerSearchLog $failureLog 'reader.error' @{Source=$job.Kind} -Failure $_
+                    $result=New-ParallelSource $job.Kind 'Errore' $_.Exception.Message
+                }
                 finally { $task.Watch.Stop(); $task.Pipeline.Dispose(); [void]$tasks.Remove($task) }
                 if ($task.TimedOut) {
                     $result=New-ParallelSource $job.Kind 'Errore' ('Tempo massimo di lettura {0} superato ({1} s). Fonte non verificabile; ripetere con Rileggi cloud.' -f $job.Kind,$config.CloudReadTimeoutSeconds)
@@ -188,9 +220,18 @@ function Invoke-ComputerExplorerParallelSearch {
                         if ([string]$key -like ('*|'+$job.Kind)) { $cache.Remove($key) }
                     }
                 }
+                if ($job.Kind -ne 'AD') {
+                    $sourceName=$job.Kind
+                    if ($null -ne $job.PSObject.Properties['SerialDevices']) { $sourceName='GLPI.Serial' }
+                    Write-ExplorerSearchLog $log 'source.end' @{Source=$sourceName; State=$result.State; ElapsedMs=$task.Watch.ElapsedMilliseconds; TimedOut=$task.TimedOut}
+                }
                 if ($job.Kind -eq 'GraphAuth') {
                     if ($result.State -eq 'OK') {
-                        foreach ($name in $cloud) { $sources[$name].Progress='Lettura'; [void]$tasks.Add((Start-ExplorerReadTask -Job ([pscustomobject]@{Kind=$name;ReadProgress=$readProgress}) @arguments)) }
+                        foreach ($name in $cloud) {
+                            $sources[$name].Progress='Lettura'
+                            Write-ExplorerSearchLog $log 'source.start' @{Source=$name}
+                            [void]$tasks.Add((Start-ExplorerReadTask -Job ([pscustomobject]@{Kind=$name;ReadProgress=$readProgress}) @arguments))
+                        }
                     }
                     else {
                         foreach ($name in $cloud) {
@@ -204,18 +245,23 @@ function Invoke-ComputerExplorerParallelSearch {
                     $adActive.Remove($dc)
                     $sources.AD.CurrentTarget=@($adActive.Keys) -join ', '
                     if ($result.DcSources.Count -ne 1 -or $result.DcSources[0].DomainController -ine $dc) {
+                        Write-ExplorerSearchLog $job.AdSearchLog 'ad.response.invalid' @{Sources=$result.DcSources.Count}
                         $detail=$result.Error
                         if (-not $detail) { $detail='Risposta AD mancante o riferita a un altro DC.' }
                         $result=New-ParallelSource 'AD' 'Errore' $detail
                         $result.DcSources=@([pscustomobject]@{DomainController=$dc;Stato='Errore';Verificato=$false;Trovati=$null;Errore=$detail})
                     }
                     $dcResult=$result.DcSources[0]
+                    if ($null -ne $job.AdSearchLog) {
+                        Write-ExplorerSearchLog $job.AdSearchLog 'ad.attempt.end' @{State=$dcResult.Stato; Verified=$dcResult.Verificato; Records=$dcResult.Trovati; ElapsedMs=$task.Watch.ElapsedMilliseconds}
+                    }
                     $seconds=$task.Watch.Elapsed.TotalSeconds
                     $firstFailure=$adFirstFailures[$dc]
                     if ($ParallelAdReads -and $job.Attempt -eq 1 -and -not $dcResult.Verificato) {
                         $adConcurrency=1
                         $adFirstFailures[$dc]=[pscustomobject]@{Seconds=$seconds;Error=$dcResult.Errore}
                         $adRetry.Enqueue($dc)
+                        Write-ExplorerSearchLog $job.AdSearchLog 'ad.retry.queued' @{ActiveReaders=$adActive.Count}
                         $sources.AD.Progress='{0}/{1} DC | ripiego sequenziale' -f $adResults.Count,$controllers.Count
                         $updated=$true
                         continue
@@ -249,6 +295,7 @@ function Invoke-ComputerExplorerParallelSearch {
                 if (@(Get-ExplorerSerials $sources.Intune.Records).Count) {
                     $sources.GLPI.State='In attesa';$sources.GLPI | Add-Member -NotePropertyName Progress -NotePropertyValue 'Ricerca tramite seriali Intune' -Force
                     $sources.GLPI.CompletedAfterSeconds=$null
+                    Write-ExplorerSearchLog $log 'source.start' @{Source='GLPI.Serial'}
                     [void]$tasks.Add((Start-ExplorerReadTask -Job ([pscustomobject]@{Kind='GLPI';ReadProgress=$readProgress;SerialDevices=@($sources.Intune.Records)}) @arguments))
                     $updated=$true;$dataUpdated=$true
                 }
@@ -274,8 +321,19 @@ function Invoke-ComputerExplorerParallelSearch {
         $message='Ricerca completata in {0:N1} s.' -f $watch.Elapsed.TotalSeconds
         if ($errorCount -gt 0) { $message+=' Fonti con errori: {0}.' -f $errorCount }
         Send-ParallelSnapshot $sources $controllers $message $ProgressQueue -Complete
+        $terminalEvent='search.end'
     }
-    finally { Stop-ExplorerReadTasks $tasks; $adPool.Close(); $adPool.Dispose(); $pool.Close(); $pool.Dispose(); $watch.Stop() }
+    catch [System.Management.Automation.PipelineStoppedException] { throw }
+    catch {
+        $terminalEvent='search.failed'
+        Write-ExplorerSearchLog $log 'search.error' -Failure $_
+        throw
+    }
+    finally {
+        Stop-ExplorerReadTasks $tasks
+        $adPool.Close(); $adPool.Dispose(); $pool.Close(); $pool.Dispose(); $watch.Stop()
+        Write-ExplorerSearchLog $log $terminalEvent @{AdState=$sources.AD.State; CompletedDc=$adResults.Count; ConfiguredDc=$controllers.Count; ElapsedMs=$watch.ElapsedMilliseconds}
+    }
 }
 
 Export-ModuleMember -Function Invoke-ComputerExplorerParallelSearch

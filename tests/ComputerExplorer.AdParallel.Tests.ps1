@@ -15,7 +15,7 @@ function New-TestCase {
     $path = Join-Path $directory 'config.json'
     @{DomainControllers=$controllers; Fixture=$Actions; DelayMs=$DelayMs; Fragment=$fragment} |
         ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $path -Encoding UTF8
-    [pscustomobject]@{ Directory=$directory; Config=$path }
+    [pscustomobject]@{ Directory=$directory; Config=$path; Log=(Join-Path $directory ('search-'+[guid]::NewGuid().ToString('N')+'.log')) }
 }
 
 function Start-TestRead {
@@ -23,11 +23,11 @@ function Start-TestRead {
     $pipeline = [PowerShell]::Create()
     try {
         [void]$pipeline.AddScript({
-            param($ModulePath,$Config,$Fragment,$Parallel,$Timeout)
+            param($ModulePath,$Config,$Fragment,$Parallel,$Timeout,$Log)
             $ErrorActionPreference='Stop'
             Import-Module $ModulePath -ErrorAction Stop
-            Invoke-ComputerExplorerParallelSearch -NameFragment $Fragment -ConfigPath $Config -EnabledSources AD -ParallelAdReads:$Parallel -AdReadTimeoutSeconds $Timeout
-        }.ToString()).AddArgument($modulePath).AddArgument($Case.Config).AddArgument($fragment).AddArgument([bool]$Parallel).AddArgument($Timeout)
+            Invoke-ComputerExplorerParallelSearch -NameFragment $Fragment -ConfigPath $Config -EnabledSources AD -ParallelAdReads:$Parallel -AdReadTimeoutSeconds $Timeout -SearchLogPath $Log
+        }.ToString()).AddArgument($modulePath).AddArgument($Case.Config).AddArgument($fragment).AddArgument([bool]$Parallel).AddArgument($Timeout).AddArgument($Case.Log)
         [pscustomobject]@{Pipeline=$pipeline; Operation=$pipeline.BeginInvoke()}
     }
     catch { $pipeline.Dispose(); throw }
@@ -63,14 +63,23 @@ function Get-TestWorkerId {
     return [int]([IO.File]::ReadAllText((Join-Path $Case.Directory "$Dc.$Attempt.pid")))
 }
 
+function Get-TestEvents {
+    param($Case)
+    Get-Content -LiteralPath $Case.Log -Encoding UTF8 | ForEach-Object { ConvertFrom-Json -InputObject $_ }
+}
+
+$holdAll=@{}
+foreach ($dc in $controllers) { $holdAll[$dc]='Hold' }
+
 try {
-    foreach ($file in @('ComputerExplorer.Parallel.psm1','ComputerExplorer.AdRead.ps1','ComputerExplorer.Core.psm1',
+    foreach ($file in @('ComputerExplorer.Parallel.psm1','ComputerExplorer.AdRead.ps1','ComputerExplorer.AdLog.ps1','ComputerExplorer.Core.psm1',
         'ComputerExplorer.Identity.ps1','Glpi.Credentials.ps1','Graph.Authentication.ps1')) {
         Copy-Item -LiteralPath (Join-Path $root $file) -Destination $app
     }
     @'
 [CmdletBinding()]
-param([string]$ConfigPath,[string]$NameFragment,[string]$DomainController,[switch]$PassThru)
+param([string]$ConfigPath,[string]$NameFragment,[string]$DomainController,[switch]$PassThru,[hashtable]$AdSearchLog)
+. (Join-Path $PSScriptRoot 'ComputerExplorer.AdLog.ps1')
 $config = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
 if ($NameFragment -cne $config.Fragment -or -not $PassThru) { throw 'Query arguments changed across the process boundary.' }
 $directory = Split-Path $ConfigPath -Parent
@@ -87,9 +96,12 @@ if ($attempt -eq 2) {
     })
     if ($otherWorkers.Count) { throw 'Synthetic serial retry started with another AD worker still running.' }
 }
+Write-ExplorerSearchLog $AdSearchLog 'ad.query.start'
 $action = $config.Fixture.PSObject.Properties[$DomainController]
 if ($null -ne $action) {
-    if ($action.Value -eq 'Error') { throw 'Synthetic AD refusal.' }
+    if ($action.Value -eq 'Error') {
+        Write-Error -ErrorId SyntheticReadFailure -Category ResourceUnavailable -Message 'Synthetic AD refusal. DiagnosticPrivateFixture.' -ErrorAction Stop
+    }
     if ($action.Value -eq 'Timeout' -and $attempt -eq 1) { Start-Sleep -Seconds 60 }
     if ($action.Value -eq 'Hold') {
         $release = Join-Path $directory "$DomainController.release"
@@ -97,6 +109,7 @@ if ($null -ne $action) {
     }
 }
 Start-Sleep -Milliseconds $config.DelayMs
+Write-ExplorerSearchLog $AdSearchLog 'ad.query.end' @{Records=1}
 [pscustomobject]@{
     CheckedAtUtc=[datetimeoffset]::UtcNow
     Sources=@([pscustomobject]@{DomainController=$DomainController;Stato='OK';Verificato=$true;Trovati=1;Errore=$null})
@@ -108,18 +121,24 @@ Start-Sleep -Milliseconds $config.DelayMs
 }
 '@ | Set-Content -LiteralPath (Join-Path $app 'Test-AdLookup.ps1') -Encoding UTF8
 
-    $case = New-TestCase 'overlap' @{$controllers[0]='Hold';$controllers[1]='Hold'}
+    $case = New-TestCase 'overlap' $holdAll
     $task = Start-TestRead $case -Parallel
     try {
-        Wait-ForFixture { @(Get-ChildItem $case.Directory -Filter '*.pid').Count -ge 2 }
-        $first = Get-TestWorkerId $case $controllers[0]
-        $second = Get-TestWorkerId $case $controllers[1]
-        if ($first -eq $PID -or $second -eq $PID -or $first -eq $second -or
-            @(Get-ChildItem $case.Directory -Filter '*.pid').Count -ne 2) { throw 'Expected two independent workers and no third reader.' }
+        Wait-ForFixture { @(Get-ChildItem $case.Directory -Filter '*.pid').Count -eq 5 }
+        $ids = @($controllers | ForEach-Object { Get-TestWorkerId $case $_ })
+        if ($ids -contains $PID -or @($ids | Sort-Object -Unique).Count -ne 5 -or
+            @(Get-Process -Id $ids -ErrorAction SilentlyContinue).Count -ne 5) {
+            throw 'Expected five independent workers to be alive before releasing any DC.'
+        }
         [IO.File]::WriteAllText((Join-Path $case.Directory ($controllers[1]+'.release')), '')
-        Wait-ForFixture { [IO.File]::Exists((Join-Path $case.Directory ($controllers[2]+'.1.pid'))) }
-        if (-not (Get-Process -Id $first -ErrorAction SilentlyContinue)) { throw 'Secondary reads did not advance while the primary was pending.' }
-        [IO.File]::WriteAllText((Join-Path $case.Directory ($controllers[0]+'.release')), '')
+        Wait-ForFixture {
+            try { @(Get-TestEvents $case | Where-Object { $_.Event -eq 'ad.attempt.end' -and $_.Dc -eq $controllers[1] }).Count -gt 0 }
+            catch { $false }
+        }
+        if (-not (Get-Process -Id $ids[0] -ErrorAction SilentlyContinue)) { throw 'A secondary DC did not finish before the blocked primary.' }
+        foreach ($dc in @($controllers[0]) + @($controllers[2..4])) {
+            [IO.File]::WriteAllText((Join-Path $case.Directory ($dc+'.release')), '')
+        }
         $result = Complete-TestRead $task
         $ad = $result.Sources[0]
         if ($ad.State -ne 'OK' -or $result.Rows[0].AD -ne '5/5' -or $result.Rows[0].PrimaryDomainController -ne $controllers[0] -or
@@ -127,12 +146,18 @@ Start-Sleep -Milliseconds $config.DelayMs
             $result.Rows[0].ADRecords[0].LastModified -isnot [datetime] -or -not $result.Rows[0].ADRecords[0].Enabled) {
             throw 'Out-of-order completion changed coverage, priority or record types.'
         }
-        'PASS: two isolated processes overlap, a blocked primary does not delay the other slot, and final data retains primary priority.'
+        $events=@(Get-TestEvents $case)
+        $dispatch=@($events | Where-Object Event -eq 'ad.dispatch')
+        $workerPids=@($events | Where-Object Event -eq 'ad.process.started' | ForEach-Object { $_.WorkerPid })
+        if (($dispatch.Dc -join ',') -ne ($controllers -join ',') -or $dispatch[4].ActiveReaders -ne 5 -or
+            @(Compare-Object ($ids | Sort-Object) ($workerPids | Sort-Object)).Count -ne 0 -or
+            $events[0].Event -ne 'search.start' -or $events[-1].Event -ne 'search.end') { throw 'Trace lost launch order, worker PIDs or search boundaries.' }
+        'PASS: five independent DC processes overlap, secondary results arrive while the primary waits, and the search log identifies each worker.'
     }
     finally { Close-TestRead $task }
 
     $case = New-TestCase 'retry' @{$controllers[0]='Timeout';$controllers[4]='Error'}
-    $task = Start-TestRead $case -Parallel -Timeout 6
+    $task = Start-TestRead $case -Parallel -Timeout 8
     try {
         $result = Complete-TestRead $task
         $ad = $result.Sources[0]
@@ -144,22 +169,34 @@ Start-Sleep -Milliseconds $config.DelayMs
             $refused.Errore -notlike '*Synthetic AD refusal*' -or (Get-Process -Id (Get-TestWorkerId $case $controllers[0]) -ErrorAction SilentlyContinue)) {
             throw ('Timeout/retry or failed coverage mishandled: ' + ($ad.DcSources | ConvertTo-Json -Depth 5 -Compress))
         }
-        'PASS: the deadline ends the stuck process, a serial retry recovers it, and a repeated refusal stays unverifiable.'
+        $events=@(Get-TestEvents $case)
+        $timeout=@($events | Where-Object { $_.Event -eq 'ad.process.timeout' -and $_.Dc -eq $controllers[0] -and $_.Attempt -eq 1 })
+        $retry=@($events | Where-Object { $_.Event -eq 'ad.attempt.end' -and $_.Dc -eq $controllers[0] -and $_.Attempt -eq 2 -and $_.Verified })
+        $failures=@($events | Where-Object { $_.Event -eq 'ad.read.error' -and $_.Dc -eq $controllers[4] -and $_.Error.Id -like 'SyntheticReadFailure*' })
+        $rawLog=[IO.File]::ReadAllText($case.Log)
+        if ($timeout.Count -ne 1 -or $retry.Count -ne 1 -or $failures.Count -ne 2 -or
+            $rawLog -match 'DiagnosticPrivateFixture|PC-FIXTURE|CN=PC|example.invalid/PC' -or $rawLog.Contains($fragment)) {
+            throw 'Trace lost the timeout, retry or error code, or retained sensitive search data.'
+        }
+        'PASS: the log separates timeout, successful serial retry and repeat failure without storing error messages or returned computer data.'
     }
     finally { Close-TestRead $task }
 
-    $case = New-TestCase 'cancel' @{$controllers[0]='Hold';$controllers[1]='Hold'}
+    $case = New-TestCase 'cancel' $holdAll
     $task = Start-TestRead $case -Parallel
     try {
-        Wait-ForFixture { @(Get-ChildItem $case.Directory -Filter '*.pid').Count -ge 2 }
-        $ids = @((Get-TestWorkerId $case $controllers[0]), (Get-TestWorkerId $case $controllers[1]))
+        Wait-ForFixture { @(Get-ChildItem $case.Directory -Filter '*.pid').Count -eq 5 }
+        $ids = @($controllers | ForEach-Object { Get-TestWorkerId $case $_ })
         $stop = $task.Pipeline.BeginStop($null,$null)
         if (-not $stop.AsyncWaitHandle.WaitOne(10000)) { throw 'Cancellation waited on a blocked worker.' }
         $task.Pipeline.EndStop($stop)
-        if ((Get-Process -Id $ids -ErrorAction SilentlyContinue) -or @(Get-ChildItem $case.Directory -Filter '*.pid').Count -ne 2) {
-            throw 'Cancellation left an AD process running or launched another DC.'
+        if ((Get-Process -Id $ids -ErrorAction SilentlyContinue) -or @(Get-ChildItem $case.Directory -Filter '*.pid').Count -ne 5) {
+            throw 'Cancellation left an AD process running or launched a retry.'
         }
-        'PASS: cancellation terminates both blocked processes and starts no queued DCs.'
+        $events=@(Get-TestEvents $case)
+        if (@($events | Where-Object { $_.Event -eq 'ad.process.terminated' -and $_.Exited }).Count -ne 5 -or
+            $events[-1].Event -ne 'search.interrupted') { throw 'The log did not record cancellation and cleanup for every active worker.' }
+        'PASS: cancellation terminates and records all five blocked workers without starting a retry.'
     }
     finally { Close-TestRead $task }
 

@@ -43,4 +43,5 @@ stessa condizione di cache.
 
 Il ramo `diagnostic/ad-parallelo` aggiunge una
 [prova portatile di confronto](Test-AD-Parallelo.md) con lettori
-AD isolati, ritentativo sequenziale e tempi per fonte.
+AD isolati, fino a cinque letture contemporanee, ritentativo sequenziale
+e un log per ogni ricerca.

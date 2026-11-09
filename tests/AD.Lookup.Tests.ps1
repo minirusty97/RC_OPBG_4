@@ -38,6 +38,7 @@ function Get-ADComputer {
 Set-Item -Path Function:Get-ADComputer -Value ((Get-Item -Path Function:Get-ADComputer).ScriptBlock.GetNewClosure())
 
 $configPath = Join-Path ([IO.Path]::GetTempPath()) ('ad-lookup-' + [guid]::NewGuid().ToString('N') + '.json')
+$logPath=[IO.Path]::ChangeExtension($configPath,'.log')
 try {
     @{
         DomainControllers=@(1..5 | ForEach-Object { 'dc{0}.example.invalid' -f $_ })
@@ -96,7 +97,16 @@ try {
     catch { $rejected = $_.Exception.Message -like '*almeno 2*' }
     if (-not $rejected -or $fixture.Requests.Count -ne 0) { throw 'Short input queried AD.' }
     'PASS: short input stopped before AD queries.'
+    $fixture.Mode='Failure'
+    $dc='dc5.example.invalid'
+    $null = & $ToolPath -NameFragment 'PC-' -ConfigPath $configPath -PassThru -DomainController $dc -AdSearchLog @{Path=$logPath; Dc=$dc; Attempt=1}
+    $events=@(Get-Content -LiteralPath $logPath -Encoding UTF8 | ForEach-Object { ConvertFrom-Json -InputObject $_ })
+    if (($events.Event -join ',') -ne 'ad.lookup_config.start,ad.lookup_config.end,ad.rsat_import.start,ad.rsat_import.end,ad.query.start,ad.query.error' -or
+        $events[-1].Dc -ne $dc -or -not $events[-1].Error.Type -or [IO.File]::ReadAllText($logPath) -match 'Synthetic unavailable DC|PC-') {
+        throw 'The production AD script did not trace RSAT and query failure safely.'
+    }
+    'PASS: the production AD reader traces module import, query start and the sanitized failure.'
 }
 finally {
-    Remove-Item -LiteralPath $configPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath @($configPath,$logPath) -Force -ErrorAction SilentlyContinue
 }
