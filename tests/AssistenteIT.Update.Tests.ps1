@@ -20,7 +20,7 @@ try {
             param([Uri]$Uri)
             [void]$script:Requested.Add($Uri.AbsoluteUri)
             if ($script:Responses.Count -eq 0) { throw 'Unexpected network request.' }
-            $r=[pscustomobject]@{UserAgent='';Accept='';AllowAutoRedirect=$true;Timeout=0;ReadWriteTimeout=0;Proxy=$null;Response=$script:Responses.Dequeue()}
+            $r=[pscustomobject]@{Method='';UserAgent='';Accept='';AllowAutoRedirect=$true;Timeout=0;ReadWriteTimeout=0;Proxy=$null;Response=$script:Responses.Dequeue()}
             $r | Add-Member ScriptMethod GetResponse { return $this.Response }
             return $r
         }
@@ -40,6 +40,20 @@ try {
         if (-not $update.Available -or $update.Version -ne '1.10.0' -or $script:Requested[0] -notlike 'https://github.com/*/releases/latest/download/update.json') { throw 'Version order or public static feed incorrect.' }
         if ((ConvertTo-AssistenteITFeed $feed '1.10.0').Available -or (ConvertTo-AssistenteITFeed $feed '2.0.0').Available) { throw 'Same/older release offered.' }
         'PASS: public release feed compares versions numerically and excludes same/older versions without GitHub credentials.'
+
+        $script:Responses.Enqueue((New-TestResponse ([Text.Encoding]::UTF8.GetBytes(($feed | ConvertTo-Json)))))
+        $report=Get-AssistenteITUpdateStatus '1.9.0'
+        if ($report.RepositoryState -ne 'Available' -or -not $report.Update.Available) { throw 'A valid update feed did not prove repository availability.' }
+        foreach ($case in @(@{Code=200;State='Available'},@{Code=404;State='Closed'},@{Code=503;State='Offline'},@{Code=0;State='Offline'})) {
+            $script:Responses.Enqueue((New-TestResponse -Status 404))
+            $response=$null
+            if ($case.Code) { $response=New-TestResponse -Status $case.Code }
+            $script:Responses.Enqueue($response)
+            $report=Get-AssistenteITUpdateStatus '1.9.0'
+            if ($report.RepositoryState -ne $case.State -or $null -ne $report.Update -or -not $report.UpdateDetail -or
+                $script:Requested[$script:Requested.Count-1] -ne 'https://github.com/minirusty97/RC_OPBG_4') { throw 'Repository reachability was inferred from a missing update feed.' }
+        }
+        'PASS: repository checks distinguish public without a feed, closed and offline, independently of update availability.'
         foreach ($field in @('SetupUri','ChecksumUri','Repository','Version','SHA256','Channel')) {
             $bad=$feed | ConvertTo-Json | ConvertFrom-Json
             $bad.$field='https://example.invalid/unsafe'

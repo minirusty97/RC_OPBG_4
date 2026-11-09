@@ -389,15 +389,18 @@ function Read-ExplorerSource {
         [string]$DomainController, [object[]]$IntuneDevices=@(),
         [System.Collections.IDictionary]$CloudCache = $script:CloudCache,
         [Security.SecureString]$GlpiUserToken, [Security.SecureString]$GlpiAppToken,
-        [switch]$ForceCloudRefresh, $ProgressQueue, [System.Collections.IDictionary]$GlpiLookupCache
+        [switch]$ForceCloudRefresh, $ProgressQueue, [System.Collections.IDictionary]$GlpiLookupCache,
+        [hashtable]$AdSearchLog
     )
     $result = New-ExplorerSource $Source
+    if ($null -ne $AdSearchLog) { . (Join-Path $PSScriptRoot 'ComputerExplorer.AdLog.ps1') }
     try {
         if ($null -eq $Configuration) { $Configuration = Read-ExplorerConfiguration $ConfigPath }
         if ($Source -eq 'AD') {
             $query = @{ NameFragment = $NameFragment; ConfigPath = $ConfigPath; PassThru = $true; ErrorAction = 'Stop' }
             if ([string]::IsNullOrWhiteSpace($DomainController)) { $query.DomainController=@(Get-ExplorerSearchControllers $Configuration.Settings) }
             else { $query.DomainController=$DomainController }
+            if ($null -ne $AdSearchLog) { $query.AdSearchLog=$AdSearchLog }
             $ad = & (Join-Path $PSScriptRoot 'Test-AdLookup.ps1') @query
             $result.Records = @($ad.Computers); $result.DcSources = @($ad.Sources); $result.CheckedAtUtc = $ad.CheckedAtUtc
             $errors = @($ad.Sources | Where-Object { -not $_.Verificato } | ForEach-Object { "$($_.DomainController): $($_.Errore)" })
@@ -434,6 +437,7 @@ function Read-ExplorerSource {
         }
     }
     catch {
+        if ($null -ne $AdSearchLog) { Write-ExplorerSearchLog $AdSearchLog 'ad.read.error' -Failure $_ }
         $result.State = 'Errore'; $result.Error = $_.Exception.Message
         if ($Source -eq 'AD' -and -not [string]::IsNullOrWhiteSpace($DomainController)) {
             $result.DcSources = @([pscustomobject]@{ DomainController = $DomainController; Stato = 'Errore'; Verificato = $false; Trovati = $null; Errore = $result.Error })

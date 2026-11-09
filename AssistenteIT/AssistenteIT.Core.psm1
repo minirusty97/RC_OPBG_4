@@ -185,6 +185,35 @@ function Get-AssistenteITPrerequisites {
     }
 }
 
+function Get-AssistenteITGlpiStatus {
+    [CmdletBinding()]
+    param([string]$ConfigPath,[string]$EnvPath)
+    $credentials=$null
+    try {
+        $settings=Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+        $glpi=Get-ExplorerGraphSetting $settings 'Glpi'
+        $baseUri=[string](Get-ExplorerGraphSetting $glpi 'BaseUri' '')
+        if (-not [bool](Get-ExplorerGraphSetting $glpi 'Enabled' $false) -or -not $baseUri.Trim()) {
+            return [pscustomobject]@{State='NotConfigured';Account='';Detail='Abilita GLPI e inserisci l''URL API in Impostazioni.'}
+        }
+        $useAppToken=[bool](Get-ExplorerGraphSetting $glpi 'UseAppToken' $true)
+        $credentials=Read-ExplorerGlpiCredentials -Path $EnvPath -UseAppToken $useAppToken
+        if ($null -eq $credentials) {
+            return [pscustomobject]@{State='NotConfigured';Account='';Detail='Salva i token GLPI in Impostazioni.'}
+        }
+        Import-Module (Join-Path (Split-Path $PSScriptRoot -Parent) 'GLPI.Inventory.psm1') -ErrorAction Stop
+        $account=Get-GlpiSessionAccount -BaseUri $baseUri -UserToken $credentials.User -AppToken $credentials.App
+        return [pscustomobject]@{State='Ready';Account=$account;Detail='Utente verificato dalla sessione API GLPI.'}
+    }
+    catch {
+        $http=Get-ExplorerGraphSetting (Get-ExplorerGraphSetting $_.Exception 'Response') 'StatusCode'
+        $detail='Verifica la connessione al server, l''URL API e i token GLPI.'
+        if ($null -ne $http) { $detail='La verifica della sessione GLPI ha restituito HTTP '+[int]$http+'.' }
+        return [pscustomobject]@{State='Unavailable';Account='';Detail=$detail}
+    }
+    finally { Close-ExplorerGlpiSecrets $credentials }
+}
+
 function Open-AssistenteITActivity {
     # All suite processes keep a handle open. Setup/uninstall refuses to run
     # while any handle exists; no running search or removal is killed.
@@ -192,12 +221,16 @@ function Open-AssistenteITActivity {
 }
 
 function Initialize-AssistenteITModuleAccess {
-    [CmdletBinding()]
-    param([Parameter(Mandatory=$true)]$Module,[Parameter(Mandatory=$true)][string]$ConfigPath,$ProgressQueue,[string]$SessionPath,[IntPtr]$WindowHandle)
+    [CmdletBinding(DefaultParameterSetName='Interactive')]
+    param(
+        [Parameter(Mandatory=$true)]$Module,[Parameter(Mandatory=$true)][string]$ConfigPath,$ProgressQueue,
+        [Parameter(Mandatory=$true,ParameterSetName='Silent')][ValidateNotNullOrEmpty()][string]$SessionPath,
+        [IntPtr]$WindowHandle
+    )
     $settings=Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
     $authentication=ConvertTo-ExplorerGraphAuthentication (Get-ExplorerGraphSetting $settings 'Graph')
     $definitions=Get-ExplorerGraphSetting $Module 'GraphPermissions' @()
-    if ($SessionPath) {
+    if ($PSCmdlet.ParameterSetName -eq 'Silent') {
         $context=Restore-AssistenteITGraphContext -Path $SessionPath -Authentication $authentication -WindowHandle $WindowHandle
         if ($null -eq $context) { return }
     }
@@ -334,4 +367,4 @@ function Get-AssistenteITModuleStartInfo {
     return $info
 }
 
-Export-ModuleMember -Function Save-AssistenteITGraphSession, Initialize-AssistenteITWindowIdentity, Get-AssistenteITAccessDefinition, Get-AssistenteITModuleAccess, Start-AssistenteITModule, Initialize-AssistenteITModuleAccess, ConvertTo-ExplorerGraphAuthentication, Read-AssistenteITManifest, Get-AssistenteITPaths, Initialize-AssistenteIT, Save-AssistenteITSettings, Enable-AssistenteITDependencies, Get-AssistenteITPrerequisites, Open-AssistenteITActivity, Get-AssistenteITModuleStartInfo, Move-AssistenteITUserData
+Export-ModuleMember -Function Get-AssistenteITGlpiStatus, Save-AssistenteITGraphSession, Initialize-AssistenteITWindowIdentity, Get-AssistenteITAccessDefinition, Get-AssistenteITModuleAccess, Start-AssistenteITModule, Initialize-AssistenteITModuleAccess, ConvertTo-ExplorerGraphAuthentication, Read-AssistenteITManifest, Get-AssistenteITPaths, Initialize-AssistenteIT, Save-AssistenteITSettings, Enable-AssistenteITDependencies, Get-AssistenteITPrerequisites, Open-AssistenteITActivity, Get-AssistenteITModuleStartInfo, Move-AssistenteITUserData

@@ -271,7 +271,7 @@ function Get-ExplorerGraphPermissionStatus {
         $detail='Ambito concesso. L''autorizzazione effettiva viene valutata durante l''operazione.'
         $verification='ScopeOnly';$checkStatus='Solo ambito'
         if (-not $available) { $detail='Consenso mancante: '+($alternatives -join ' oppure ');$verification='MissingScope';$checkStatus='Non disponibile' }
-        [void]$statuses.Add([pscustomobject]@{Id=[string]$definition.Id;Name=[string]$definition.Name;Available=$available;ScopeGranted=$available;Verification=$verification;OperationVerified=$false;CheckStatus=$checkStatus;Detail=$detail})
+        [void]$statuses.Add([pscustomobject]@{Id=[string]$definition.Id;Name=[string]$definition.Name;Available=$available;ScopeGranted=$available;Verification=$verification;OperationVerified=$false;SessionRejected=$false;CheckStatus=$checkStatus;Detail=$detail})
     }
     if ($Probe) {
         foreach ($readProbe in @(@{Id='entra-read';Uri='https://graph.microsoft.com/v1.0/devices?$top=1&$select=id'},@{Id='intune-read';Uri='https://graph.microsoft.com/v1.0/deviceManagement/managedDevices?$top=1&$select=id'},@{Id='groups-read';Uri='https://graph.microsoft.com/v1.0/groups?$top=1&$select=id'})) {
@@ -289,6 +289,9 @@ function Get-ExplorerGraphPermissionStatus {
             catch {
                 $safeError=New-ExplorerGraphOperationError -Failure $_ -Stage InitialRead
                 $status[0].Available=$false;$status[0].Verification='ProbeFailed';$status[0].CheckStatus='Non disponibile';$status[0].OperationVerified=$false
+                $status[0].SessionRejected=($safeError.Data['AssistenteIT.HttpStatus'] -eq 401 -or
+                    $safeError.Data['AssistenteIT.GraphCode'] -in @('InvalidAuthenticationToken','insufficient_claims') -or
+                    $safeError.Data['AssistenteIT.ExceptionType'] -match '(AuthenticationRequired|MsalUiRequired)Exception$')
                 $status[0].Detail='Ambito concesso, ma verifica non riuscita: '+$safeError.Message
             }
         }

@@ -1,8 +1,9 @@
 # Stato condiviso per riprendere il lavoro
 
 Repository: `minirusty97/RC_OPBG_4`. Consultare sempre il main e la release
-effettiva. La versione sorgente **1.3.3** attende la conferma di avvio
-dell'installazione OTA e registra l'esito. La **1.3.2** ripristina la ricerca su tutti i
+effettiva. La versione sorgente **1.4.0** integra la prova AD parallela,
+la diagnostica per ricerca e il pannello di stato del wrapper. La **1.3.3**
+attende la conferma di avvio dell'installazione OTA e registra l'esito. La **1.3.2** ripristina la ricerca su tutti i
 DC in Computer Explorer e confronta i GUID Hybrid già letti sul DC
 principale. La **1.3.1** aggiorna la finestra di Gestione
 Ring con riepilogo, colonne di inventario GLPI, filtri locali per colonna e
@@ -24,8 +25,12 @@ scansione completa automatica, vista Tutti e filtri locali; F5 rilegge tutto.
 | Gestione Ring Intune | Start-RingManager.ps1 | RingManager.Core.psm1; docs/Gestione-Ring.md |
 
 Il wrapper ripristina in modo silenzioso l'account delegato confermato.
-Il pulsante Accesso in basso gestisce il login interattivo. Ogni modulo
-distingue lettura e scrittura e usa la sessione verificata del wrapper.
+Il pulsante Accesso in basso gestisce il login interattivo. Il pannello
+compatto indica in rosso una sessione che richiede Accesso. Entra, Intune
+e gruppi mostrano separatamente l'esito delle letture. Le righe dei
+componenti includono RSAT, SDK Graph, utente API GLPI, raggiungibilità
+del repository e stato dell'aggiornamento. Ogni modulo distingue
+lettura e scrittura e usa la sessione verificata del wrapper.
 GLPI resta alla versione 10.0.11 senza plugin aggiuntivi. Le Note BitLocker
 sono in chiaro per recupero estremo, append senza sovrascrittura, con lettura
 compatibile degli archivi V1. Non riportare chiavi reali in log o repository.

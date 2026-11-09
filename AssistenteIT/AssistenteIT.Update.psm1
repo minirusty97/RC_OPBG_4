@@ -117,6 +117,44 @@ function Get-AssistenteITUpdate {
     finally { if ([IO.File]::Exists($path)) { [IO.File]::Delete($path) } }
 }
 
+function Get-AssistenteITRepositoryStatus {
+    $uri=[uri]('https://github.com/'+$script:Repository)
+    $request=New-UpdateWebRequest $uri
+    $request.Method='HEAD'
+    $request.UserAgent='AssistenteIT-Updater'
+    $request.AllowAutoRedirect=$false
+    $request.Timeout=8000
+    $request.Proxy=[Net.WebRequest]::DefaultWebProxy
+    if ($null -ne $request.Proxy) { $request.Proxy.Credentials=[Net.CredentialCache]::DefaultNetworkCredentials }
+    $response=$null
+    try {
+        try { $response=$request.GetResponse() }
+        catch [Net.WebException] { $response=$_.Exception.Response }
+        if ($null -eq $response) {
+            return [pscustomobject]@{State='Offline';Detail='Il repository GitHub non ha risposto. Verifica rete e proxy.'}
+        }
+        $code=[int]$response.StatusCode
+        if ($code -eq 200) { return [pscustomobject]@{State='Available';Detail='Il repository risponde senza autenticazione.'} }
+        if ($code -in @(401,403,404,410)) { return [pscustomobject]@{State='Closed';Detail="Repository non accessibile pubblicamente (HTTP $code)."} }
+        return [pscustomobject]@{State='Offline';Detail="Repository non raggiungibile (HTTP $code)."}
+    }
+    finally { if ($null -ne $response) { $response.Dispose() } }
+}
+
+function Get-AssistenteITUpdateStatus {
+    [CmdletBinding()]
+    param([Parameter(Mandatory=$true)][string]$CurrentVersion)
+    try {
+        $update=Get-AssistenteITUpdate -CurrentVersion $CurrentVersion
+        return [pscustomobject]@{RepositoryState='Available';RepositoryDetail='Feed stabile raggiungibile.';Update=$update;UpdateDetail=''}
+    }
+    catch { $detail=$_.Exception.Message }
+    # Un feed assente o invalido può appartenere a un repository pubblico.
+    try { $repository=Get-AssistenteITRepositoryStatus }
+    catch { $repository=[pscustomobject]@{State='Offline';Detail='Verifica del repository GitHub non riuscita.'} }
+    return [pscustomobject]@{RepositoryState=$repository.State;RepositoryDetail=$repository.Detail;Update=$null;UpdateDetail=$detail}
+}
+
 function Save-AssistenteITUpdate {
     [CmdletBinding()]
     param([Parameter(Mandatory=$true)]$Update,[Parameter(Mandatory=$true)][string]$CacheDirectory,$ProgressQueue)
@@ -254,4 +292,4 @@ function Start-AssistenteITUpdateHandoff {
     }
 }
 
-Export-ModuleMember -Function Get-AssistenteITUpdate, Save-AssistenteITUpdate, Open-AssistenteITVerifiedSetup, Invoke-AssistenteITUpdateInstall, Start-AssistenteITUpdateHandoff
+Export-ModuleMember -Function Get-AssistenteITUpdate, Get-AssistenteITUpdateStatus, Save-AssistenteITUpdate, Open-AssistenteITVerifiedSetup, Invoke-AssistenteITUpdateInstall, Start-AssistenteITUpdateHandoff

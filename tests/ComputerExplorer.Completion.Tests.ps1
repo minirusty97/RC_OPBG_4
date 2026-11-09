@@ -75,6 +75,7 @@ $findKeysButton=[pscustomobject]@{Enabled=$false};$config=[pscustomobject]@{Mini
 $archiveButton=[pscustomobject]@{Enabled=$false}; $readArchiveButton=[pscustomobject]@{Enabled=$false}
 $nameBox = [pscustomobject]@{Enabled=$true;Text='PC-TEST'}; $tokensButton = [pscustomobject]@{Enabled=$true}
 $forceRefresh = [pscustomobject]@{Enabled=$true}; $cancelButton = [pscustomobject]@{Enabled=$false}
+$searchLogButton = [pscustomobject]@{Enabled=$false}; $script:LastSearchLog=''
 $sourceChecks = [ordered]@{AD=[pscustomobject]@{Enabled=$true}}
 $timer = [pscustomobject]@{Enabled=$true}
 $timer | Add-Member -MemberType ScriptMethod -Name Stop -Value {$this.Enabled=$false}
