@@ -48,9 +48,10 @@ foreach ($kind in @('Hybrid','Ring')) {
   if ($u.Write.Enabled -or -not $u.Refresh.Enabled -or -not $u.Grid.MultiSelect -or $u.Grid.AllowUserToResizeRows -or $null -eq $window.Icon) { throw 'New module bypassed read-only mode or lost common native controls.' }
   if ($kind -eq 'Hybrid') {
    $layout=$window.Controls[0];$filterRow=$layout.GetRow($u.Query.Parent)
-   $headers='Computer|Hybrid|Identità AD/Entra|Registered|Seriale Intune|Stato GLPI|Reparto GLPI|OU|Asset ID|Censito|GLPI'
+   $fields='Hybrid|Identità AD/Entra|Registered|Seriale Intune|Stato GLPI|Reparto GLPI|OU|Asset ID|Censito|GLPI'
+   $headers='Computer|'+$fields+'|Ultima modifica AD|Ultima attività Entra|Ultimo aggiornamento GLPI'
    if ((@($u.Grid.Columns | ForEach-Object HeaderText) -join '|') -cne $headers -or
-       ($u.Filter.Items -join '|') -cne ($headers+'|Attestazione Intune|Anomalie') -or $u.FilterValue.SelectedItem -ne 'Tutti' -or
+       ($u.Filter.Items -join '|') -cne ($fields+'|Attestazione Intune|Anomalie') -or $u.FilterValue.SelectedItem -ne 'Tutti' -or
        (($u.Write.Parent.Controls | ForEach-Object Text) -join '|') -ne 'Aggiorna|Esporta CSV|Apri su GLPI|Verifica e pulisci Registered|Sola lettura' -or
        $layout.GetRow($u.Write.Parent) -ne $filterRow+1 -or $layout.GetRow($u.Write.Parent) -ne $layout.RowCount-1 -or
        $window.Controls.Find('HybridGeneralSummary',$true)[0].Text -ne 'Riepilogo generale' -or
@@ -93,6 +94,11 @@ foreach ($kind in @('Hybrid','Ring')) {
   else {
    $row | Add-Member -NotePropertyMembers @{OUDistinguishedName='OU=Lab,DC=example,DC=invalid';IntuneState='OK';IntuneReason=''}
    $second | Add-Member -NotePropertyMembers @{OUDistinguishedName='OU=Other,DC=example,DC=invalid';IntuneState='Da regolarizzare';IntuneReason='Synthetic'}
+   $row | Add-Member -NotePropertyMembers @{
+    ADLastModified=[datetime]::new(2026,1,31,8,42,0);EntraLastActivity=[datetime]::new(2026,2,10,9,12,0)
+    GlpiLastModified=[datetime]::new(2026,2,11,10,20,0)
+   }
+   $second | Add-Member -NotePropertyMembers @{ADLastModified=[datetime]::new(2026,11,1,8,0,0);EntraLastActivity=$null;GlpiLastModified=$null}
    $second.OUName='Other';$second.IdentityState='Non applicabile';$second.HybridState='SENZA HYBRID';$second.RegisteredCount=0
    $second.GlpiState='Assente';$second.GlpiStatus='';$second.Censito=''
    $u.Snapshot | Add-Member NoteProperty Statistics ([pscustomobject]@{Computers=2;HybridOk=1;IntuneOk=1;IntuneUnknown=0;RegisteredComputers=1})
@@ -134,7 +140,21 @@ foreach ($kind in @('Hybrid','Ring')) {
    if ($u.Grid.Rows.Count) { throw 'The Ring name filter matched a serial.' }
   }
   else {
-   foreach ($spec in @(@('Computer','PC-SYNTHETIC'),@('Hybrid','HYBRID OK'),@('Identità AD/Entra','Corrisponde'),@('Registered','Con Registered'),
+   foreach ($field in @('ADLastModified','EntraLastActivity','GlpiLastModified')) {
+    if ($u.Grid.Columns[$field].ValueType -ne [datetime] -or $u.Grid.Rows[0].Cells[$field].Value -ne $row.$field) {
+     throw ('Hybrid grid did not expose a sortable date for '+$field)
+    }
+   }
+   if ($u.Grid.Rows[1].Cells['EntraLastActivity'].FormattedValue -ne '—') { throw 'A missing Entra activity should render as a dash.' }
+   $csvPath=Join-Path $PSScriptRoot 'hybrid-dates.csv'
+   Save-DmCsv -Rows @($u.Grid.Rows | ForEach-Object Tag) -Path $csvPath -Kind Hybrid
+   $exported=@(Import-Csv -LiteralPath $csvPath -Delimiter ';')
+   if ($exported.Count -ne 2 -or $exported[0].ADLastModified -cne '2026-01-31 08:42:00' -or
+       $exported[0].EntraLastActivity -cne '2026-02-10 09:12:00' -or $exported[0].GlpiLastModified -cne '2026-02-11 10:20:00' -or
+       $exported[1].EntraLastActivity -or $exported[1].GlpiLastModified) { throw 'The Hybrid CSV lost dates or filled missing values.' }
+   $u.Grid.Sort($u.Grid.Columns['ADLastModified'],[ComponentModel.ListSortDirection]::Ascending)
+   if ($u.Grid.Rows[0].Tag.Name -ne $row.Name) { throw 'Hybrid AD dates were sorted by formatted text.' }
+   foreach ($spec in @(@('Hybrid','HYBRID OK'),@('Identità AD/Entra','Corrisponde'),@('Registered','Con Registered'),
       @('Seriale Intune','SYNTHETIC-SERIAL'),@('Stato GLPI','Assegnato'),@('Reparto GLPI','Synthetic department'),@('OU','Lab'),
       @('Asset ID','00017'),@('Censito','Si'),@('GLPI','Presente'),@('Attestazione Intune','OK'))) {
     $u.Filter.SelectedItem=$spec[0];$u.FilterValue.SelectedItem=$spec[1]
@@ -186,6 +206,12 @@ foreach ($kind in @('Hybrid','Ring')) {
        $u.Write.Right -gt $u.Write.Parent.ClientSize.Width -or $u.FilterValue.Right -gt $u.FilterValue.Parent.ClientSize.Width) {
        throw 'Hybrid columns, filters or actions were clipped at the minimum window size.'
    }
+   $dateColumn=$u.Grid.Columns['GlpiLastModified']
+   $u.Grid.FirstDisplayedScrollingColumnIndex=$dateColumn.Index
+   if (-not $dateColumn.Displayed -or $u.Grid.GetColumnDisplayRectangle($dateColumn.Index,$false).Right -gt $u.Grid.ClientSize.Width) {
+    throw 'The new Hybrid date columns cannot be reached at the minimum window size.'
+   }
+   $u.Grid.FirstDisplayedScrollingColumnIndex=0
   }
   Write-ModuleUiImage $window $kind
  }

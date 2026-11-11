@@ -168,8 +168,11 @@ aggiornamento OTA con dati di prova.
 Il ramo della 1.5.0 riusa la lettura AD isolata di Computer Explorer e il
 Fornitore/numero inventario di Gestione Ring. Entra e Intune sono letti in
 parallelo alla scansione AD. Il totale deduplica i PC per GUID. I conteggi
-per OU distinguono Intune OK e non verificabile. I filtri della griglia
-operano in locale. Verifica e pulisci Registered parte dall'inventario
+per OU distinguono Intune OK e non verificabile. La griglia e il CSV
+includono la modifica AD sul DC interrogato, l'attività approssimativa
+Entra e l'aggiornamento della scheda GLPI. I filtri operano in locale.
+Computer si cerca con Filtra per nome. Le date sono ordinabili.
+Verifica e pulisci Registered parte dall'inventario
 completo e apre la scelta dei singoli Object ID.
 
 Le prove sintetiche coprono la scelta di un solo DC, la lettura AD e cloud

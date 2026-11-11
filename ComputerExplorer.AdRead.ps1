@@ -23,7 +23,7 @@ function Read-ExplorerAdOu {
             Filter = '*'
             SearchBase = $ou.DistinguishedName
             SearchScope = $Query.SearchScope
-            Properties = @('DNSHostName','Enabled','OperatingSystem','OperatingSystemVersion','LastLogonDate','PasswordLastSet','ObjectGUID')
+            Properties = @('DNSHostName','Enabled','OperatingSystem','OperatingSystemVersion','LastLogonDate','PasswordLastSet','ObjectGUID','Modified')
             ErrorAction = 'Stop'
         }
         Write-ExplorerSearchLog $Log 'ad.query.start'
@@ -37,6 +37,7 @@ function Read-ExplorerAdOu {
                 OperatingSystemVersion = $_.OperatingSystemVersion
                 LastLogonDate = $_.LastLogonDate
                 PasswordLastSet = $_.PasswordLastSet
+                LastModified = $_.Modified
                 DistinguishedName = [string]$_.DistinguishedName
             }
         })

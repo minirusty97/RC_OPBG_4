@@ -44,9 +44,13 @@ function Format-DmDetail {
     if ($Kind -eq 'Hybrid') {
         [void]$lines.Add('AD GUID: '+$Row.ADGuid+' | '+$Row.IdentityState)
         [void]$lines.Add('Percorso AD: '+$Row.ADDistinguishedName)
+        [void]$lines.Add('Ultima modifica AD: '+(Format-ExplorerDate (Get-DmValue $Row 'ADLastModified')))
         [void]$lines.Add('OU analizzate: '+$Row.OUDistinguishedName)
         [void]$lines.Add('Hybrid: '+$Row.HybridState+' | '+$Row.Anomalies)
-        foreach ($device in $Row.EntraDevices) { [void]$lines.Add('Entra: '+$device.displayName+' | '+$device.trustType+' | Object ID: '+$device.id+' | Device ID: '+$device.deviceId+' | MDM: '+$device.isManaged+' | Ultima attivita: '+$device.approximateLastSignInDateTime) }
+        foreach ($device in $Row.EntraDevices) {
+            $lastActivity = Format-ExplorerDate (Get-DmValue $device 'approximateLastSignInDateTime')
+            [void]$lines.Add('Entra: '+$device.displayName+' | '+$device.trustType+' | Object ID: '+$device.id+' | Device ID: '+$device.deviceId+' | MDM: '+$device.isManaged+' | Ultima attività: '+$lastActivity)
+        }
         foreach ($identity in $Row.IdentityRecords) { [void]$lines.Add('Identita Hybrid: '+$identity.ObjectId+' | '+$identity.State) }
     }
     else { [void]$lines.Add('Object ID: '+$Row.ObjectId+' | Device ID: '+$Row.DeviceId);[void]$lines.Add('Ring attuali: '+$Row.Rings+' | '+$Row.State+' | Ultima attivita: '+$Row.LastSignIn) }
@@ -61,6 +65,9 @@ function Format-DmDetail {
     foreach ($item in $Row.GlpiRecords) {
         [void]$lines.Add('  ID: '+$item.GlpiId+' | Nome: '+$item.Name+' | Seriale: '+$item.SerialNumber+' | Inventario: '+$item.InventoryNumber)
         [void]$lines.Add('  Stato: '+$item.State+' | Gruppo: '+$item.GroupPath+' | CENSITO: '+$Row.Censito+' | Ultimo inventario: '+$item.LastInventory)
+        if ($Kind -eq 'Hybrid') {
+            [void]$lines.Add('  Ultimo aggiornamento scheda: '+(Format-ExplorerDate (Get-DmValue $item 'LastModified')))
+        }
         $supplier=Get-DmValue $item 'SupplierName' ''
         $supplierError=Get-DmValue $item 'SupplierError' ''
         if ($supplier -or $supplierError) { [void]$lines.Add('  Reparto GLPI (Fornitore): '+$supplier+$supplierError) }
@@ -322,9 +329,21 @@ function Save-DmCsv {
         $record=[ordered]@{}
         $fields=@('Name','IntuneSerial','GlpiState','GlpiMatchBy','GlpiIds','GlpiNames','GlpiStatus','GlpiGroup','Censito')
         if ($Report) { $fields=@('AtUtc','Name','Source','Destination','ObjectId','Id','DeviceId','GroupId','Action','TargetRing','RemoveGroups','RemovedGroupIds','State','Stage','Error') }
-        elseif ($Kind -eq 'Hybrid') { $fields=@('Name','HybridState','IdentityState','RegisteredCount','IntuneSerial','GlpiStatus','GlpiDepartment','OUName','GlpiAssetId','Censito','GlpiState','IntuneState','IntuneReason','ADGuid','ADDistinguishedName','EntraObjectIds','EntraDeviceIds','EntraCount','Anomalies','GlpiMatchBy','GlpiIds','GlpiNames','GlpiGroup') }
+        elseif ($Kind -eq 'Hybrid') {
+            $fields=@(
+                'Name','HybridState','IdentityState','RegisteredCount','IntuneSerial','GlpiStatus','GlpiDepartment','OUName',
+                'GlpiAssetId','Censito','GlpiState','ADLastModified','EntraLastActivity','GlpiLastModified','IntuneState','IntuneReason',
+                'ADGuid','ADDistinguishedName','EntraObjectIds','EntraDeviceIds','EntraCount','Anomalies','GlpiMatchBy','GlpiIds','GlpiNames','GlpiGroup'
+            )
+        }
         else { $fields+=@('ObjectId','DeviceId','Rings','State','TargetRing','GlpiDepartment','GlpiAssetId') }
-        foreach ($field in $fields) { $record[$field]=ConvertTo-DmCsvValue (Get-DmValue $row $field '') }
+        foreach ($field in $fields) {
+            $value = Get-DmValue $row $field ''
+            if (-not $Report -and $Kind -eq 'Hybrid' -and $value -is [datetime]) {
+                $value = $value.ToString('yyyy-MM-dd HH:mm:ss', [Globalization.CultureInfo]::InvariantCulture)
+            }
+            $record[$field] = ConvertTo-DmCsvValue $value
+        }
         [pscustomobject]$record
     })
     $records | Export-Csv -LiteralPath $Path -NoTypeInformation -Encoding UTF8 -Delimiter ';'
@@ -501,6 +520,11 @@ function Show-DeviceModuleWindow {
         @('GlpiDepartment','Reparto GLPI',113,80), @('OUName','OU',118,65), @('GlpiAssetId','Asset ID',78,63),
         @('Censito','Censito',67,59), @('GlpiState','GLPI',114,82)
     )
+    $hybridDateColumns=[ordered]@{
+        ADLastModified=@('Ultima modifica AD','Ultima modifica dell''oggetto AD sul DC interrogato.')
+        EntraLastActivity=@('Ultima attività Entra','Attività approssimativa più recente tra gli oggetti Entra della riga. Le singole date sono nei dettagli.')
+        GlpiLastModified=@('Ultimo aggiornamento GLPI','Ultima modifica della scheda GLPI (orario del server). Per più schede viene mostrata la data più recente.')
+    }
     $toolbar=New-Object Windows.Forms.FlowLayoutPanel;$toolbar.Dock='Fill';$toolbar.WrapContents=$false
     $buttons=@(@('Refresh','Aggiorna',110),@('Export','Esporta CSV',120),@('OpenGlpi','Apri su GLPI',125),@('Write','Verifica e pulisci Registered',215))
     if ($Kind -eq 'Ring') { $buttons=@(@('Refresh','Aggiorna',110),@('Export','Esporta CSV',120),@('OpenGlpi','Apri su GLPI',125),@('Write','Verifica ed Applica',190)) }
@@ -521,7 +545,9 @@ function Show-DeviceModuleWindow {
         $u.FilterFields=[ordered]@{'Ring attuali'='Rings';'GLPI'='GlpiState';'Stato GLPI'='GlpiStatus';'Reparto GLPI'='GlpiDepartment'}
     }
     else {
-        foreach ($spec in $hybridColumns) { $u.FilterFields[$spec[1]]=$spec[0] }
+        foreach ($spec in $hybridColumns) {
+            if ($spec[0] -ne 'Name') { $u.FilterFields[$spec[1]]=$spec[0] }
+        }
         $u.FilterFields['Attestazione Intune']='IntuneState'
         $u.FilterFields['Anomalie']='Anomalies'
     }
@@ -554,13 +580,24 @@ function Show-DeviceModuleWindow {
     else {
         $grid.ColumnHeadersHeightSizeMode='AutoSize'
         $grid.ColumnHeadersDefaultCellStyle.WrapMode='True'
+        foreach ($field in $hybridDateColumns.Keys) {
+            $columns+=,@($field,$hybridDateColumns[$field][0],118,110)
+        }
     }
     foreach ($spec in $columns) {
         if ($spec[0] -eq 'TargetRing') { $column=New-Object Windows.Forms.DataGridViewComboBoxColumn;$column.FlatStyle='Flat';[void]$column.Items.Add('');$column.ReadOnly=$GraphAccess.ReadOnly }
         else { $column=New-Object Windows.Forms.DataGridViewTextBoxColumn;$column.ReadOnly=$true;$column.SortMode='Automatic' }
         $column.Name=$spec[0];$column.HeaderText=$spec[1]
         $column.FillWeight=$spec[2]
-        if ($Kind -eq 'Hybrid') { $column.MinimumWidth=$spec[3] }
+        if ($Kind -eq 'Hybrid') {
+            $column.MinimumWidth=$spec[3]
+            if ($hybridDateColumns.Contains($column.Name)) {
+                $column.ValueType=[datetime]
+                $column.DefaultCellStyle.Format='dd/MM/yyyy HH:mm'
+                $column.DefaultCellStyle.NullValue='—'
+                $column.ToolTipText=$hybridDateColumns[$column.Name][1]
+            }
+        }
         [void]$grid.Columns.Add($column)
     }
     $tabs=New-Object Windows.Forms.TabControl;$tabs.Dock='Fill';$u.Tabs=$tabs

@@ -42,6 +42,8 @@ function New-HybridComparison {
         Name = $AdComputer.Name
         Key = $guid
         ADGuid = $guid
+        ADLastModified = Get-ExplorerLatestDate -Records @($AdComputer) -Property 'LastModified'
+        EntraLastActivity = Get-ExplorerLatestDate -Records $EntraDevices -Property 'approximateLastSignInDateTime'
         IdentityState = $state
         IdentityRecords = $identity
         DeviceIds = $deviceIds
@@ -244,6 +246,8 @@ function Get-HybridJoinSnapshot {
     $byKey = @{}
     foreach ($row in $rows) {
         Set-HybridIntuneState -Row $row -SourceState $sources.IntuneState
+        $lastGlpiUpdate = Get-ExplorerLatestDate -Records $row.GlpiRecords -Property 'LastModified'
+        $row | Add-Member -NotePropertyName GlpiLastModified -NotePropertyValue $lastGlpiUpdate
         $byKey[$row.Key] = $row
         if ($row.RegisteredCount) {
             # Detach candidate identities from the editable grid.

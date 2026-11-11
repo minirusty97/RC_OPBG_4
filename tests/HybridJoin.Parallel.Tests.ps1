@@ -35,12 +35,12 @@ function Get-ADOrganizationalUnit {
 }
 function Get-ADComputer {
     [CmdletBinding()]param($Server,$Filter,$SearchBase,$SearchScope,$Properties)
-    if ($Filter -ne '*' -or $SearchScope -ne 'Subtree' -or $Properties -notcontains 'ObjectGUID') { throw 'Unexpected AD query.' }
+    if ($Filter -ne '*' -or $SearchScope -ne 'Subtree' -or $Properties -notcontains 'ObjectGUID' -or $Properties -notcontains 'Modified') { throw 'Unexpected AD query.' }
     [pscustomobject]@{
         Name='PC-TEST';ObjectGUID='11111111-1111-4111-8111-111111111111';Enabled=$true
         DistinguishedName='CN=PC-TEST,OU=Postazioni,OU=Lab,DC=example,DC=invalid'
         DNSHostName='pc-test.example.invalid';OperatingSystem='Windows';OperatingSystemVersion=''
-        LastLogonDate=$null;PasswordLastSet=$null
+        LastLogonDate=$null;PasswordLastSet=$null;Modified=[datetime]::new(2026,10,30,11,43,0)
     }
 }
 '@ | Set-Content -LiteralPath (Join-Path $adModule 'ActiveDirectory.psm1') -Encoding UTF8
@@ -66,10 +66,19 @@ function Invoke-MgGraphRequest {
     }
     elseif ($Uri -like '*/devices?*') {
         $source='entra'
-        $items=@([pscustomobject]@{
-            id='55555555-5555-4555-8555-555555555555';deviceId='11111111-1111-4111-8111-111111111111'
-            displayName='PC-RENAMED';trustType='ServerAd';isManaged=$true;accountEnabled=$true;deviceOwnership='company'
-        })
+        if ($Uri -notmatch 'approximateLastSignInDateTime') { throw 'Entra activity was not requested in the inventory read.' }
+        $items=@(
+            [pscustomobject]@{
+                id='55555555-5555-4555-8555-555555555555';deviceId='11111111-1111-4111-8111-111111111111'
+                displayName='PC-RENAMED';trustType='ServerAd';isManaged=$true;accountEnabled=$true;deviceOwnership='company'
+                approximateLastSignInDateTime='2026-10-29T11:22:00Z'
+            }
+            [pscustomobject]@{
+                id='66666666-6666-4666-8666-666666666666';deviceId='77777777-7777-4777-8777-777777777777'
+                displayName='PC-TEST';trustType='Workplace';isManaged=$false;accountEnabled=$true;deviceOwnership='personal'
+                approximateLastSignInDateTime='2026-11-01T12:14:00+01:00'
+            }
+        )
     }
     else { throw 'Unexpected Graph request.' }
     [IO.File]::WriteAllText((Join-Path $root ($source+'.ready')),$source)
@@ -85,6 +94,8 @@ function Invoke-MgGraphRequest {
     $configPath=Join-Path $temp 'config.json'
     $config=Get-Content -LiteralPath (Join-Path $root 'computer-explorer.config.example.json') -Raw | ConvertFrom-Json
     $config.HybridJoin.TargetOus=@('OU=Lab','OU=Postazioni,OU=Lab,DC=example,DC=invalid')
+    $config.Glpi.Enabled=$true
+    $config.Glpi.BaseUri='https://glpi.example.invalid/apirest.php'
     $config | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $configPath -Encoding UTF8
     $access=[pscustomobject]@{
         CanOpen=$true;ReadOnly=$true;TenantId='22222222-2222-4222-8222-222222222222'
@@ -96,7 +107,23 @@ function Invoke-MgGraphRequest {
         param($Root,$ConfigPath,$Access)
         $ErrorActionPreference='Stop'
         Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
-        Import-Module (Join-Path $Root 'HybridJoin.Core.psm1') -ErrorAction Stop
+        $hybrid = Import-Module (Join-Path $Root 'HybridJoin.Core.psm1') -PassThru -ErrorAction Stop
+        & $hybrid {
+            & (Get-Command Add-DmInventory).Module {
+                function script:Read-ExplorerGlpiCredentials {
+                    param($Path,$UseAppToken)
+                    [pscustomobject]@{User=(ConvertTo-SecureString synthetic -AsPlainText -Force);App=$null}
+                }
+                function script:Find-GlpiComputer {
+                    param($BaseUri,$UserToken,$AppToken,$PageSize,$TimeoutSeconds,$SerialNumber,$ExactName,$BulkRead,$AllProfileEntities,$LookupCache,$ProgressQueue,$IncludeSupplier)
+                    if ($SerialNumber -ne 'FIXTURE-SERIAL') { throw 'Expected the associated GLPI card by serial.' }
+                    [pscustomobject]@{
+                        GlpiId=12;Name='PC-GLPI';SerialNumber='FIXTURE-SERIAL';State='Assegnato'
+                        GroupPath='';GroupName='';GroupVerified=$true;LastModified='2026-11-02 09:45:00';LastInventory='2026-11-02 07:30:00'
+                    }
+                }
+            }
+        }
         Get-HybridJoinSnapshot -ConfigPath $ConfigPath -GraphAccess $Access
     }.ToString()).AddArgument($root).AddArgument($configPath).AddArgument($access)
     $invocation=$pipeline.BeginInvoke()
@@ -109,6 +136,13 @@ function Invoke-MgGraphRequest {
         throw 'Single isolated DC read, parallel cloud reads or result merge failed.'
     }
     'PASS: the OU scan reads a single DC in an isolated process while Entra and Intune run concurrently.'
+    $row = $snapshot.Rows[0]
+    $expectedEntra = [datetimeoffset]::Parse('2026-11-01T12:14:00+01:00').LocalDateTime
+    if ($row.ADLastModified -ne [datetime]::new(2026,10,30,11,43,0) -or $row.EntraLastActivity -ne $expectedEntra -or
+        $snapshot.Sources.GlpiState -ne 'OK' -or $row.GlpiLastModified -ne [datetime]::new(2026,11,2,9,45,0)) {
+        throw 'The snapshot lost the DC modification date, most recent Entra activity, or GLPI card modification date.'
+    }
+    'PASS: the snapshot carries AD modification, the latest Entra activity, and the GLPI card update as dates.'
 
 }
 finally {
