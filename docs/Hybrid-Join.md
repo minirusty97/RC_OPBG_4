@@ -37,7 +37,7 @@ collegamento per GUID. Un errore di lettura Intune o il permesso mancante produc
 
 La griglia mostra Computer, Hybrid, Identità AD/Entra, Registered, Seriale
 Intune, Stato GLPI, Reparto GLPI, OU, Asset ID, Censito e GLPI, seguiti da
-Ultima modifica AD, Ultima attività Entra e Ultimo aggiornamento GLPI.
+Ultima modifica AD, Ultima attività Entra e Ultimo inventario GLPI.
 **Filtra per nome** si combina con **Filtra per campo**. Il secondo filtro
 accetta un valore della lista o un frammento di testo. Nome e date sono
 esclusi dal selettore per campo. Entrambi i filtri agiscono sui dati già
@@ -45,7 +45,7 @@ caricati. **Esporta CSV** include le tre date per le righe visibili.
 
 Ultima modifica AD usa Modified (whenChanged) sul DC interrogato. Ultima
 attività Entra usa approximateLastSignInDateTime, riportata in ora locale.
-Ultimo aggiornamento GLPI usa date_mod della scheda, in ora del server GLPI.
+Ultimo inventario GLPI usa `last_inventory_update`, in ora del server GLPI.
 Per più oggetti Entra o schede GLPI, la griglia mostra la data valida più
 recente e i dettagli mostrano le date individuali. Le date si possono
 ordinare in griglia. I valori mancanti compaiono come trattino in griglia

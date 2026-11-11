@@ -246,8 +246,8 @@ function Get-HybridJoinSnapshot {
     $byKey = @{}
     foreach ($row in $rows) {
         Set-HybridIntuneState -Row $row -SourceState $sources.IntuneState
-        $lastGlpiUpdate = Get-ExplorerLatestDate -Records $row.GlpiRecords -Property 'LastModified'
-        $row | Add-Member -NotePropertyName GlpiLastModified -NotePropertyValue $lastGlpiUpdate
+        $lastGlpiInventory = Get-ExplorerLatestDate -Records $row.GlpiRecords -Property 'LastInventory'
+        $row | Add-Member -NotePropertyName GlpiLastInventory -NotePropertyValue $lastGlpiInventory
         $byKey[$row.Key] = $row
         if ($row.RegisteredCount) {
             # Detach candidate identities from the editable grid.

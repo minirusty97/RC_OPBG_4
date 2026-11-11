@@ -65,9 +65,6 @@ function Format-DmDetail {
     foreach ($item in $Row.GlpiRecords) {
         [void]$lines.Add('  ID: '+$item.GlpiId+' | Nome: '+$item.Name+' | Seriale: '+$item.SerialNumber+' | Inventario: '+$item.InventoryNumber)
         [void]$lines.Add('  Stato: '+$item.State+' | Gruppo: '+$item.GroupPath+' | CENSITO: '+$Row.Censito+' | Ultimo inventario: '+$item.LastInventory)
-        if ($Kind -eq 'Hybrid') {
-            [void]$lines.Add('  Ultimo aggiornamento scheda: '+(Format-ExplorerDate (Get-DmValue $item 'LastModified')))
-        }
         $supplier=Get-DmValue $item 'SupplierName' ''
         $supplierError=Get-DmValue $item 'SupplierError' ''
         if ($supplier -or $supplierError) { [void]$lines.Add('  Reparto GLPI (Fornitore): '+$supplier+$supplierError) }
@@ -332,7 +329,7 @@ function Save-DmCsv {
         elseif ($Kind -eq 'Hybrid') {
             $fields=@(
                 'Name','HybridState','IdentityState','RegisteredCount','IntuneSerial','GlpiStatus','GlpiDepartment','OUName',
-                'GlpiAssetId','Censito','GlpiState','ADLastModified','EntraLastActivity','GlpiLastModified','IntuneState','IntuneReason',
+                'GlpiAssetId','Censito','GlpiState','ADLastModified','EntraLastActivity','GlpiLastInventory','IntuneState','IntuneReason',
                 'ADGuid','ADDistinguishedName','EntraObjectIds','EntraDeviceIds','EntraCount','Anomalies','GlpiMatchBy','GlpiIds','GlpiNames','GlpiGroup'
             )
         }
@@ -523,7 +520,7 @@ function Show-DeviceModuleWindow {
     $hybridDateColumns=[ordered]@{
         ADLastModified=@('Ultima modifica AD','Ultima modifica dell''oggetto AD sul DC interrogato.')
         EntraLastActivity=@('Ultima attività Entra','Attività approssimativa più recente tra gli oggetti Entra della riga. Le singole date sono nei dettagli.')
-        GlpiLastModified=@('Ultimo aggiornamento GLPI','Ultima modifica della scheda GLPI (orario del server). Per più schede viene mostrata la data più recente.')
+        GlpiLastInventory=@('Ultimo inventario GLPI','Ultimo inventario acquisito da GLPI (orario del server). Per più schede viene mostrata la data più recente.')
     }
     $toolbar=New-Object Windows.Forms.FlowLayoutPanel;$toolbar.Dock='Fill';$toolbar.WrapContents=$false
     $buttons=@(@('Refresh','Aggiorna',110),@('Export','Esporta CSV',120),@('OpenGlpi','Apri su GLPI',125),@('Write','Verifica e pulisci Registered',215))

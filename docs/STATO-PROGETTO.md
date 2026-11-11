@@ -1,7 +1,8 @@
 # Stato condiviso per riprendere il lavoro
 
 Repository: `minirusty97/RC_OPBG_4`. Consultare sempre il main e la release
-effettiva. La **1.5.0** aggiorna Verifica Hybrid Join. La **1.4.1** limita Elimina in Computer
+effettiva. La **1.5.1** mostra l’ultimo inventario GLPI in Verifica Hybrid Join.
+La **1.5.0** aggiorna Verifica Hybrid Join. La **1.4.1** limita Elimina in Computer
 Explorer alle presenze verificate per riga e rifinisce il wrapper.
 La **1.4.0** integra la prova AD parallela, la diagnostica per ricerca
 e il pannello di stato del wrapper. La **1.3.3**
@@ -178,3 +179,9 @@ completo e apre la scelta dei singoli Object ID.
 Le prove sintetiche coprono la scelta di un solo DC, la lettura AD e cloud
 in parallelo, le OU sovrapposte, Intune con duplicati e fonte non disponibile. Tempi, copertura e diritti
 del profilo GLPI vanno verificati sulla rete aziendale.
+
+## Ultimo inventario GLPI in 1.5.1
+
+Verifica Hybrid Join usa `last_inventory_update` nella griglia e nel CSV.
+I test con schede GLPI simulate distinguono la data di inventario da
+quella di modifica della scheda.

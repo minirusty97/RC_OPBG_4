@@ -139,10 +139,10 @@ function Invoke-MgGraphRequest {
     $row = $snapshot.Rows[0]
     $expectedEntra = [datetimeoffset]::Parse('2026-11-01T12:14:00+01:00').LocalDateTime
     if ($row.ADLastModified -ne [datetime]::new(2026,10,30,11,43,0) -or $row.EntraLastActivity -ne $expectedEntra -or
-        $snapshot.Sources.GlpiState -ne 'OK' -or $row.GlpiLastModified -ne [datetime]::new(2026,11,2,9,45,0)) {
-        throw 'The snapshot lost the DC modification date, most recent Entra activity, or GLPI card modification date.'
+        $snapshot.Sources.GlpiState -ne 'OK' -or $row.GlpiLastInventory -ne [datetime]::new(2026,11,2,7,30,0)) {
+        throw 'The snapshot lost the DC modification date, most recent Entra activity, or GLPI inventory date.'
     }
-    'PASS: the snapshot carries AD modification, the latest Entra activity, and the GLPI card update as dates.'
+    'PASS: the snapshot carries AD modification, the latest Entra activity, and the GLPI inventory timestamp as dates.'
 
 }
 finally {
