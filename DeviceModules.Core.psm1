@@ -88,8 +88,8 @@ function Get-DmEntraInventory {
     Get-DmGraphItems -Uri 'https://graph.microsoft.com/v1.0/devices?$select=id,deviceId,displayName,trustType,deviceOwnership,isManaged,isCompliant,accountEnabled,operatingSystem,operatingSystemVersion,registrationDateTime,approximateLastSignInDateTime,onPremisesSyncEnabled&$top=999' -ProgressQueue $ProgressQueue
 }
 
-function Add-DmInventory {
-    param([object[]]$Rows,$Config,$Access,[string]$EnvPath,$ProgressQueue,[switch]$IncludeSupplier)
+function Get-DmIntuneInventory {
+    param($Access,$ProgressQueue)
     $intune=@();$intuneState='Non autorizzato';$intuneError='Lettura Intune non disponibile nella verifica iniziale.'
     if (Test-DmPermission $Access 'intune-read') {
         try {
@@ -99,8 +99,16 @@ function Add-DmInventory {
         }
         catch { $intuneState='Errore';$intuneError=$_.Exception.Message }
     }
+    [pscustomobject]@{Records=$intune;State=$intuneState;Error=$intuneError}
+}
+
+function Add-DmInventory {
+    param([object[]]$Rows,$Config,$Access,[string]$EnvPath,$ProgressQueue,[switch]$IncludeSupplier,$IntuneInventory)
+    if ($null -eq $IntuneInventory) { $IntuneInventory=Get-DmIntuneInventory -Access $Access -ProgressQueue $ProgressQueue }
     $byDevice=@{}
-    foreach ($item in $intune) {
+    $intuneRecords=@()
+    if ($IntuneInventory.State -eq 'OK') { $intuneRecords=$IntuneInventory.Records }
+    foreach ($item in $intuneRecords) {
         $id=[string](Get-DmValue $item 'azureADDeviceId');$parsed=[guid]::Empty
         if (-not [guid]::TryParse($id,[ref]$parsed) -or $parsed -eq [guid]::Empty) { continue }
         $key=$parsed.ToString();if (-not $byDevice.ContainsKey($key)) { $byDevice[$key]=New-Object 'Collections.Generic.List[object]' };[void]$byDevice[$key].Add($item)
@@ -180,7 +188,7 @@ function Add-DmInventory {
             $row | Add-Member -Force NoteProperty GlpiAssetId ($assets -join ', ')
         }
     }
-    [pscustomobject]@{IntuneState=$intuneState;IntuneError=$intuneError;GlpiState=$glpiState;GlpiError=$glpiError}
+    [pscustomobject]@{IntuneState=$IntuneInventory.State;IntuneError=$IntuneInventory.Error;GlpiState=$glpiState;GlpiError=$glpiError}
 }
 
 function ConvertTo-DmCsvValue {
@@ -216,4 +224,4 @@ function Read-DmHybridScriptDefaults {
     [pscustomobject]@{TargetOus=$ous;AdServer=$server}
 }
 
-Export-ModuleMember -Function Read-DmHybridScriptDefaults,Get-DmAvailableGroups,Get-DmValue,ConvertTo-DmId,Send-DmProgress,Test-DmPermission,Assert-DmSession,Read-DmSettings,Get-DmGraphItems,Get-DmEntraInventory,Add-DmInventory,ConvertTo-DmCsvValue
+Export-ModuleMember -Function Read-DmHybridScriptDefaults,Get-DmAvailableGroups,Get-DmValue,ConvertTo-DmId,Send-DmProgress,Test-DmPermission,Assert-DmSession,Read-DmSettings,Get-DmGraphItems,Get-DmEntraInventory,Get-DmIntuneInventory,Add-DmInventory,ConvertTo-DmCsvValue

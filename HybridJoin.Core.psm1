@@ -8,83 +8,277 @@ $script:HybridCandidates=@{}
 $script:HybridContext=''
 
 function New-HybridComparison {
-    param($AdComputer,[object[]]$EntraDevices)
-    $result=New-HybridBaseComparison -AdComputer $AdComputer -EntraDevices $EntraDevices
-    $guid=ConvertTo-DmId $AdComputer.ObjectGUID
-    $identity=@($EntraDevices | Where-Object { $_.trustType -ieq 'ServerAd' } | ForEach-Object {
-        $deviceId=[guid]::Empty;$valid=[guid]::TryParse([string]$_.deviceId,[ref]$deviceId) -and $deviceId -ne [guid]::Empty
-        $state='Non corrisponde';if ($valid -and $deviceId.ToString() -ieq $guid) { $state='Corrisponde' }
-        [pscustomobject]@{ObjectId=[string]$_.id;DeviceId=[string]$_.deviceId;Name=[string]$_.displayName;TrustType=[string]$_.trustType;State=$state}
-    })
-    $state='Non applicabile'
-    if ($identity.Count) {
-        $state='Corrisponde'
-        if (@($identity | Where-Object State -ne 'Corrisponde').Count) { $state='Non corrisponde';$result.Severity='Error';$result.OverallState='ERRORE';$result.HybridState='GUID NON CORRISPONDENTE';$result.Anomalies+='; Device ID Entra Hybrid diverso dal GUID AD' }
+    param($AdComputer, [object[]]$EntraDevices)
+
+    $result = New-HybridBaseComparison -AdComputer $AdComputer -EntraDevices $EntraDevices
+    $guid = ConvertTo-DmId $AdComputer.ObjectGUID
+    $identity = @()
+    $deviceIds = @()
+    $state = 'Non applicabile'
+    if ($result.HybridCount) {
+        $identity = @(foreach ($device in $result.HybridDevices) {
+            $deviceId = [guid]::Empty
+            $matchesAd = [guid]::TryParse([string]$device.deviceId, [ref]$deviceId) -and $deviceId.ToString() -eq $guid
+            $matchState = 'Non corrisponde'
+            if ($matchesAd) { $matchState = 'Corrisponde'; $deviceIds = @($guid) }
+            [pscustomobject]@{
+                ObjectId = [string]$device.id
+                DeviceId = [string]$device.deviceId
+                Name = [string]$device.displayName
+                TrustType = [string]$device.trustType
+                State = $matchState
+            }
+        })
+        $state = 'Corrisponde'
+        if (@($identity | Where-Object State -eq 'Non corrisponde').Count) {
+            $state = 'Non corrisponde'
+            $result.Severity = 'Error'
+            $result.OverallState = 'ERRORE'
+            if ($result.HybridCount -eq 1) { $result.HybridState = 'HYBRID DA VERIFICARE' }
+            $result.Anomalies = (@($result.Anomalies, 'Device ID Entra Hybrid diverso dal GUID AD') | Where-Object { $_ }) -join '; '
+        }
     }
-    $ids=@(@($guid)+@($EntraDevices | ForEach-Object { [string]$_.deviceId }) | Sort-Object -Unique)
-    foreach ($property in @{Name=$AdComputer.Name;Key=$guid;ADGuid=$guid;IdentityState=$state;IdentityRecords=$identity;DeviceIds=$ids;EntraObjectIds=(@($EntraDevices | ForEach-Object { $_.id }) -join ', ');EntraDeviceIds=(@($EntraDevices | ForEach-Object { $_.deviceId } | Sort-Object -Unique) -join ', ')}.GetEnumerator()) { $result | Add-Member -Force NoteProperty $property.Key $property.Value }
+    $properties = @{
+        Name = $AdComputer.Name
+        Key = $guid
+        ADGuid = $guid
+        IdentityState = $state
+        IdentityRecords = $identity
+        DeviceIds = $deviceIds
+        EntraObjectIds = (@($EntraDevices | ForEach-Object id) -join ', ')
+        EntraDeviceIds = (@($EntraDevices | ForEach-Object deviceId | Sort-Object -Unique) -join ', ')
+    }
+    $result | Add-Member -NotePropertyMembers $properties
     return $result
+}
+
+function Start-HybridRead {
+    param($Pool, [scriptblock]$Reader, [string]$Source, [string]$Controller, $Query, $Access, $Queue)
+    $pipeline = [PowerShell]::Create()
+    try {
+        $pipeline.RunspacePool = $Pool
+        [void]$pipeline.AddScript($Reader.ToString()).AddArgument($PSScriptRoot).AddArgument($Source).AddArgument($Controller).AddArgument($Query).AddArgument($Access).AddArgument($Queue)
+        $invocation = $pipeline.BeginInvoke()
+        [pscustomobject]@{
+            Source=$Source; Pipeline=$pipeline; Invocation=$invocation
+            Watch=[Diagnostics.Stopwatch]::StartNew(); StopInvocation=$null
+        }
+    }
+    catch { $pipeline.Dispose(); throw }
+}
+
+function Get-HybridReadSources {
+    param([string]$Controller, [hashtable]$Query, $Access, $Queue, [int]$CloudTimeoutSeconds)
+
+    $reader = {
+        param($Root, $Source, $Controller, $Query, $Access, $Queue)
+        $ErrorActionPreference = 'Stop'
+        if ($Source -eq 'AD') {
+            . (Join-Path $Root 'ComputerExplorer.AdRead.ps1')
+            return Read-ExplorerAdProcess -CorePath (Join-Path $Root 'ComputerExplorer.Core.psm1') -DomainController $Controller -OuSearch $Query -TimeoutSeconds 30
+        }
+        Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
+        Import-Module (Join-Path $Root 'DeviceModules.Core.psm1') -ErrorAction Stop
+        [void](Assert-DmSession $Access)
+        if ($Source -eq 'Entra') { return [pscustomobject]@{Records=@(Get-DmEntraInventory $Queue)} }
+        Get-DmIntuneInventory -Access $Access -ProgressQueue $Queue
+    }
+    $pool = [RunspaceFactory]::CreateRunspacePool(1, 3)
+    $tasks = New-Object 'Collections.Generic.List[object]'
+    $results = @{}
+    $adSeconds = 0
+    try {
+        $pool.Open()
+        foreach ($source in @('AD', 'Entra', 'Intune')) {
+            $tasks.Add((Start-HybridRead $pool $reader $source $Controller $Query $Access $Queue))
+        }
+        Send-DmProgress $Queue ('Lettura OU su ' + $Controller + ' e inventari Entra e Intune...')
+        while ($tasks.Count) {
+            foreach ($task in $tasks.ToArray()) {
+                if (-not $task.Invocation.IsCompleted) {
+                    if ($task.Source -ne 'AD' -and $null -eq $task.StopInvocation -and $task.Watch.Elapsed.TotalSeconds -ge $CloudTimeoutSeconds) {
+                        try { $task.StopInvocation = $task.Pipeline.BeginStop($null, $null) }
+                        catch { if (-not $task.Invocation.IsCompleted) { throw } }
+                    }
+                    continue
+                }
+                $data = $null
+                $failure = ''
+                try {
+                    if ($null -ne $task.StopInvocation) {
+                        $task.Pipeline.EndStop($task.StopInvocation)
+                        throw ('Tempo massimo di lettura ' + $task.Source + ' superato (' + $CloudTimeoutSeconds + ' s).')
+                    }
+                    $output = @($task.Pipeline.EndInvoke($task.Invocation))
+                    if ($task.Pipeline.Streams.Error.Count) { throw $task.Pipeline.Streams.Error[0] }
+                    if ($output.Count -ne 1) { throw 'Risposta della fonte incompleta.' }
+                    $data = $output[0]
+                    if ($task.Source -eq 'AD' -and $data.DomainController -ine $Controller) { throw 'Risposta AD riferita a un altro DC.' }
+                }
+                catch [System.Management.Automation.PipelineStoppedException] { throw }
+                catch { $failure = $_.Exception.Message }
+                finally {
+                    $task.Watch.Stop()
+                    $task.Pipeline.Dispose()
+                    [void]$tasks.Remove($task)
+                }
+                if ($failure) {
+                    if ($task.Source -eq 'AD') { throw ('Lettura OU non completata su ' + $Controller + '. ' + $failure) }
+                    if ($task.Source -eq 'Entra') { throw ('Lettura Entra non completata. ' + $failure) }
+                    $data = [pscustomobject]@{Records=@(); State='Errore'; Error=$failure}
+                }
+                $results[$task.Source] = $data
+                if ($task.Source -eq 'AD') { $adSeconds = $task.Watch.Elapsed.TotalSeconds }
+            }
+            if ($tasks.Count) { Start-Sleep -Milliseconds 40 }
+        }
+
+        [pscustomobject]@{
+            AD = $results.AD
+            AdSeconds = $adSeconds
+            Entra = @($results.Entra.Records)
+            Intune = $results.Intune
+        }
+    }
+    finally {
+        foreach ($task in $tasks) {
+            if ($null -eq $task.StopInvocation -and -not $task.Invocation.IsCompleted) {
+                try { $task.StopInvocation = $task.Pipeline.BeginStop($null, $null) } catch { }
+            }
+        }
+        foreach ($task in $tasks) {
+            try { if ($null -ne $task.StopInvocation) { $task.Pipeline.EndStop($task.StopInvocation) } } catch { }
+            $task.Pipeline.Dispose()
+        }
+        $pool.Dispose()
+    }
+}
+
+function Set-HybridIntuneState {
+    param($Row, [string]$SourceState)
+    $state = 'Da regolarizzare'
+    $reason = 'Serve una sola identità Entra Hybrid abilitata, gestita da MDM e corrispondente al GUID AD.'
+    if ($SourceState -ne 'OK') {
+        $state = 'Non verificabile'
+        $reason = 'Lettura Intune non disponibile.'
+    }
+    elseif ($Row.HybridCount -eq 1 -and $Row.IdentityState -eq 'Corrisponde' -and
+        $Row.HybridDevices[0].accountEnabled -eq $true -and $Row.HybridDevices[0].isManaged -eq $true) {
+        $reason = 'Nessun dispositivo Intune associato al Device ID Hybrid.'
+        if ($Row.IntuneRecords.Count -eq 1) { $state = 'OK'; $reason = '' }
+        elseif ($Row.IntuneRecords.Count -gt 1) { $reason = 'Più record Intune associati allo stesso Device ID Hybrid.' }
+    }
+    $Row | Add-Member -NotePropertyMembers @{IntuneState=$state; IntuneReason=$reason}
 }
 
 function Get-HybridJoinSnapshot {
     [CmdletBinding()]
     param([string]$ConfigPath,[string]$EnvPath,$GraphAccess,$ProgressQueue)
-    $context=Assert-DmSession $GraphAccess
-    $script:HybridRows=@{};$script:HybridCandidates=@{};$script:HybridContext=''
-    $settings=Read-DmSettings $ConfigPath HybridJoin;$options=$settings.Options
-    $ous=@($options.TargetOus | ForEach-Object { ([string]$_).Trim().TrimEnd(',') } | Sort-Object -Unique)
-    if ($ous.Count -eq 0 -or @($ous | Where-Object { -not $_ -or $_ -notmatch '^OU=' -or $_ -match '[\r\n\x00]' }).Count) { throw 'Configurare almeno una OU valida nelle Impostazioni Hybrid Join.' }
+    $context = Assert-DmSession $GraphAccess
+    $script:HybridRows = @{}
+    $script:HybridCandidates = @{}
+    $script:HybridContext = ''
+    $settings = Read-DmSettings $ConfigPath HybridJoin
+    $options = $settings.Options
+    $ous = @($options.TargetOus | ForEach-Object { ([string]$_).Trim().TrimEnd(',') } | Sort-Object -Unique)
+    if (-not $ous.Count -or @($ous | Where-Object { $_ -notmatch '^OU=' -or $_ -match '[\r\n\x00]' }).Count) {
+        throw 'Configurare almeno una OU valida nelle Impostazioni Hybrid Join.'
+    }
     if ($options.SearchScope -notin @('Base','OneLevel','Subtree')) { throw 'SearchScope Hybrid Join non valido.' }
-    $server=([string]$options.AdServer).Trim()
-    if (-not $server) { $controllers=Get-DmValue $settings.Config.Settings 'DomainControllers' @();if ($controllers.Count) { $server=[string]$controllers[0] } }
+    $server = ([string]$options.AdServer).Trim()
+    if (-not $server) { $server = Get-ExplorerSearchControllers $settings.Config.Settings | Select-Object -First 1 }
     if (-not $server) { throw 'Configurare un server AD nelle Impostazioni.' }
-    Import-Module ActiveDirectory -ErrorAction Stop
-    Send-DmProgress $ProgressQueue ('Lettura dominio AD su '+$server+'...')
-    $domain=Get-ADDomain -Server $server -ErrorAction Stop;$domainDn=[string]$domain.DistinguishedName
-    if (-not $domainDn -or $domainDn -notmatch '^DC=') { throw 'Distinguished Name del dominio AD non valido.' }
-    $computers=@{};$stats=New-Object 'Collections.Generic.List[object]'
-    foreach ($relative in $ous) {
-        $dn=$relative
-        if ($dn -notmatch ',DC=') { $dn+=','+$domainDn }
-        if (-not $dn.EndsWith(','+$domainDn,[StringComparison]::OrdinalIgnoreCase)) { throw 'OU esterna al dominio configurato.' }
-        Send-DmProgress $ProgressQueue ('Lettura OU: '+$dn)
-        $ou=Get-ADOrganizationalUnit -Server $server -Identity $dn -ErrorAction Stop
-        $found=@(Get-ADComputer -Server $server -Filter '*' -SearchBase $dn -SearchScope $options.SearchScope -Properties DNSHostName,Enabled,OperatingSystem,OperatingSystemVersion,LastLogonDate,PasswordLastSet,ObjectGUID -ErrorAction Stop)
-        [void]$stats.Add([pscustomobject]@{Name=$ou.Name;DistinguishedName=$dn;Count=$found.Count})
-        foreach ($computer in $found) {
-            $id=ConvertTo-DmId $computer.ObjectGUID
-            if (-not $computers.ContainsKey($id)) {
-                $computers[$id]=[pscustomobject]@{Name=[string]$computer.Name;ObjectGUID=$id;HostKey=(ConvertTo-HostKey $computer.Name);DNSHostName=[string]$computer.DNSHostName;Enabled=$computer.Enabled;OperatingSystem=$computer.OperatingSystem;OperatingSystemVersion=$computer.OperatingSystemVersion;LastLogonDate=$computer.LastLogonDate;PasswordLastSet=$computer.PasswordLastSet;DistinguishedName=[string]$computer.DistinguishedName;OUName=[string]$ou.Name;OUDistinguishedName=$dn}
+    $query = @{TargetOus=$ous; SearchScope=$options.SearchScope}
+    $reads = Get-HybridReadSources -Controller $server -Query $query -Access $GraphAccess -Queue $ProgressQueue -CloudTimeoutSeconds $settings.Config.CloudReadTimeoutSeconds
+
+    $computers = @{}
+    $ouMembers = [ordered]@{}
+    foreach ($ou in $reads.AD.Ous) {
+        $dn = $ou.DistinguishedName
+        if (-not $ouMembers.Contains($dn)) { $ouMembers[$dn] = @{Name=$ou.Name; ComputerKeys=@{}} }
+        foreach ($computer in $ou.Computers) {
+            $guid = ConvertTo-DmId $computer.ObjectGUID
+            $ouMembers[$dn].ComputerKeys[$guid] = $true
+            if (-not $computers.ContainsKey($guid)) {
+                $computer.ObjectGUID = $guid
+                $computer | Add-Member -NotePropertyMembers @{HostKey=(ConvertTo-HostKey $computer.Name); Ous=@{}}
+                $computers[$guid] = $computer
             }
+            $computers[$guid].Ous[$dn] = $ou.Name
         }
     }
-    $devices=@(Get-DmEntraInventory $ProgressQueue);$byHost=@{};$byGuid=@{}
-    foreach ($device in $devices) {
-        $hostKey=ConvertTo-HostKey ([string]$device.displayName)
-        if ($hostKey) { if (-not $byHost.ContainsKey($hostKey)) { $byHost[$hostKey]=New-Object 'Collections.Generic.List[object]' };[void]$byHost[$hostKey].Add($device) }
-        if ($device.trustType -ieq 'ServerAd') { $id=[string]$device.deviceId;if ($id) { if (-not $byGuid.ContainsKey($id)) { $byGuid[$id]=New-Object 'Collections.Generic.List[object]' };[void]$byGuid[$id].Add($device) } }
+
+    $byHost = @{}
+    $byGuid = @{}
+    foreach ($device in $reads.Entra) {
+        $hostKey = ConvertTo-HostKey ([string]$device.displayName)
+        if ($hostKey) {
+            if (-not $byHost.ContainsKey($hostKey)) { $byHost[$hostKey] = New-Object 'Collections.Generic.List[object]' }
+            $byHost[$hostKey].Add($device)
+        }
+        $deviceId = [guid]::Empty
+        if ($device.trustType -ieq 'ServerAd' -and [guid]::TryParse([string]$device.deviceId, [ref]$deviceId) -and $deviceId -ne [guid]::Empty) {
+            $key = $deviceId.ToString()
+            if (-not $byGuid.ContainsKey($key)) { $byGuid[$key] = New-Object 'Collections.Generic.List[object]' }
+            $byGuid[$key].Add($device)
+        }
     }
-    $rows=@(foreach ($computer in @($computers.Values | Sort-Object Name,DistinguishedName)) {
-        $matches=@{}
-        if ($byHost.ContainsKey($computer.HostKey)) { foreach ($device in $byHost[$computer.HostKey]) { $matches[[string]$device.id]=$device } }
-        if ($byGuid.ContainsKey($computer.ObjectGUID)) { foreach ($device in $byGuid[$computer.ObjectGUID]) { $matches[[string]$device.id]=$device } }
+    $rows = @(foreach ($computer in ($computers.Values | Sort-Object Name,DistinguishedName)) {
+        $matches = @{}
+        $computer | Add-Member -NotePropertyMembers @{
+            OUName=(@($computer.Ous.Values | Sort-Object -Unique) -join '; ')
+            OUDistinguishedName=(@($computer.Ous.Keys | Sort-Object) -join '; ')
+        }
+        if ($computer.HostKey -and $byHost.ContainsKey($computer.HostKey)) {
+            foreach ($device in $byHost[$computer.HostKey]) { $matches[[string]$device.id] = $device }
+        }
+        if ($byGuid.ContainsKey($computer.ObjectGUID)) {
+            foreach ($device in $byGuid[$computer.ObjectGUID]) { $matches[[string]$device.id] = $device }
+        }
         New-HybridComparison -AdComputer $computer -EntraDevices @($matches.Values)
     })
-    $sources=Add-DmInventory -Rows $rows -Config $settings.Config -Access $GraphAccess -EnvPath $EnvPath -ProgressQueue $ProgressQueue
+    $sources = Add-DmInventory -Rows $rows -Config $settings.Config -Access $GraphAccess -EnvPath $EnvPath -ProgressQueue $ProgressQueue -IncludeSupplier -IntuneInventory $reads.Intune
     if ((Assert-DmSession $GraphAccess) -cne $context) { throw 'Sessione cambiata durante la lettura. Aggiornare i dati.' }
-    # Keep a detached canonical snapshot: the editable UI cannot invent candidates.
-    foreach ($row in $rows) { $script:HybridRows[$row.Key]=$row | ConvertTo-Json -Depth 20 | ConvertFrom-Json }
-    $script:HybridContext=$context
-    [pscustomobject]@{Rows=$rows;Sources=$sources;OuStatistics=$stats.ToArray();TotalEntra=$devices.Count;CapturedAtUtc=[datetimeoffset]::UtcNow;Summary=($rows.Count.ToString()+' PC AD; '+@($rows | Where-Object Severity -eq 'Error').Count+' errori Hybrid; '+@($rows | Where-Object RegisteredCount -gt 0).Count+' PC con Registered. AD: '+$server)}
+    $sources | Add-Member -NotePropertyMembers @{AdServer=$server; AdSeconds=$reads.AdSeconds}
+
+    $byKey = @{}
+    foreach ($row in $rows) {
+        Set-HybridIntuneState -Row $row -SourceState $sources.IntuneState
+        $byKey[$row.Key] = $row
+        if ($row.RegisteredCount) {
+            # Detach candidate identities from the editable grid.
+            $candidateRow = [pscustomobject]@{Name=$row.Name; ADGuid=$row.ADGuid; EntraDevices=@($row.EntraDevices | Where-Object trustType -eq 'Workplace')}
+            $script:HybridRows[$row.Key] = $candidateRow | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+        }
+    }
+    $stats = @(foreach ($dn in $ouMembers.Keys) {
+        $ou = $ouMembers[$dn]
+        $members = @($ou.ComputerKeys.Keys | ForEach-Object { $byKey[$_] })
+        [pscustomobject]@{
+            Name=$ou.Name; DistinguishedName=$dn; Count=$members.Count
+            IntuneOk=@($members | Where-Object IntuneState -eq 'OK').Count
+            IntuneUnknown=@($members | Where-Object IntuneState -eq 'Non verificabile').Count
+        }
+    })
+    $statistics = [pscustomobject]@{
+        Computers=$rows.Count
+        HybridOk=@($rows | Where-Object HybridState -eq 'HYBRID OK').Count
+        IntuneOk=@($rows | Where-Object IntuneState -eq 'OK').Count
+        IntuneUnknown=@($rows | Where-Object IntuneState -eq 'Non verificabile').Count
+        RegisteredComputers=$script:HybridRows.Count
+    }
+    $script:HybridContext = $context
+    [pscustomobject]@{
+        Rows=$rows; Sources=$sources; OuStatistics=@($stats | Sort-Object Name,DistinguishedName)
+        Statistics=$statistics; CapturedAtUtc=[datetimeoffset]::UtcNow
+    }
 }
 
 function Get-HybridCleanupCandidates {
-    param([string[]]$RowKeys,$GraphAccess,$ProgressQueue)
+    param($GraphAccess,$ProgressQueue)
     if ((Assert-DmSession $GraphAccess) -cne $script:HybridContext) { throw 'Aggiornare i dati dopo il cambio di sessione.' }
     $script:HybridCandidates=@{};$results=New-Object 'Collections.Generic.List[object]'
-    foreach ($key in @($RowKeys | Sort-Object -Unique)) {
-        if (-not $script:HybridRows.ContainsKey($key)) { throw 'Computer non incluso nell''ultima ricerca. Aggiornare i dati.' }
-        $row=$script:HybridRows[$key]
+    foreach ($row in @($script:HybridRows.Values | Sort-Object Name,ADGuid)) {
         foreach ($device in @($row.EntraDevices)) {
             if ($device.trustType -ine 'Workplace') { continue }
             $id=ConvertTo-DmId $device.id
@@ -107,7 +301,7 @@ function Get-HybridCleanupCandidates {
             [void]$results.Add($candidate)
         }
     }
-    [pscustomobject]@{Candidates=$results.ToArray()}
+    [pscustomobject]@{Candidates=@($results.ToArray() | Sort-Object Name,ObjectId)}
 }
 
 function New-HybridCleanupPlan {

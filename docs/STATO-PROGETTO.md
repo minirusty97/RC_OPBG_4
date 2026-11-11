@@ -1,7 +1,7 @@
 # Stato condiviso per riprendere il lavoro
 
 Repository: `minirusty97/RC_OPBG_4`. Consultare sempre il main e la release
-effettiva. La versione sorgente **1.4.1** limita Elimina in Computer
+effettiva. La **1.5.0** aggiorna Verifica Hybrid Join. La **1.4.1** limita Elimina in Computer
 Explorer alle presenze verificate per riga e rifinisce il wrapper.
 La **1.4.0** integra la prova AD parallela, la diagnostica per ricerca
 e il pannello di stato del wrapper. La **1.3.3**
@@ -37,10 +37,11 @@ GLPI resta alla versione 10.0.11 senza plugin aggiuntivi. Le Note BitLocker
 sono in chiaro per recupero estremo, append senza sovrascrittura, con lettura
 compatibile degli archivi V1. Non riportare chiavi reali in log o repository.
 
-Hybrid Join legge OU configurabili e confronta GUID AD / deviceId per
-ServerAd; Registered e ignorato nel confronto GUID. La pulizia sceglie gli
-Object ID Workplace e riusa il percorso di archivio/conferma di Computer
-Explorer, preservando le altre registrazioni omonime.
+Hybrid Join legge le OU configurabili su un solo DC e confronta GUID AD /
+Device ID per ServerAd. I riepiloghi contano i PC
+unici e l'attestazione Intune per OU. La pulizia parte dagli Object ID
+Workplace dell'intera scansione, poi riusa la scelta per ID e il percorso
+di archivio/conferma di Computer Explorer.
 
 Ring Intune usa gruppi selezionati dalle impostazioni, salvati per ID con
 flag di controllo e Modifica. Nessun gruppo e preselezionato; Ring99 e escluso.
@@ -160,3 +161,17 @@ sono passati 275 controlli. La pipeline della PR #38 ha superato 338 controlli
 Windows, comprese le prove WinForms per GLPI in Stato accesso, gli angoli e i
 colori dei pulsanti. Ha verificato anche installazione pulita, migrazione e
 aggiornamento OTA con dati di prova.
+
+
+## Verifica Hybrid Join in 1.5.0
+
+Il ramo della 1.5.0 riusa la lettura AD isolata di Computer Explorer e il
+Fornitore/numero inventario di Gestione Ring. Entra e Intune sono letti in
+parallelo alla scansione AD. Il totale deduplica i PC per GUID. I conteggi
+per OU distinguono Intune OK e non verificabile. I filtri della griglia
+operano in locale. Verifica e pulisci Registered parte dall'inventario
+completo e apre la scelta dei singoli Object ID.
+
+Le prove sintetiche coprono la scelta di un solo DC, la lettura AD e cloud
+in parallelo, le OU sovrapposte, Intune con duplicati e fonte non disponibile. Tempi, copertura e diritti
+del profilo GLPI vanno verificati sulla rete aziendale.

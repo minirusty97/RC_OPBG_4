@@ -1,7 +1,53 @@
 ﻿#requires -version 5.1
 
+function Read-ExplorerAdOu {
+    param([string]$DomainController, $Query, [hashtable]$Log)
+
+    Write-ExplorerSearchLog $Log 'ad.rsat_import.start'
+    Import-Module ActiveDirectory -ErrorAction Stop
+    Write-ExplorerSearchLog $Log 'ad.rsat_import.end'
+    $domain = Get-ADDomain -Server $DomainController -ErrorAction Stop
+    $domainDn = [string]$domain.DistinguishedName
+    if ($domainDn -notmatch '^DC=') { throw 'Distinguished Name del dominio AD non valido.' }
+
+    $ous = @(foreach ($relative in $Query.TargetOus) {
+        $dn = [string]$relative
+        $parts = $dn -split '(?<!\\),(?=DC=)', 2
+        if ($parts.Count -eq 1) { $dn += ',' + $domainDn }
+        elseif ($parts[1] -ine $domainDn) {
+            throw 'OU esterna al dominio configurato.'
+        }
+        $ou = Get-ADOrganizationalUnit -Server $DomainController -Identity $dn -ErrorAction Stop
+        $search = @{
+            Server = $DomainController
+            Filter = '*'
+            SearchBase = $ou.DistinguishedName
+            SearchScope = $Query.SearchScope
+            Properties = @('DNSHostName','Enabled','OperatingSystem','OperatingSystemVersion','LastLogonDate','PasswordLastSet','ObjectGUID')
+            ErrorAction = 'Stop'
+        }
+        Write-ExplorerSearchLog $Log 'ad.query.start'
+        $computers = @(Get-ADComputer @search | ForEach-Object {
+            [pscustomobject]@{
+                Name = [string]$_.Name
+                ObjectGUID = [string]$_.ObjectGUID
+                DNSHostName = [string]$_.DNSHostName
+                Enabled = $_.Enabled
+                OperatingSystem = $_.OperatingSystem
+                OperatingSystemVersion = $_.OperatingSystemVersion
+                LastLogonDate = $_.LastLogonDate
+                PasswordLastSet = $_.PasswordLastSet
+                DistinguishedName = [string]$_.DistinguishedName
+            }
+        })
+        Write-ExplorerSearchLog $Log 'ad.query.end' @{Records=$computers.Count}
+        [pscustomobject]@{Name=[string]$ou.Name; DistinguishedName=[string]$ou.DistinguishedName; Computers=$computers}
+    })
+    [pscustomobject]@{DomainController=$DomainController; Ous=$ous}
+}
+
 function Read-ExplorerAdProcess {
-    param([string]$CorePath, [string]$ConfigPath, [string]$Fragment, [string]$DomainController, [int]$TimeoutSeconds, [hashtable]$AdSearchLog)
+    param([string]$CorePath, [string]$ConfigPath, [string]$Fragment='', [string]$DomainController, [int]$TimeoutSeconds, [hashtable]$AdSearchLog, [hashtable]$OuSearch)
 
     . (Join-Path $PSScriptRoot 'ComputerExplorer.AdLog.ps1')
     $body = {
@@ -15,13 +61,21 @@ function Read-ExplorerAdProcess {
             $log=@{Path=$env:ASSISTENTEIT_AD_LOG; Dc=$env:ASSISTENTEIT_AD_DC; Attempt=[int]$env:ASSISTENTEIT_AD_ATTEMPT}
         }
         try {
-            Write-ExplorerSearchLog $log 'ad.core_import.start'
-            Import-Module $env:ASSISTENTEIT_AD_CORE -ErrorAction Stop
-            Write-ExplorerSearchLog $log 'ad.core_import.end'
-            $fragment = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:ASSISTENTEIT_AD_FRAGMENT))
-            Write-ExplorerSearchLog $log 'ad.read.start'
-            $result = Read-ExplorerSource -Source AD -ConfigPath $env:ASSISTENTEIT_AD_CONFIG -NameFragment $fragment -DomainController $env:ASSISTENTEIT_AD_DC -AdSearchLog $log
-            Write-ExplorerSearchLog $log 'ad.serialize.start' @{State=$result.State; Records=$result.Records.Count}
+            if ($env:ASSISTENTEIT_AD_OUS) {
+                . (Join-Path (Split-Path $env:ASSISTENTEIT_AD_CORE -Parent) 'ComputerExplorer.AdRead.ps1')
+                $query = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:ASSISTENTEIT_AD_OUS)) | ConvertFrom-Json
+                $result = Read-ExplorerAdOu -DomainController $env:ASSISTENTEIT_AD_DC -Query $query -Log $log
+                Write-ExplorerSearchLog $log 'ad.serialize.start' @{Ous=$result.Ous.Count}
+            }
+            else {
+                Write-ExplorerSearchLog $log 'ad.core_import.start'
+                Import-Module $env:ASSISTENTEIT_AD_CORE -ErrorAction Stop
+                Write-ExplorerSearchLog $log 'ad.core_import.end'
+                $fragment = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:ASSISTENTEIT_AD_FRAGMENT))
+                Write-ExplorerSearchLog $log 'ad.read.start'
+                $result = Read-ExplorerSource -Source AD -ConfigPath $env:ASSISTENTEIT_AD_CONFIG -NameFragment $fragment -DomainController $env:ASSISTENTEIT_AD_DC -AdSearchLog $log
+                Write-ExplorerSearchLog $log 'ad.serialize.start' @{State=$result.State; Records=$result.Records.Count}
+            }
             [Console]::Out.Write([System.Management.Automation.PSSerializer]::Serialize($result, 6))
             Write-ExplorerSearchLog $log 'ad.serialize.end'
         }
@@ -52,6 +106,11 @@ function Read-ExplorerAdProcess {
     $info.EnvironmentVariables['ASSISTENTEIT_AD_CONFIG'] = $ConfigPath
     $info.EnvironmentVariables['ASSISTENTEIT_AD_FRAGMENT'] = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Fragment))
     $info.EnvironmentVariables['ASSISTENTEIT_AD_DC'] = $DomainController
+    $info.EnvironmentVariables.Remove('ASSISTENTEIT_AD_OUS')
+    if ($null -ne $OuSearch) {
+        $query = $OuSearch | ConvertTo-Json -Compress
+        $info.EnvironmentVariables['ASSISTENTEIT_AD_OUS'] = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($query))
+    }
     $info.EnvironmentVariables.Remove('ASSISTENTEIT_AD_LOG')
     if ($null -ne $AdSearchLog) {
         $info.EnvironmentVariables['ASSISTENTEIT_AD_LOG'] = $AdSearchLog.Path

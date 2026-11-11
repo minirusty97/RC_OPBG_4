@@ -3,52 +3,60 @@
 Modulo derivato da `Verifica-HybridJoin-OU-Entra-Con-Pulizia.ps1`, integrato
 nella suite con accesso delegato dal wrapper e impostazioni condivise.
 
-Da Impostazioni → Hybrid Join configurare server AD, profondita e OU.
-Importa OU dallo script legge i parametri costanti del file originale, senza
-eseguirlo. Le OU non sono inserite nel pacchetto pubblico e vengono salvate
-solo nella configurazione personale. Se il
-server e vuoto viene usato il primo DC configurato. La lettura AD usa le
-credenziali Windows correnti e richiede RSAT ActiveDirectory. Le OU possono
-essere relative al dominio o DN completi nello stesso dominio. OU sovrapposte
-non duplicano il computer con lo stesso GUID. Una OU non leggibile interrompe
-la ricerca, senza presentarla come vuota.
+## Scansione e riepilogo
 
-All’apertura parte automaticamente una scansione completa delle OU configurate,
-di tutte le pagine Entra e, se autorizzato, di Intune. La vista iniziale e
-**Tutti**. **Aggiorna dati / F5** ripete la scansione completa.
-**Filtra elenco** e il filtro di stato agiscono sui dati gia caricati: non
-limitano la lettura alle macchine cercate e non avviano nuove richieste. Il
-contatore mostra dispositivi visualizzati sul totale e selezionati.
-Il confronto affianca nomi e GUID: per `ServerAd` il Device ID Entra deve
-corrispondere a ObjectGUID AD. La corrispondenza per GUID ritrova anche una
-registrazione Hybrid con nome diverso. Workplace e AzureAd non sono valutati
-come identita AD. Duplicati, MDM, proprieta, account disabilitati e altre
-anomalie restano visibili. Filtri, dettagli, selezione multipla ed esportazione
-CSV consentono di esaminare le eccezioni.
+Da **Impostazioni → Hybrid Join** configurare profondità e OU. **Importa OU
+dallo script** legge i parametri costanti del file originale. Le OU possono
+essere relative al dominio o DN completi e restano nella configurazione personale.
 
-GLPI usa i token delle impostazioni. Il seriale proviene dalle registrazioni
-Intune collegate tramite Device ID Entra, mai da un Managed Device ID usato
-come identificativo Entra. La ricerca GLPI preferisce il seriale, anche con
-nome GLPI diverso. Se una ricerca seriale completata non trova corrispondenze,
-prova anche il nome esatto, come per i PC senza seriale. La consultazione
-copre tutte le entità autorizzate al profilo API GLPI. Una scheda trovata
-solo per nome viene mostrata come Presente (solo nome), con avviso se il
-seriale Intune manca o differisce in GLPI. L identita hardware non viene
-confermata automaticamente e i duplicati restano espliciti. Un errore API
-non attiva il ripiego e resta Non verificabile.
-Le letture GLPI dei dettagli sono raggruppate e riutilizzate nella singola
-scansione; la cache non e condivisa tra ricerche o credenziali. Stato, ID, gruppo, CENSITO,
-inventario e dati Intune sono visibili nei dettagli. Le ricerche raggruppate
-considerano ogni seriale o nome come alternativa. **Apri scheda GLPI**
-apre l'unica scheda associata alla riga selezionata. Assenza, duplicati
-ed errori di lettura sono distinti.
+La ricerca parte all'apertura. **Aggiorna** (F5) rilegge le OU su un solo DC,
+tutte le pagine Entra e, se autorizzato, Intune. Il modulo usa il server
+impostato in Hybrid Join oppure il DC principale di Computer Explorer
+(dc1 o srvdc1 in automatico, se configurato). Il lettore AD isolato ha
+un limite di 30 secondi. Entra e Intune vengono letti in parallelo.
+**Riepilogo fonti** indica il server usato, i tempi AD e gli esiti Intune
+e GLPI. La lettura AD usa le credenziali Windows correnti e richiede
+RSAT ActiveDirectory.
+
+Il confronto tra ObjectGUID AD e Device ID Entra si fa per ServerAd
+e riconosce anche un dispositivo Hybrid rinominato. Workplace e AzureAd
+sono visibili nei dettagli.
+
+**Riepilogo generale** mostra i PC unici, l'esito dell'identità Hybrid,
+l'attestazione Intune e quanti PC hanno registrazioni Registered. **OU
+analizzate** riporta PC compresi, Intune OK e Intune N/D. Un PC in OU
+sovrapposte vale una volta in ciascuna OU e una volta nel totale generale.
+Se il DC configurato non completa la lettura delle OU, la scansione segnala l’errore.
+
+**Intune OK** richiede una sola identità Hybrid abilitata, gestita da MDM e
+coerente con il GUID AD, con un solo record Windows in Intune associato
+tramite Azure AD Device ID. La colonna **Seriale Intune** usa solo quel
+collegamento per GUID. Un errore di lettura Intune o il permesso mancante produce **Intune N/D**.
+
+## Griglia e GLPI
+
+La griglia mostra Computer, Hybrid, Identità AD/Entra, Registered, Seriale
+Intune, Stato GLPI, Reparto GLPI, OU, Asset ID, Censito e GLPI. **Filtra per
+nome** si combina con **Filtra per campo**. Il secondo filtro accetta un
+valore della lista o un frammento di testo. Entrambi agiscono sui dati già
+caricati. **Esporta CSV** esporta le righe visibili e include i dettagli
+delle fonti.
+
+GLPI cerca in tutte le entità autorizzate al profilo API. Usa prima il
+seriale Intune valido, poi il nome esatto per i PC senza seriale o per cui
+la ricerca seriale si è conclusa senza schede. Gli errori di lettura, i
+duplicati e le corrispondenze per solo nome restano visibili. **Reparto GLPI**
+usa il Fornitore della scheda e **Asset ID** il numero inventario, come in
+Gestione Ring. **Apri su GLPI** apre l'unica scheda associata alla riga
+selezionata.
 
 ## Pulizia Registered
 
-Selezionare i computer, usare Pulizia Registered e scegliere gli Object ID
-Workplace da verificare. Nessuna casella e preselezionata. Sono mostrati i
-proprietari/utenti registrati disponibili e le eventuali relazioni non
-leggibili; non rappresentano l'utente attualmente connesso a Windows.
+**Verifica e pulisci Registered** cerca i candidati Workplace in tutte le OU
+dell'ultima scansione, indipendentemente dai filtri e dalla selezione della
+griglia. La finestra successiva mostra i singoli Object ID, i proprietari e
+gli utenti registrati disponibili. Le caselle partono vuote. Dopo la scelta
+degli oggetti, il modulo prepara l'anteprima per la conferma.
 
 La preparazione rilegge nome, Device ID, trust type, sincronizzazione e stato
 MDM. Il piano ammette solo gli Object ID selezionati, solo Workplace non
