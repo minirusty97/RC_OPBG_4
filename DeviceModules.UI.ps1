@@ -125,7 +125,10 @@ function Update-DmFilterValues {
             if ($previous -and $previous.Mode -eq $choice.Mode -and $previous.Value -eq $choice.Value) { $index=$i }
         }
         $u.FilterValue.SelectedIndex=$index
-        if ($typed -and $field -ne 'Anomalies') { $u.FilterValue.Text=$typed }
+        if ($typed -and $field -ne 'Anomalies') {
+            $u.FilterValue.SelectedIndex=-1
+            $u.FilterValue.Text=$typed
+        }
     }
     finally { $u.FilterValue.EndUpdate();$u.Populating=$false }
 }
@@ -587,9 +590,20 @@ function Show-DeviceModuleWindow {
     if ($Kind -eq 'Hybrid') {
         $u.FilterValue.Add_TextChanged({
             $u=$script:DmUi
-            if (-not $u.Populating -and ($u.FilterValue.SelectedIndex -lt 0 -or $u.FilterValue.Text -ne [string]$u.FilterValue.SelectedItem)) {
-                Update-DmGrid
+            if ($u.Populating) { return }
+            $value=$u.FilterValue.Text
+            if ($u.FilterValue.SelectedIndex -ge 0 -and $value -ne [string]$u.FilterValue.SelectedItem) {
+                # An editable combo can retain its previous list selection while displaying typed text.
+                $position=$u.FilterValue.SelectionStart
+                $u.Populating=$true
+                try {
+                    $u.FilterValue.SelectedIndex=-1
+                    $u.FilterValue.Text=$value
+                    $u.FilterValue.SelectionStart=[Math]::Min($position,$value.Length)
+                }
+                finally { $u.Populating=$false }
             }
+            Update-DmGrid
         })
     }
     $u.Refresh.Add_Click({if ($null -eq $script:DmUi.Pipeline) { Start-DmTask Snapshot } else { Stop-DmRead }})

@@ -145,6 +145,7 @@ foreach ($kind in @('Hybrid','Ring')) {
    $u.Query.Text=$row.Name
    if ($u.Grid.Rows.Count) { throw 'The Hybrid name and field filters were not combined.' }
    $u.FilterValue.SelectedItem='Tutti'
+   if ($u.Grid.Rows.Count -ne 1 -or $u.Grid.Rows[0].Tag.Name -ne $row.Name) { throw 'The Hybrid field filter stayed active after selecting Tutti.' }
   }
   $u.Query.Text='NO-MATCH'
   if ($u.Grid.Rows.Count -ne 0 -or $u.Snapshot.Rows.Count -ne 2 -or $u.Counter.Text -ne 'Visualizzati: 0/2 | Selezionati: 0') { throw 'Local filtering changed the full inventory or its total.' }
