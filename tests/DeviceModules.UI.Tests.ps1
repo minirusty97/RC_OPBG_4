@@ -60,7 +60,7 @@ foreach ($kind in @('Hybrid','Ring')) {
    $headers='Computer|'+$fields+'|Ultima modifica AD|Ultima attività Entra|Ultimo inventario GLPI'
    if ((@($u.Grid.Columns | ForEach-Object HeaderText) -join '|') -cne $headers -or
        ($u.Filter.Items -join '|') -cne ($fields+'|Anomalie') -or $u.FilterValue.SelectedItem -ne 'Tutti' -or
-       (($u.Write.Parent.Controls | ForEach-Object Text) -join '|') -ne 'Aggiorna|Esporta CSV|Apri su GLPI|Verifica e pulisci Registered|Sola lettura' -or
+       (($u.Write.Parent.Controls | ForEach-Object Text) -join '|') -ne 'Aggiorna|Esporta CSV|Genera resoconto settimanale|Apri su GLPI|Verifica e pulisci Registered|Sola lettura' -or
        $layout.GetRow($u.Write.Parent) -ne $filterRow+1 -or $layout.GetRow($u.Write.Parent) -ne $layout.RowCount-1 -or
        $window.Controls.Find('HybridGeneralSummary',$true)[0].Text -ne 'Riepilogo generale' -or
        $window.Controls.Find('HybridOuSummary',$true)[0].Text -ne 'OU analizzate') {
