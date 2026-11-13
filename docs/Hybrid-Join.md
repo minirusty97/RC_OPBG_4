@@ -31,17 +31,22 @@ Se il DC configurato non completa la lettura delle OU, la scansione segnala l’
 **Intune OK** richiede una sola identità Hybrid abilitata, gestita da MDM e
 coerente con il GUID AD, con un solo record Windows in Intune associato
 tramite Azure AD Device ID. La colonna **Seriale Intune** usa solo quel
-collegamento per GUID. Un errore di lettura Intune o il permesso mancante produce **Intune N/D**.
+collegamento per GUID. **Attestazione Intune** mostra **OK**, **Da
+regolarizzare** oppure **Non verificabile**. Il riepilogo conta come
+**Intune N/D** le righe non verificabili per errore di lettura o permesso
+mancante.
 
 ## Griglia e GLPI
 
 La griglia mostra Computer, Hybrid, Identità AD/Entra, Registered, Seriale
-Intune, Stato GLPI, Reparto GLPI, OU, Asset ID, Censito e GLPI, seguiti da
-Ultima modifica AD, Ultima attività Entra e Ultimo inventario GLPI.
+Intune, Attestazione Intune, Stato GLPI, Reparto GLPI, OU, Asset ID, Censito
+e GLPI. Seguono Ultima modifica AD, Ultima attività Entra e Ultimo
+inventario GLPI.
 **Filtra per nome** si combina con **Filtra per campo**. Il secondo filtro
 accetta un valore della lista o un frammento di testo. Nome e date sono
 esclusi dal selettore per campo. Entrambi i filtri agiscono sui dati già
-caricati. **Esporta CSV** include le tre date per le righe visibili.
+caricati. **Esporta CSV** usa le intestazioni della griglia e aggiunge in
+italiano i dettagli delle fonti, tra cui **Motivo attestazione Intune**.
 
 Ultima modifica AD usa Modified (whenChanged) sul DC interrogato. Ultima
 attività Entra usa approximateLastSignInDateTime, riportata in ora locale.

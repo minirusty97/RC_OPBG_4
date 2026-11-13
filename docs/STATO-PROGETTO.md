@@ -1,7 +1,10 @@
 # Stato condiviso per riprendere il lavoro
 
 Repository: `minirusty97/RC_OPBG_4`. Consultare sempre il main e la release
-effettiva. La **1.5.1** mostra l’ultimo inventario GLPI in Verifica Hybrid Join.
+effettiva. La **1.5.2** mostra l'attestazione Intune per PC nella griglia
+di Verifica Hybrid Join e accanto al seriale nel CSV con intestazioni
+italiane. La **1.5.1** mostra
+l’ultimo inventario GLPI in Verifica Hybrid Join.
 La **1.5.0** aggiorna Verifica Hybrid Join. La **1.4.1** limita Elimina in Computer
 Explorer alle presenze verificate per riga e rifinisce il wrapper.
 La **1.4.0** integra la prova AD parallela, la diagnostica per ricerca
@@ -40,7 +43,8 @@ compatibile degli archivi V1. Non riportare chiavi reali in log o repository.
 
 Hybrid Join legge le OU configurabili su un solo DC e confronta GUID AD /
 Device ID per ServerAd. I riepiloghi contano i PC
-unici e l'attestazione Intune per OU. La pulizia parte dagli Object ID
+unici e l'attestazione Intune per OU. La griglia, il filtro e il CSV
+usano lo stesso esito dei riepiloghi. La pulizia parte dagli Object ID
 Workplace dell'intera scansione, poi riusa la scelta per ID e il percorso
 di archivio/conferma di Computer Explorer.
 

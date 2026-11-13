@@ -48,10 +48,10 @@ foreach ($kind in @('Hybrid','Ring')) {
   if ($u.Write.Enabled -or -not $u.Refresh.Enabled -or -not $u.Grid.MultiSelect -or $u.Grid.AllowUserToResizeRows -or $null -eq $window.Icon) { throw 'New module bypassed read-only mode or lost common native controls.' }
   if ($kind -eq 'Hybrid') {
    $layout=$window.Controls[0];$filterRow=$layout.GetRow($u.Query.Parent)
-   $fields='Hybrid|Identità AD/Entra|Registered|Seriale Intune|Stato GLPI|Reparto GLPI|OU|Asset ID|Censito|GLPI'
+   $fields='Hybrid|Identità AD/Entra|Registered|Seriale Intune|Attestazione Intune|Stato GLPI|Reparto GLPI|OU|Asset ID|Censito|GLPI'
    $headers='Computer|'+$fields+'|Ultima modifica AD|Ultima attività Entra|Ultimo inventario GLPI'
    if ((@($u.Grid.Columns | ForEach-Object HeaderText) -join '|') -cne $headers -or
-       ($u.Filter.Items -join '|') -cne ($fields+'|Attestazione Intune|Anomalie') -or $u.FilterValue.SelectedItem -ne 'Tutti' -or
+       ($u.Filter.Items -join '|') -cne ($fields+'|Anomalie') -or $u.FilterValue.SelectedItem -ne 'Tutti' -or
        (($u.Write.Parent.Controls | ForEach-Object Text) -join '|') -ne 'Aggiorna|Esporta CSV|Apri su GLPI|Verifica e pulisci Registered|Sola lettura' -or
        $layout.GetRow($u.Write.Parent) -ne $filterRow+1 -or $layout.GetRow($u.Write.Parent) -ne $layout.RowCount-1 -or
        $window.Controls.Find('HybridGeneralSummary',$true)[0].Text -ne 'Riepilogo generale' -or
@@ -140,18 +140,32 @@ foreach ($kind in @('Hybrid','Ring')) {
    if ($u.Grid.Rows.Count) { throw 'The Ring name filter matched a serial.' }
   }
   else {
+   if ($u.Grid.Rows[0].Cells['IntuneState'].Value -cne 'OK' -or
+       $u.Grid.Rows[1].Cells['IntuneState'].Value -cne 'Da regolarizzare') {
+    throw 'The Hybrid grid did not display the per-device Intune attestation.'
+   }
    foreach ($field in @('ADLastModified','EntraLastActivity','GlpiLastInventory')) {
     if ($u.Grid.Columns[$field].ValueType -ne [datetime] -or $u.Grid.Rows[0].Cells[$field].Value -ne $row.$field) {
      throw ('Hybrid grid did not expose a sortable date for '+$field)
     }
    }
    if ($u.Grid.Rows[1].Cells['EntraLastActivity'].FormattedValue -ne '—') { throw 'A missing Entra activity should render as a dash.' }
-   $csvPath=Join-Path $PSScriptRoot 'hybrid-dates.csv'
+   $csvPath=Join-Path $PSScriptRoot 'hybrid.csv'
    Save-DmCsv -Rows @($u.Grid.Rows | ForEach-Object Tag) -Path $csvPath -Kind Hybrid
    $exported=@(Import-Csv -LiteralPath $csvPath -Delimiter ';')
-   if ($exported.Count -ne 2 -or $exported[0].ADLastModified -cne '2026-01-31 08:42:00' -or
-       $exported[0].EntraLastActivity -cne '2026-02-10 09:12:00' -or $exported[0].GlpiLastInventory -cne '2026-02-11 10:20:00' -or
-       $exported[1].EntraLastActivity -or $exported[1].GlpiLastInventory) { throw 'The Hybrid CSV lost dates or filled missing values.' }
+   if ($exported.Count -ne 2 -or $exported[0].'Ultima modifica AD' -cne '2026-01-31 08:42:00' -or
+       $exported[0].'Ultima attività Entra' -cne '2026-02-10 09:12:00' -or $exported[0].'Ultimo inventario GLPI' -cne '2026-02-11 10:20:00' -or
+       $exported[1].'Ultima attività Entra' -or $exported[1].'Ultimo inventario GLPI') { throw 'The Hybrid CSV lost dates or filled missing values.' }
+   $extraHeaders=@('Motivo attestazione Intune','GUID AD','Percorso AD','ID oggetti Entra','ID dispositivi Entra',
+      'Numero oggetti Entra','Anomalie','Ricerca GLPI','ID schede GLPI','Nomi schede GLPI','Gruppo GLPI')
+   $expectedHeaders=$headers+'|'+($extraHeaders -join '|')
+   if (($exported[0].PSObject.Properties.Name -join '|') -cne $expectedHeaders) {
+    throw 'The Hybrid CSV did not use the Italian grid and detail headers in order.'
+   }
+   if ($exported[0].'Attestazione Intune' -cne $row.IntuneState -or $exported[1].'Attestazione Intune' -cne $second.IntuneState -or
+       $exported[1].'Motivo attestazione Intune' -cne $second.IntuneReason -or $exported[0].'GUID AD' -cne $row.ADGuid) {
+    throw 'The Hybrid CSV lost the Intune attestation, its reason or the AD identity.'
+   }
    $u.Grid.Sort($u.Grid.Columns['ADLastModified'],[ComponentModel.ListSortDirection]::Ascending)
    if ($u.Grid.Rows[0].Tag.Name -ne $row.Name) { throw 'Hybrid AD dates were sorted by formatted text.' }
    foreach ($spec in @(@('Hybrid','HYBRID OK'),@('Identità AD/Entra','Corrisponde'),@('Registered','Con Registered'),
