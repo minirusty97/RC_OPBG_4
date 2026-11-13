@@ -241,7 +241,7 @@ function Save-HybridWeeklyReport {
         if ($row.IntuneState -eq 'Da regolarizzare') { $toReview++ }
     }
 
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
     try {
         $archive = [IO.Compression.ZipFile]::Open($temporary, [IO.Compression.ZipArchiveMode]::Create)
         try {
