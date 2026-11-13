@@ -1,8 +1,10 @@
 # Stato condiviso per riprendere il lavoro
 
 Repository: `minirusty97/RC_OPBG_4`. Consultare sempre il main e la release
-effettiva. La **1.6.0** aggiunge il resoconto settimanale Excel nel modulo
-Verifica Hybrid Join. La **1.5.2** mostra l'attestazione Intune per PC nella griglia
+effettiva. La **1.6.1** ripristina i bordi delle tabelle nel resoconto Excel
+di Verifica Hybrid Join, anche nelle celle colorate e vuote. La **1.6.0**
+aggiunge il resoconto settimanale Excel nel modulo Verifica Hybrid Join.
+La **1.5.2** mostra l'attestazione Intune per PC nella griglia
 di Verifica Hybrid Join e accanto al seriale nel CSV con intestazioni
 italiane. La **1.5.1** mostra
 l’ultimo inventario GLPI in Verifica Hybrid Join.
@@ -200,3 +202,7 @@ sintetici verificano la corrispondenza tra dettaglio, riepilogo e grafici,
 anche su una rilevazione anonimizzata di 933 dispositivi. Le prove WinForms
 e installer sono incluse nella pipeline Windows. Il ricalcolo delle note
 va verificato in Excel per Microsoft 365.
+
+La prova della 1.6.1 controlla i bordi di intestazioni, righe colorate,
+totali e celle vuote. I conteggi e i grafici sono stati confrontati con
+quelli della 1.6.0 su 933 dispositivi anonimizzati.

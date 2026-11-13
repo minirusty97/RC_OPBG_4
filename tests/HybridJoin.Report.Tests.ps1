@@ -21,6 +21,19 @@ function Get-ReportCell {
     return $Sheet.SelectSingleNode("//*[local-name()='c'][@r='$Address']")
 }
 
+function Assert-ReportCellBorder {
+    param([xml]$Styles, [Xml.XmlElement]$Cell)
+
+    $style = $Styles.DocumentElement.cellXfs.ChildNodes[[int]$Cell.GetAttribute('s')]
+    $border = $Styles.DocumentElement.borders.ChildNodes[[int]$style.borderId]
+    if ($style.applyBorder -ne '1') { throw ('Border style was not applied at ' + $Cell.r) }
+    foreach ($edge in @('left', 'right', 'top', 'bottom')) {
+        if ($border.$edge.GetAttribute('style') -notin @('thin', 'medium')) {
+            throw ('Missing visible ' + $edge + ' border at ' + $Cell.r)
+        }
+    }
+}
+
 $columns = [ordered]@{
     Name = '=1+1'; HybridState = 'HYBRID OK'; IntuneState = 'OK'
     IdentityState = 'Corrisponde'; RegisteredCount = 2; IntuneSerial = '00123'
@@ -63,6 +76,23 @@ try {
         if (($sheets | ForEach-Object { $_.GetAttribute('name') }) -join '|' -cne 'Resoconto|Villa Pamphili|S.Onofrio|Baldelli|S.Paolo|Palidoro-Passoscuro|S.Marinella|Laptop|Altre OU' -or
             $sheets[8].GetAttribute('state')) { throw 'The exported report lost a detail sheet or omitted the extra OU.' }
         $report = Read-ReportPart $archive 'xl/worksheets/sheet1.xml'
+        $styles = Read-ReportPart $archive 'xl/styles.xml'
+        foreach ($block in 0..7) {
+            $header = 5 + 21 * $block
+            foreach ($line in $header..($header + 5)) {
+                foreach ($column in 'B','C','D') {
+                    Assert-ReportCellBorder $styles (Get-ReportCell $report "$column$line")
+                }
+            }
+        }
+        foreach ($address in @('B178','C178','B179','C179','B181','C181','B182','C182')) {
+            Assert-ReportCellBorder $styles (Get-ReportCell $report $address)
+        }
+        $reasonBorders = $report.DocumentElement.conditionalFormatting
+        if ($reasonBorders.sqref -ne 'B182:C203' -or $reasonBorders.cfRule.formula -ne 'LEN($B182)>0' -or
+            -not $styles.DocumentElement.dxfs.ChildNodes[[int]$reasonBorders.cfRule.dxfId].border.HasChildNodes) {
+            throw 'Additional reasons would be displayed without table borders.'
+        }
         $counts = @('C6','C7','C8','C9','C10','C14','C31','C52','C162','C178','C179' |
             ForEach-Object { (Get-ReportCell $report $_).v })
         if (($counts -join ',') -ne '1,1,1,2,5,1,4,0,1,0,3' -or
@@ -84,7 +114,13 @@ try {
             (Get-ReportCell $villa 'G2').is.t.'#text' -ne '00123' -or (Get-ReportCell $villa 'K2').is.t.'#text' -ne '00017') {
             throw 'Excel did not preserve the literal computer name, serial and asset identifier.'
         }
-        if ((Get-ReportCell $villa 'D2').HasChildNodes -or $null -ne (Get-ReportCell $villa 'O2')) {
+        foreach ($line in 1..5) {
+            foreach ($column in 65..87) {
+                $address = '{0}{1}' -f [char]$column, $line
+                Assert-ReportCellBorder $styles (Get-ReportCell $villa $address)
+            }
+        }
+        if ((Get-ReportCell $villa 'D2').HasChildNodes -or (Get-ReportCell $villa 'O2').HasChildNodes) {
             throw 'Excel populated a blank manual reason or a missing date.'
         }
         $date = Get-ReportCell $villa 'N2'
@@ -119,12 +155,13 @@ try {
         $villa = Read-ReportPart $archive 'xl/worksheets/sheet2.xml'
         if ($empty.Computers -ne 0 -or $book.DocumentElement.sheets.ChildNodes[8].state -ne 'hidden' -or
             (Get-ReportCell $report 'C10').v -ne '0' -or (Get-ReportCell $report 'D10').v -ne '0' -or
-            $villa.DocumentElement.dimension.ref -ne 'A1:W2' -or $villa.DocumentElement.sheetData.row[1].HasChildNodes) {
+            $villa.DocumentElement.dimension.ref -ne 'A1:W2' -or $villa.DocumentElement.sheetData.row[1].ChildNodes.Count -ne 23 -or
+            ($villa.DocumentElement.sheetData.row[1].ChildNodes | Where-Object HasChildNodes)) {
             throw 'An empty scan contained old data, bad totals or an empty extra OU tab.'
         }
     }
     finally { $archive.Dispose() }
-    'PASS: Hybrid Excel export creates a standalone workbook, retains exact source values and reconciles detail, summary and charts, including unknown states and empty scans.'
+    'PASS: Hybrid Excel export preserves values, totals and charts, with table borders on filled and blank cells.'
 }
 finally {
     Remove-Item -LiteralPath $folder -Recurse -Force
