@@ -21,6 +21,11 @@ function Write-ModuleUiImage {
  try { $Window.DrawToBitmap($bitmap,(New-Object Drawing.Rectangle(0,0,$bitmap.Width,$bitmap.Height)));$memory=New-Object IO.MemoryStream;try { $bitmap.Save($memory,[Drawing.Imaging.ImageFormat]::Png);Write-Host ($Name+'_UI_PNG:'+ [Convert]::ToBase64String($memory.ToArray())) } finally { $memory.Dispose() } } finally { $bitmap.Dispose() }
 }
 $script:ModuleScanCalls=New-Object 'Collections.Generic.List[object]'
+$script:WeeklyReportPath=Join-Path $PSScriptRoot 'resoconto.xlsx'
+function Select-DmWeeklyReportPath {
+ param($Owner,[datetimeoffset]$CapturedAtUtc)
+ return $script:WeeklyReportPath
+}
 function Start-DmTask {
  param([string]$Operation,$Payload=$null)
  [void]$script:ModuleScanCalls.Add([pscustomobject]@{Kind=$script:DmUi.Kind;Operation=$Operation;Payload=$Payload})
@@ -43,6 +48,9 @@ foreach ($kind in @('Hybrid','Ring')) {
   $window.Show();[Windows.Forms.Application]::DoEvents()
   if ($script:ModuleScanCalls.Count -ne 1 -or $script:ModuleScanCalls[0].Operation -ne 'Snapshot' -or $null -ne $script:ModuleScanCalls[0].Payload -or -not $u.InitialScanStarted) { throw 'Opening a module did not start one full unfiltered scan.' }
   if ($u.Query.Enabled -or $u.Filter.Enabled) { throw 'An unscanned module enabled filters before loading.' }
+  if (($kind -eq 'Hybrid' -and $u.WeeklyReport.Enabled) -or ($kind -eq 'Ring' -and $u.ContainsKey('WeeklyReport'))) {
+   throw 'The report is available before Hybrid has scanned, or it leaked into Ring.'
+  }
   $window.Hide();$window.Show();[Windows.Forms.Application]::DoEvents()
   if ($script:ModuleScanCalls.Count -ne 1) { throw 'Redisplaying the same module repeated its initial scan.' }
   if ($u.Write.Enabled -or -not $u.Refresh.Enabled -or -not $u.Grid.MultiSelect -or $u.Grid.AllowUserToResizeRows -or $null -eq $window.Icon) { throw 'New module bypassed read-only mode or lost common native controls.' }
@@ -212,6 +220,16 @@ foreach ($kind in @('Hybrid','Ring')) {
    if ($script:ModuleScanCalls.Count -ne 3 -or $script:ModuleScanCalls[2].Operation -ne 'Candidates' -or $null -ne $script:ModuleScanCalls[2].Payload) {
        throw 'Hybrid cleanup passed the grid selection or skipped candidate discovery.'
    }
+   $u.Access.ReadOnly=$true
+   $u.Snapshot | Add-Member -NotePropertyName CapturedAtUtc -NotePropertyValue ([datetimeoffset]'2026-11-13T18:00:00Z')
+   Update-DmButtons
+   if (-not $u.WeeklyReport.Enabled -or $u.Export.Enabled -or $u.Write.Enabled) {
+    throw 'The Hybrid Excel export depends on visible rows or on write permission.'
+   }
+   $u.WeeklyReport.PerformClick()
+   $reportCall=$script:ModuleScanCalls[3]
+   if ($reportCall.Operation -ne 'WeeklyReport' -or $reportCall.Payload.Path -ne $script:WeeklyReportPath -or
+       $reportCall.Payload.Snapshot.Rows.Count -ne 2) { throw 'The weekly report action did not pass the complete scan and selected file.' }
    $u.Query.Clear()
    $window.Size=New-Object Drawing.Size(1050,720)
    $window.PerformLayout();[Windows.Forms.Application]::DoEvents()

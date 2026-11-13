@@ -216,6 +216,7 @@ function Update-DmButtons {
         $u.Bulk.Enabled=$u.Write.Enabled -and $u.Ring.Enabled -and [bool]$u.Ring.SelectedItem
     }
     else {
+        $u.WeeklyReport.Enabled=$idle -and $null -ne $u.Snapshot
         $u.Write.Enabled=$idle -and -not $u.Access.ReadOnly -and $null -ne $u.Snapshot -and $u.Snapshot.Statistics.RegisteredComputers -gt 0
         $u.Refresh.Text='Aggiorna'
         if (-not $idle -and -not $u.Writing) {
@@ -289,11 +290,15 @@ function Stop-DmRead {
 function Start-DmTask {
     param([string]$Operation,$Payload=$null)
     $u=$script:DmUi;if ($null -ne $u.Pipeline) { return }
-    $u.Operation=$Operation;$u.Cancelled=$false;$u.StopInvocation=$null;$u.Writing=$Operation -in @('Cleanup','Assign')
+    $u.Operation=$Operation;$u.Cancelled=$false;$u.StopInvocation=$null;$u.Writing=$Operation -in @('Cleanup','Assign','WeeklyReport')
     $u.Pipeline=[PowerShell]::Create();$u.Pipeline.Runspace=$u.Worker
     $worker={
         param($Root,$Kind,$Operation,$Config,$Env,$Access,$Payload,$Queue)
         $ErrorActionPreference='Stop'
+        if ($Operation -eq 'WeeklyReport') {
+            Import-Module (Join-Path $Root 'HybridJoin.Report.psm1') -ErrorAction Stop
+            return Save-HybridWeeklyReport -Snapshot $Payload.Snapshot -Path $Payload.Path -Overwrite:$Payload.Overwrite
+        }
         Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
         $file='HybridJoin.Core.psm1';if ($Kind -eq 'Ring') { $file='RingManager.Core.psm1' }
         Import-Module (Join-Path $Root $file) -ErrorAction Stop
@@ -310,6 +315,7 @@ function Start-DmTask {
     [void]$u.Pipeline.AddScript($worker.ToString()).AddArgument($PSScriptRoot).AddArgument($u.Kind).AddArgument($Operation).AddArgument($u.ConfigPath).AddArgument($u.EnvPath).AddArgument($u.Access).AddArgument($Payload).AddArgument($u.Queue)
     $u.Status.Text='Operazione in corso: '+$Operation+'...'
     if ($Operation -eq 'Candidates') { $u.Status.Text='Verifica Entra Registered nelle OU analizzate...' }
+    if ($Operation -eq 'WeeklyReport') { $u.Status.Text='Generazione del resoconto settimanale Excel...' }
     if ($Operation -eq 'Snapshot') {
         $message='Scansione completa dei dispositivi in corso...'
         if ($u.Kind -eq 'Ring') { Update-DmRingSummary -Message $message } else { Update-DmHybridSummary -Message $message }
@@ -379,6 +385,22 @@ function Save-DmCsv {
     $records | Export-Csv -LiteralPath $Path -NoTypeInformation -Encoding UTF8 -Delimiter ';'
 }
 
+function Select-DmWeeklyReportPath {
+    param($Owner, [datetimeoffset]$CapturedAtUtc)
+
+    $save=New-Object Windows.Forms.SaveFileDialog
+    $save.Filter='File Excel (*.xlsx)|*.xlsx'
+    $save.DefaultExt='xlsx'
+    $save.AddExtension=$true
+    $save.RestoreDirectory=$true
+    try {
+        $date=Get-HybridReportDate $CapturedAtUtc -Format dd_MM_yy
+        $save.FileName='Resoconto Attestazione Intune '+$date+'.xlsx'
+        if ($save.ShowDialog($Owner) -eq 'OK') { return $save.FileName }
+    }
+    finally { $save.Dispose() }
+}
+
 function Complete-DmTask {
     $u=$script:DmUi
     $notice=$null;while ($u.Queue.TryDequeue([ref]$notice)) { if ($notice.Message) { $u.Status.Text=$notice.Message } }
@@ -442,6 +464,9 @@ function Complete-DmTask {
             $u.Overview.Text=$overview -join [Environment]::NewLine
             $u.Status.Text=$status
         }
+        'WeeklyReport' {
+            $u.Status.Text=('Resoconto Excel salvato ({0} PC): {1}' -f $result.Computers,$result.Path)
+        }
         'Candidates' {
             if (-not $result.Candidates.Count) { $u.Status.Text='Nessuna registrazione Entra Registered nelle OU analizzate.';return }
             $ids=Show-DmSelection -Candidates $result.Candidates -Owner $u.Form
@@ -468,6 +493,7 @@ function Show-DeviceModuleWindow {
     [Windows.Forms.Application]::EnableVisualStyles()
     Import-Module (Join-Path $PSScriptRoot 'DeviceModules.Core.psm1') -ErrorAction Stop
     Import-Module (Join-Path $PSScriptRoot 'ComputerExplorer.Core.psm1') -ErrorAction Stop
+    if ($Kind -eq 'Hybrid') { Import-Module (Join-Path $PSScriptRoot 'HybridJoin.Report.psm1') -ErrorAction Stop }
     . (Join-Path $PSScriptRoot 'ComputerExplorer.Recovery.UI.ps1')
     . (Join-Path $PSScriptRoot 'ComputerExplorer.Removal.UI.ps1')
     if ($null -eq $GraphAccess -or -not $GraphAccess.CanOpen) { throw 'Eseguire Accesso dal wrapper prima di aprire il modulo.' }
@@ -545,7 +571,7 @@ function Show-DeviceModuleWindow {
     }
 
     $toolbar=New-Object Windows.Forms.FlowLayoutPanel;$toolbar.Dock='Fill';$toolbar.WrapContents=$false
-    $buttons=@(@('Refresh','Aggiorna',110),@('Export','Esporta CSV',120),@('OpenGlpi','Apri su GLPI',125),@('Write','Verifica e pulisci Registered',215))
+    $buttons=@(@('Refresh','Aggiorna',110),@('Export','Esporta CSV',120),@('WeeklyReport','Genera resoconto settimanale',205),@('OpenGlpi','Apri su GLPI',125),@('Write','Verifica e pulisci Registered',215))
     if ($Kind -eq 'Ring') { $buttons=@(@('Refresh','Aggiorna',110),@('Export','Esporta CSV',120),@('OpenGlpi','Apri su GLPI',125),@('Write','Verifica ed Applica',190)) }
     foreach ($spec in $buttons) { $button=New-Object Windows.Forms.Button;$button.Name=$spec[0];$button.Text=$spec[1];$button.Width=$spec[2];$button.Height=32;$u[$spec[0]]=$button;$toolbar.Controls.Add($button) }
     $u.Write.FlatStyle='Flat';$u.Write.UseVisualStyleBackColor=$false
@@ -686,6 +712,21 @@ function Show-DeviceModuleWindow {
         catch { $u.Status.Text='Apertura scheda GLPI non riuscita. '+$_.Exception.Message }
     })
     $u.Export.Add_Click({$u=$script:DmUi;$save=New-Object Windows.Forms.SaveFileDialog;$save.Filter='File CSV (*.csv)|*.csv';$save.DefaultExt='csv';$save.AddExtension=$true;$save.FileName=$u.Kind+'-'+(Get-Date -Format 'yyyyMMdd-HHmmss')+'.csv';try { if ($save.ShowDialog($u.Form) -eq 'OK') { Save-DmCsv -Rows @($u.Grid.Rows | ForEach-Object { $_.Tag }) -Path $save.FileName -Kind $u.Kind;$u.Status.Text='CSV esportato: '+$save.FileName } } catch { $u.Status.Text='Esportazione non riuscita: '+$_.Exception.Message } finally { $save.Dispose() }})
+    if ($Kind -eq 'Hybrid') {
+        $u.WeeklyReport.Add_Click({
+            $u=$script:DmUi
+            if ($null -ne $u.Pipeline -or $null -eq $u.Snapshot) { return }
+            try {
+                $path=Select-DmWeeklyReportPath -Owner $u.Form -CapturedAtUtc $u.Snapshot.CapturedAtUtc
+                if ($path) {
+                    Start-DmTask WeeklyReport ([pscustomobject]@{
+                        Snapshot=$u.Snapshot; Path=$path; Overwrite=[IO.File]::Exists($path)
+                    })
+                }
+            }
+            catch { $u.Status.Text='Esportazione non riuscita: '+$_.Exception.Message }
+        })
+    }
     $form.KeyPreview=$true;$form.Add_KeyDown({param($sender,$eventArgs);if ($eventArgs.KeyCode -eq 'F5' -and $null -eq $script:DmUi.Pipeline -and $script:DmUi.Refresh.Enabled) { $script:DmUi.Refresh.PerformClick();$eventArgs.Handled=$true }})
     $form.Add_FormClosing({param($sender,$eventArgs);$u=$script:DmUi;if ($null -ne $u.Pipeline) { $eventArgs.Cancel=$true;if ($u.Writing) { $u.Status.Text='Attendere il completamento delle operazioni.' } else { $u.Closing=$true;Stop-DmRead } }})
     $worker=[RunspaceFactory]::CreateRunspace();$worker.ApartmentState='STA';$worker.ThreadOptions='ReuseThread';$worker.Open();$u.Worker=$worker;$script:Worker=$worker

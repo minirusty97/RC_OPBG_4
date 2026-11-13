@@ -143,6 +143,17 @@ function Assert-InstalledApplication {
     if((Test-Path $legacyKey) -or -not(Test-Path -LiteralPath (Join-Path $Directory 'assistente-it-install.marker'))){throw 'Legacy registration remains or the new installation marker is missing.'}
     foreach($old in @('OPBGITSuite.exe','suite-install.marker','app/Start-ITSuite.ps1','app/suite.json','app/Suite')){if(Test-Path -LiteralPath (Join-Path $Directory $old)){throw ('Obsolete program file remains: '+$old)}}
     foreach($file in @('.env','computer-explorer.config.local.json','Remove-Computer-FullTool.ps1')){if(Test-Path -LiteralPath (Join-Path $Directory ('app/'+$file))){throw 'Non-distributable file found in installed payload.'}}
+    $reportModule = Join-Path $Directory 'app/HybridJoin.Report.psm1'
+    Import-Module $reportModule -ErrorAction Stop
+    try {
+        $reportPath = Join-Path $temporary 'installed-report.xlsx'
+        $snapshot = [pscustomobject]@{Rows=@(); CapturedAtUtc=[datetimeoffset]::UtcNow}
+        $report = Save-HybridWeeklyReport -Snapshot $snapshot -Path $reportPath -Overwrite
+        if ($report.Computers -ne 0 -or -not (Test-Path -LiteralPath $reportPath -PathType Leaf)) {
+            throw 'Installed Hybrid weekly report could not run from the installed application.'
+        }
+    }
+    finally { Remove-Module HybridJoin.Report }
     $shortcutPath=Join-Path $programs 'Assistente IT/Assistente IT.lnk'
     if(-not(Test-Path -LiteralPath $shortcutPath) -or -not(Test-Path -LiteralPath (Join-Path $desktop 'Assistente IT.lnk')) -or (Test-Path -LiteralPath (Join-Path $programs 'OPBG IT Suite')) -or (Test-Path -LiteralPath (Join-Path $desktop 'OPBG IT Suite.lnk'))){throw 'New shortcuts are missing or legacy shortcuts remain.'}
     $shell=New-Object -ComObject WScript.Shell; $shortcut=$null
