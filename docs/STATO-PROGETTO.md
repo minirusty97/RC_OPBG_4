@@ -1,7 +1,8 @@
 # Stato condiviso per riprendere il lavoro
 
 Repository: `minirusty97/RC_OPBG_4`. Consultare sempre il main e la release
-effettiva. La **1.5.2** mostra l'attestazione Intune per PC nella griglia
+effettiva. La **1.6.0** aggiunge il resoconto settimanale Excel nel modulo
+Verifica Hybrid Join. La **1.5.2** mostra l'attestazione Intune per PC nella griglia
 di Verifica Hybrid Join e accanto al seriale nel CSV con intestazioni
 italiane. La **1.5.1** mostra
 l’ultimo inventario GLPI in Verifica Hybrid Join.
@@ -189,3 +190,13 @@ del profilo GLPI vanno verificati sulla rete aziendale.
 Verifica Hybrid Join usa `last_inventory_update` nella griglia e nel CSV.
 I test con schede GLPI simulate distinguono la data di inventario da
 quella di modifica della scheda.
+
+## Resoconto settimanale in 1.6.0
+
+Il comando Excel usa l'intera scansione già in memoria e genera il
+resoconto direttamente. Conserva la struttura per sede, con i motivi da
+compilare a mano dopo il confronto con la rilevazione precedente. I test
+sintetici verificano la corrispondenza tra dettaglio, riepilogo e grafici,
+anche su una rilevazione anonimizzata di 933 dispositivi. Le prove WinForms
+e installer sono incluse nella pipeline Windows. Il ricalcolo delle note
+va verificato in Excel per Microsoft 365.

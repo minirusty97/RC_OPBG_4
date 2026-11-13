@@ -135,7 +135,7 @@ $form.Add_Shown({$testOtaTimer.Start()})
     }
 }
 function Assert-InstalledApplication {
-    param([string]$Directory)
+    param([string]$Directory,[switch]$VerifyWeeklyReport)
     $installed=Get-Content -LiteralPath (Join-Path $Directory 'app/assistente-it.json') -Raw | ConvertFrom-Json
     $launcher=Join-Path $Directory 'AssistenteIT.exe'
     $entry=Get-ItemProperty $uninstallKey
@@ -143,6 +143,19 @@ function Assert-InstalledApplication {
     if((Test-Path $legacyKey) -or -not(Test-Path -LiteralPath (Join-Path $Directory 'assistente-it-install.marker'))){throw 'Legacy registration remains or the new installation marker is missing.'}
     foreach($old in @('OPBGITSuite.exe','suite-install.marker','app/Start-ITSuite.ps1','app/suite.json','app/Suite')){if(Test-Path -LiteralPath (Join-Path $Directory $old)){throw ('Obsolete program file remains: '+$old)}}
     foreach($file in @('.env','computer-explorer.config.local.json','Remove-Computer-FullTool.ps1')){if(Test-Path -LiteralPath (Join-Path $Directory ('app/'+$file))){throw 'Non-distributable file found in installed payload.'}}
+    if ($VerifyWeeklyReport) {
+        $reportModule = Join-Path $Directory 'app/HybridJoin.Report.psm1'
+        Import-Module $reportModule -ErrorAction Stop
+        try {
+            $reportPath = Join-Path $temporary 'installed-report.xlsx'
+            $snapshot = [pscustomobject]@{Rows=@(); CapturedAtUtc=[datetimeoffset]::UtcNow}
+            $report = Save-HybridWeeklyReport -Snapshot $snapshot -Path $reportPath -Overwrite
+            if ($report.Computers -ne 0 -or -not (Test-Path -LiteralPath $reportPath -PathType Leaf)) {
+                throw 'Installed Hybrid weekly report could not run from the installed application.'
+            }
+        }
+        finally { Remove-Module HybridJoin.Report }
+    }
     $shortcutPath=Join-Path $programs 'Assistente IT/Assistente IT.lnk'
     if(-not(Test-Path -LiteralPath $shortcutPath) -or -not(Test-Path -LiteralPath (Join-Path $desktop 'Assistente IT.lnk')) -or (Test-Path -LiteralPath (Join-Path $programs 'OPBG IT Suite')) -or (Test-Path -LiteralPath (Join-Path $desktop 'OPBG IT Suite.lnk'))){throw 'New shortcuts are missing or legacy shortcuts remain.'}
     $shell=New-Object -ComObject WScript.Shell; $shortcut=$null
@@ -178,7 +191,7 @@ try{
         finally{$activity.Dispose()}
         if(-not(Test-Path $legacyKey) -or -not(Test-Path -LiteralPath $legacyData)){throw 'Blocked update modified legacy installation or data.'}
         if($case.InPlace){Invoke-TestSetup $SetupPath -Directory $target}else{Invoke-TestSetup $SetupPath}
-        Assert-InstalledApplication $target
+        Assert-InstalledApplication $target -VerifyWeeklyReport
         $newConfig=Join-Path $dataRoot 'Config/computer-explorer.config.local.json';$newEnv=Join-Path $dataRoot 'Config/.env'
         if((Get-FileHash -LiteralPath $newConfig -Algorithm SHA256).Hash -ne $configHash -or (Get-FileHash -LiteralPath $newEnv -Algorithm SHA256).Hash -ne $envHash -or (Test-Path -LiteralPath $legacyData) -or [IO.File]::ReadAllText((Join-Path $dataRoot 'Other/note.txt')) -ne 'preserve all personal data'){throw 'Migration changed personal bytes or left the old data path.'}
         if(-not(Test-Path -LiteralPath (Join-Path $case.Directory 'unrelated.txt'))){throw 'Upgrade removed an unrelated file from the old install root.'}
@@ -186,7 +199,7 @@ try{
         'PASS: upgrade from published '+$case.Version+' (in place: '+$case.InPlace+') migrates names, paths and registration, preserves SHA256 of config/tokens and keeps unrelated files.'
         # Repair without /D must find even an existing custom installation path.
         Invoke-TestSetup $SetupPath
-        Assert-InstalledApplication $target
+        Assert-InstalledApplication $target -VerifyWeeklyReport
         if((Get-FileHash -LiteralPath $newConfig).Hash -ne $configHash -or (Get-FileHash -LiteralPath $newEnv).Hash -ne $envHash){throw 'Repair changed personal files.'}
         'PASS: repeated setup finds the registered path and preserves migrated settings.'
         $activity=New-Object Threading.EventWaitHandle($false,[Threading.EventResetMode]::ManualReset,'Local\AssistenteIT.Running')
@@ -203,7 +216,7 @@ try{
         if(Test-Path -LiteralPath $case.Directory){Remove-Item -LiteralPath $case.Directory -Recurse -Force}
     }
     Invoke-TestSetup $SetupPath
-    Assert-InstalledApplication $defaultInstall
+    Assert-InstalledApplication $defaultInstall -VerifyWeeklyReport
     $otaPayload=Join-Path $temporary 'candidate-app'
     Copy-Item -LiteralPath (Join-Path $defaultInstall 'app') -Destination $otaPayload -Recurse
     if((Test-Path -LiteralPath $legacyDefault) -or (Test-Path -LiteralPath $legacyData)){throw 'Clean setup created a legacy path.'}
@@ -229,7 +242,7 @@ try{
         Copy-Item -LiteralPath $item.FullName -Destination $otaApp -Recurse -Force
     }
     Invoke-TestUpdateFromHub -Directory $otaTarget -Version $candidate.Version
-    Assert-InstalledApplication $otaTarget
+    Assert-InstalledApplication $otaTarget -VerifyWeeklyReport
     if ((Get-FileHash $personal.ConfigPath).Hash -ne $configHash -or (Get-FileHash $encrypted).Hash -ne $secretHash) { throw 'Real OTA upgrade lost personal configuration or encrypted credentials.' }
     $updates=Join-Path $personal.DataRoot 'Updates'
     $logs=@(Get-ChildItem -LiteralPath $updates -Recurse -File -Filter 'update-install.log')

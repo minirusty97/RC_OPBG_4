@@ -48,6 +48,27 @@ esclusi dal selettore per campo. Entrambi i filtri agiscono sui dati già
 caricati. **Esporta CSV** usa le intestazioni della griglia e aggiunge in
 italiano i dettagli delle fonti, tra cui **Motivo attestazione Intune**.
 
+## Resoconto settimanale Excel
+
+Al termine della scansione, premere **Genera resoconto settimanale** e
+scegliere dove salvare il file, anche in una cartella condivisa. La data
+proposta nel nome è quella della scansione. Il file usa l'intera rilevazione
+e il formato definito nell'app. Il salvataggio funziona anche in sola
+lettura e usa i dati già caricati.
+
+Il foglio **Resoconto** mostra conteggi, percentuali e grafici per il totale
+e per Villa Pamphili, S.Onofrio, Baldelli, S.Paolo, Palidoro-Passoscuro,
+S.Marinella e Laptop. Ogni PC compare una volta, nella sede riconosciuta
+nei nomi delle OU del percorso AD. **Altre OU** compare se ci sono PC fuori dalle sette
+sezioni e i suoi dispositivi sono compresi nel totale generale. Gli altri
+esiti Hybrid e i casi Intune non verificabili sono visibili nel riepilogo.
+
+La colonna **Motivi noti e probabili della mancata attestazione** parte
+vuota. Dopo il confronto con il file precedente si compila a mano e il
+riepilogo dei motivi si ricalcola in Excel per Microsoft 365.
+
+## Date e corrispondenza GLPI
+
 Ultima modifica AD usa Modified (whenChanged) sul DC interrogato. Ultima
 attività Entra usa approximateLastSignInDateTime, riportata in ora locale.
 Ultimo inventario GLPI usa `last_inventory_update`, in ora del server GLPI.
