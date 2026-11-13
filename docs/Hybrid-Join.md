@@ -62,6 +62,8 @@ S.Marinella e Laptop. Ogni PC compare una volta, nella sede riconosciuta
 nei nomi delle OU del percorso AD. **Altre OU** compare se ci sono PC fuori dalle sette
 sezioni e i suoi dispositivi sono compresi nel totale generale. Gli altri
 esiti Hybrid e i casi Intune non verificabili sono visibili nel riepilogo.
+I bordi delle tabelle distinguono righe e colonne anche nelle celle
+colorate per stato e in quelle ancora da compilare.
 
 La colonna **Motivi noti e probabili della mancata attestazione** parte
 vuota. Dopo il confronto con il file precedente si compila a mano e il

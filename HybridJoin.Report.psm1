@@ -39,10 +39,7 @@ function New-HybridReportCell {
     param([string]$Address, $Value, [int]$Style)
 
     $cell = '<c r="{0}" s="{1}"' -f $Address, $Style
-    if ($null -eq $Value -or ($Value -is [string] -and -not $Value.Length)) {
-        if ($Style -eq 16) { return $cell + '/>' }
-        return ''
-    }
+    if ($null -eq $Value -or ($Value -is [string] -and -not $Value.Length)) { return $cell + '/>' }
     if ($Value -is [datetime]) { $Value = $Value.ToOADate() }
     $culture = [Globalization.CultureInfo]::InvariantCulture
     if ($Value -is [double]) { return $cell + '><v>' + $Value.ToString('G17', $culture) + '</v></c>' }
@@ -64,13 +61,14 @@ function Write-HybridReportDetail {
     }
     [void]$rowData.Append('</row>')
     $rowNumber = 2
+    if ($Rows.Count -eq 0) { $Rows = @($null) }
     foreach ($record in $Rows) {
         [void]$rowData.Append(('<row r="{0}">' -f $rowNumber))
         for ($index = 0; $index -lt $script:ReportFields.Count; $index++) {
             $field = $script:ReportFields[$index]
-            $style = 0
+            $style = 18
             $value = $null
-            if ($field) { $value = $record.$field }
+            if ($field -and $null -ne $record) { $value = $record.$field }
             switch ($index) {
                 3 { $style = 16 }
                 6 { $style = 17 }
@@ -84,8 +82,7 @@ function Write-HybridReportDetail {
         [void]$rowData.Append('</row>')
         $rowNumber++
     }
-    if ($rowNumber -eq 2) { [void]$rowData.Append('<row r="2"/>') }
-    $last = [Math]::Max(2, $rowNumber - 1)
+    $last = $rowNumber - 1
     $widths = @(24,26,21,57,23,22,24,25,29,28,19,12,22,23,23,25,70,39,78,70,40,26,22)
     $columns = for ($index = 0; $index -lt $widths.Count; $index++) {
         '<col min="{0}" max="{0}" width="{1}" customWidth="1"/>' -f ($index+1), $widths[$index]

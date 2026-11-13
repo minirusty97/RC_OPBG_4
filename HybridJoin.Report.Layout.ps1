@@ -35,34 +35,55 @@ function Get-HybridReportStyles {
     <fill><patternFill patternType="solid"><fgColor rgb="FFFF9999"/><bgColor indexed="64"/></patternFill></fill>
     <fill><patternFill patternType="solid"><fgColor rgb="FFD9E2F3"/><bgColor indexed="64"/></patternFill></fill>
   </fills>
-  <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+  <borders count="4">
+    <border><left/><right/><top/><bottom/><diagonal/></border>
+    <border>
+      <left style="thin"><color rgb="FF657A88"/></left><right style="thin"><color rgb="FF657A88"/></right>
+      <top style="thin"><color rgb="FF657A88"/></top><bottom style="thin"><color rgb="FF657A88"/></bottom><diagonal/>
+    </border>
+    <border>
+      <left style="thin"><color rgb="FFA5C2D0"/></left><right style="thin"><color rgb="FFA5C2D0"/></right>
+      <top style="thin"><color rgb="FF435D70"/></top><bottom style="medium"><color rgb="FF435D70"/></bottom><diagonal/>
+    </border>
+    <border>
+      <left style="thin"><color rgb="FF657A88"/></left><right style="thin"><color rgb="FF657A88"/></right>
+      <top style="medium"><color rgb="FF435D70"/></top><bottom style="thin"><color rgb="FF657A88"/></bottom><diagonal/>
+    </border>
+  </borders>
   <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-  <cellXfs count="18">
+  <cellXfs count="21">
     <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
-    <xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
-    <xf numFmtId="0" fontId="3" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf>
+    <xf numFmtId="165" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyNumberFormat="1"/>
+    <xf numFmtId="0" fontId="3" fillId="2" borderId="2" xfId="0" applyBorder="1" applyFont="1" applyFill="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf>
     <xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>
     <xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/>
     <xf numFmtId="0" fontId="4" fillId="0" borderId="0" xfId="0" applyFont="1"/>
-    <xf numFmtId="0" fontId="0" fillId="3" borderId="0" xfId="0" applyFill="1"/>
-    <xf numFmtId="0" fontId="0" fillId="4" borderId="0" xfId="0" applyFill="1"/>
-    <xf numFmtId="0" fontId="0" fillId="5" borderId="0" xfId="0" applyFill="1"/>
-    <xf numFmtId="0" fontId="0" fillId="6" borderId="0" xfId="0" applyFill="1"/>
-    <xf numFmtId="164" fontId="0" fillId="3" borderId="0" xfId="0" applyNumberFormat="1" applyFill="1"/>
-    <xf numFmtId="164" fontId="0" fillId="4" borderId="0" xfId="0" applyNumberFormat="1" applyFill="1"/>
-    <xf numFmtId="164" fontId="0" fillId="5" borderId="0" xfId="0" applyNumberFormat="1" applyFill="1"/>
-    <xf numFmtId="164" fontId="0" fillId="6" borderId="0" xfId="0" applyNumberFormat="1" applyFill="1"/>
-    <xf numFmtId="164" fontId="2" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1"/>
-    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf>
-    <xf numFmtId="49" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf>
-    <xf numFmtId="49" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+    <xf numFmtId="0" fontId="0" fillId="3" borderId="1" xfId="0" applyBorder="1" applyFill="1"/>
+    <xf numFmtId="0" fontId="0" fillId="4" borderId="1" xfId="0" applyBorder="1" applyFill="1"/>
+    <xf numFmtId="0" fontId="0" fillId="5" borderId="1" xfId="0" applyBorder="1" applyFill="1"/>
+    <xf numFmtId="0" fontId="0" fillId="6" borderId="1" xfId="0" applyBorder="1" applyFill="1"/>
+    <xf numFmtId="164" fontId="0" fillId="3" borderId="1" xfId="0" applyBorder="1" applyNumberFormat="1" applyFill="1"/>
+    <xf numFmtId="164" fontId="0" fillId="4" borderId="1" xfId="0" applyBorder="1" applyNumberFormat="1" applyFill="1"/>
+    <xf numFmtId="164" fontId="0" fillId="5" borderId="1" xfId="0" applyBorder="1" applyNumberFormat="1" applyFill="1"/>
+    <xf numFmtId="164" fontId="0" fillId="6" borderId="1" xfId="0" applyBorder="1" applyNumberFormat="1" applyFill="1"/>
+    <xf numFmtId="164" fontId="2" fillId="0" borderId="3" xfId="0" applyBorder="1" applyNumberFormat="1" applyFont="1"/>
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf>
+    <xf numFmtId="49" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyNumberFormat="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf>
+    <xf numFmtId="49" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyNumberFormat="1"/>
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1"/>
+    <xf numFmtId="0" fontId="2" fillId="0" borderId="3" xfId="0" applyBorder="1" applyFont="1"/>
+    <xf numFmtId="0" fontId="2" fillId="0" borderId="1" xfId="0" applyBorder="1" applyFont="1"/>
   </cellXfs>
   <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
-  <dxfs count="4">
+  <dxfs count="5">
     <dxf><fill><patternFill><bgColor rgb="FFC1F0C8"/></patternFill></fill></dxf>
     <dxf><fill><patternFill><bgColor rgb="FFFFFF99"/></patternFill></fill></dxf>
     <dxf><fill><patternFill><bgColor rgb="FFFF9999"/></patternFill></fill></dxf>
     <dxf><fill><patternFill><bgColor rgb="FFD9E2F3"/></patternFill></fill></dxf>
+    <dxf><border>
+      <left style="thin"><color rgb="FF657A88"/></left><right style="thin"><color rgb="FF657A88"/></right>
+      <top style="thin"><color rgb="FF657A88"/></top><bottom style="thin"><color rgb="FF657A88"/></bottom>
+    </border></dxf>
   </dxfs>
   <tableStyles count="0" defaultTableStyle="TableStyleLight9" defaultPivotStyle="PivotStyleLight16"/>
 </styleSheet>
@@ -152,7 +173,7 @@ function Write-HybridReportSummary {
             [void]$rows.Append(('<row r="{0}">{1}</row>' -f $line, $cells))
         }
         $line = $start + 6
-        $cells = (New-HybridReportCell "B$line" 'Totale' 4) + (New-HybridReportCell "C$line" $total 4) +
+        $cells = (New-HybridReportCell "B$line" 'Totale' 19) + (New-HybridReportCell "C$line" $total 19) +
             (New-HybridReportCell "D$line" ([int]($total -gt 0)) 14)
         [void]$rows.Append(('<row r="{0}">{1}</row>' -f $line, $cells))
         if ($counts[4]) {
@@ -184,19 +205,22 @@ function Write-HybridReportSummary {
         '_xlfn.SORTBY(_xlfn.HSTACK(_xlpm.u,_xlpm.c),_xlpm.c,-1,_xlpm.u,1))))'
     $title = New-HybridReportCell 'B174' 'Resoconto dei motivi noti e probabili' 4
     $caption = New-HybridReportCell 'B175' 'Le ipotesi sono motivi probabili e vanno confermate.' 5
-    $withReason = New-HybridReportCell 'B178' 'PC con motivo compilato' 4
-    $withoutReason = New-HybridReportCell 'B179' 'PC da regolarizzare senza motivo' 4
+    $withReason = New-HybridReportCell 'B178' 'PC con motivo compilato' 20
+    $withoutReason = New-HybridReportCell 'B179' 'PC da regolarizzare senza motivo' 20
     $header = (New-HybridReportCell 'B181' 'Motivo noto o probabile' 2) + (New-HybridReportCell 'C181' 'Numero di PC' 2)
     $withFormula = ConvertTo-HybridReportXmlText ('SUM(' + ($counts -join ',') + ')')
     $withoutFormula = ConvertTo-HybridReportXmlText ('SUM(' + ($missing -join ',') + ')')
     $reasonFormula = ConvertTo-HybridReportXmlText $reasonFormula
+    # One device can contribute at most one distinct reason to the spilled table.
+    $deviceCount = $Overall[0] + $Overall[1] + $Overall[2] + $Overall[3]
+    $lastReasonRow = [Math]::Min(1048576, [Math]::Max(203, 181 + $deviceCount))
     [void]$rows.Append(@"
 <row r="174" ht="22" customHeight="1">$title</row>
 <row r="175">$caption</row>
-<row r="178">$withReason<c r="C178"><f>$withFormula</f><v>0</v></c></row>
-<row r="179">$withoutReason<c r="C179"><f>$withoutFormula</f><v>$ToReview</v></c></row>
+<row r="178">$withReason<c r="C178" s="18"><f>$withFormula</f><v>0</v></c></row>
+<row r="179">$withoutReason<c r="C179" s="18"><f>$withoutFormula</f><v>$ToReview</v></c></row>
 <row r="181">$header</row>
-<row r="182"><c r="B182" s="15" cm="1" t="str"><f t="array" ref="B182">$reasonFormula</f><v>Nessun motivo compilato</v></c></row>
+<row r="182"><c r="B182" s="15" cm="1" t="str"><f t="array" ref="B182">$reasonFormula</f><v>Nessun motivo compilato</v></c><c r="C182" s="18"/></row>
 "@)
     $mergeCells = ($merges | ForEach-Object { '<mergeCell ref="' + $_ + '"/>' }) -join ''
     $sheet = @"
@@ -205,6 +229,9 @@ function Write-HybridReportSummary {
   <sheetViews><sheetView showGridLines="0" tabSelected="1" workbookViewId="0"/></sheetViews><sheetFormatPr defaultRowHeight="15"/>
   <cols><col min="1" max="1" width="4" customWidth="1"/><col min="2" max="2" width="71" customWidth="1"/><col min="3" max="4" width="13" customWidth="1"/><col min="5" max="6" width="3.4" customWidth="1"/><col min="7" max="14" width="12.4" customWidth="1"/></cols>
   <sheetData>$rows</sheetData><mergeCells count="$($merges.Count)">$mergeCells</mergeCells>
+  <conditionalFormatting sqref="B182:C$lastReasonRow">
+    <cfRule type="expression" dxfId="4" priority="1"><formula>LEN(`$B182)&gt;0</formula></cfRule>
+  </conditionalFormatting>
   <pageMargins left="0.25" right="0.25" top="0.4" bottom="0.4" header="0.2" footer="0.2"/>
   <pageSetup paperSize="9" orientation="landscape" fitToWidth="1" fitToHeight="0"/>
   <drawing r:id="rId1"/>
