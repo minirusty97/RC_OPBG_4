@@ -44,8 +44,10 @@ function New-HybridReportCell {
         return ''
     }
     if ($Value -is [datetime]) { $Value = $Value.ToOADate() }
-    if ($Value -is [int] -or $Value -is [long] -or $Value -is [double]) {
-        return $cell + '><v>' + [Convert]::ToString($Value, [Globalization.CultureInfo]::InvariantCulture) + '</v></c>'
+    $culture = [Globalization.CultureInfo]::InvariantCulture
+    if ($Value -is [double]) { return $cell + '><v>' + $Value.ToString('G17', $culture) + '</v></c>' }
+    if ($Value -is [int] -or $Value -is [long]) {
+        return $cell + '><v>' + [Convert]::ToString($Value, $culture) + '</v></c>'
     }
     # A text cell preserves identifiers and formula-like source values.
     $text = ConvertTo-HybridReportXmlText (([string]$Value) -replace '_(?=x[0-9a-f]{4}_)', '_x005F_')

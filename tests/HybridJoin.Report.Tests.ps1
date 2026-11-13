@@ -66,7 +66,7 @@ try {
         $counts = @('C6','C7','C8','C9','C10','C14','C31','C52','C162','C178','C179' |
             ForEach-Object { (Get-ReportCell $report $_).v })
         if (($counts -join ',') -ne '1,1,1,2,5,1,4,0,1,0,3' -or
-            (Get-ReportCell $report 'D9').v -ne '0.4' -or (Get-ReportCell $report 'B2').is.t.'#text' -notlike '*14/11/2026 00:30') {
+            [double]::Parse((Get-ReportCell $report 'D9').v, [Globalization.CultureInfo]::InvariantCulture) -ne 0.4 -or (Get-ReportCell $report 'B2').is.t.'#text' -notlike '*14/11/2026 00:30') {
             throw ('Wrong overall/per-OU totals, percentages or scan time: ' + ($counts -join ','))
         }
         $chart = Read-ReportPart $archive 'xl/charts/chart1.xml'
@@ -81,10 +81,16 @@ try {
             throw 'Table, filter or formatting failed to follow the detail rows.'
         }
         if ((Get-ReportCell $villa 'A2').t -ne 'inlineStr' -or (Get-ReportCell $villa 'A2').is.t.'#text' -ne '=1+1' -or
-            (Get-ReportCell $villa 'G2').is.t.'#text' -ne '00123' -or (Get-ReportCell $villa 'K2').is.t.'#text' -ne '00017' -or
-            (Get-ReportCell $villa 'D2').HasChildNodes -or $null -ne (Get-ReportCell $villa 'O2') -or
-            [double](Get-ReportCell $villa 'N2').v -ne $columns.ADLastModified.ToOADate()) {
-            throw 'The export lost typed dates, literal identifiers or the blank manual reason.'
+            (Get-ReportCell $villa 'G2').is.t.'#text' -ne '00123' -or (Get-ReportCell $villa 'K2').is.t.'#text' -ne '00017') {
+            throw 'Excel did not preserve the literal computer name, serial and asset identifier.'
+        }
+        if ((Get-ReportCell $villa 'D2').HasChildNodes -or $null -ne (Get-ReportCell $villa 'O2')) {
+            throw 'Excel populated a blank manual reason or a missing date.'
+        }
+        $date = Get-ReportCell $villa 'N2'
+        $serial = [double]::Parse($date.v, [Globalization.CultureInfo]::InvariantCulture)
+        if ($date.s -ne '1' -or $date.HasAttribute('t') -or [datetime]::FromOADate($serial) -ne $columns.ADLastModified) {
+            throw ('Excel date style, value or precision changed: ' + $date.OuterXml)
         }
         $notes = Get-ReportCell $report 'B182'
         if ($notes.v -ne 'Nessun motivo compilato' -or $notes.f.InnerText -notlike '*HybridReport8[[]Motivi noti*' -or
